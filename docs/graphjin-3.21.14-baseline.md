@@ -391,6 +391,16 @@ encrypted secret refs (databases.probe_db.password); set secrets.keystore.key,
 for example with GJ_SECRETS_KEYSTORE_KEY, and retry
 ```
 
+**key 的编码是 base64，且解码后必须正好 32 字节**：
+
+```
+secrets.keystore.key must decode to 32 bytes for AES-256-GCM, got 48 bytes
+```
+
+传 64 字符的 hex 时会报 `got 48`（64 个 base64 字符解出 48 字节），反推出它按 base64 解码。
+所以正确写法是 `crypto.randomBytes(32).toString('base64')`，且 key 必须持久化 ——
+换 key 会让已写入的加密 secret 解不开。
+
 **平台影响（硬约束）**：后端拉起 GraphJin 时必须注入 `GJ_SECRETS_KEYSTORE_KEY`，
 否则任何带密码 / 连接串的数据库连接都配不进去。
 

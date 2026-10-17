@@ -425,6 +425,7 @@ src/
 | 2.7 | 安全策略预览面板：展示当前生效策略和变更 diff（已实现：`views/PolicyView.vue` + `utils/policy.js` + RPC `config.current`。`gj_security` 需 admin JWT 实测不可达，策略真相来源改为 `get_current_config`） |
 | 2.8 | MCP 监控面板：运行状态、端点地址、工具列表、一键复制客户端配置（已实现：`views/StatusView.vue`） |
 | 2.9 | 设置页面：显示内置 GraphJin 版本（解析 `graphjin version`）、「复制版本信息」；**不做在线更新**（已实现：`views/SettingsView.vue`，版本读 `graphjin-binaries/version.json`） |
+| 2.10 | 数据库连接类型扩展（新增需求，已实现：`sidecar-backend/src/db-types.js` + `keystore.js`，RPC `db.types` / `db.templates.*` / `connections.test`）。内置 13 种白名单类型 + 用户自定义**别名模板**（TiDB 等兼容库只能以 postgres/mysql 协议接入）；录入支持**字段 / 连接串 / 文件路径**三种形态；后端自动生成并注入 `GJ_SECRETS_KEYSTORE_KEY`（base64、解码后 32 字节，见基线 §12.4），否则带密码的库配不进去 |
 
 > **写入前二次确认**：legacy 模式更新立即生效（基线 §6.4），
 > 权限矩阵点「应用到 GraphJin」时先弹 diff 对话框（`from → to` + 附加规则）再写入。

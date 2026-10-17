@@ -39,10 +39,14 @@ export const useAppStore = defineStore('app', {
     clientConfig: null,
     /** 当前生效策略（get_current_config 归一化后） */
     currentPolicy: {},
+    /** 内置数据库类型 + 用户自定义别名模板 */
+    dbTypes: [],
     lastError: '',
   }),
 
   getters: {
+    builtInTypes: (state) => state.dbTypes.filter((item) => item.custom !== true),
+    customTemplates: (state) => state.dbTypes.filter((item) => item.custom === true),
     isRunning: (state) => Boolean(state.status?.running),
     baseUrl: (state) => state.status?.baseUrl ?? '',
     databaseNames: (state) => [...new Set(state.tables.map((t) => t.database))],
@@ -220,6 +224,54 @@ export const useAppStore = defineStore('app', {
       } finally {
         this.isBusy = false;
       }
+    },
+
+    /**
+     * 拉内置类型与自定义模板。类型元数据在后端，避免前端硬编码一份会漂移的白名单。
+     */
+    async loadDbTypes() {
+      const result = await rpcSafe('db.types');
+      if (result.ok) this.dbTypes = [...result.data.builtIn, ...result.data.templates];
+      else this.lastError = result.error ?? '';
+    },
+
+    /**
+     * 新增别名模板（如 TiDB → postgres 协议）。
+     *
+     * @param {Object} payload { id, label, wireType, defaultPort, note }
+     */
+    async addDbTemplate(payload) {
+      const result = await rpc('db.templates.add', payload);
+      this.dbTypes = [...this.builtInTypes, ...result.templates];
+    },
+
+    /**
+     * @param {string} id 模板标识
+     */
+    async removeDbTemplate(id) {
+      const result = await rpc('db.templates.remove', { id });
+      this.dbTypes = [...this.builtInTypes, ...result.templates];
+    },
+
+    /**
+     * 测试连接。validate_config 会真的去连目标库，后端不自己实现 ping。
+     *
+     * @param {string} name 连接名
+     * @param {Object} connection dev.yml 里的库连接配置
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    async testConnection(name, connection) {
+      if (!this.isRunning) return { ok: false, message: 'GraphJin 未运行，无法测试连接' };
+      const result = await rpc('connections.test', {
+        baseUrl: this.baseUrl,
+        name,
+        connection,
+      });
+      const errors = result?.errors ?? [];
+      return {
+        ok: result?.success === true || result?.valid === true,
+        message: errors.length > 0 ? errors.join('；') : (result?.message ?? ''),
+      };
     },
 
     async loadClientConfig() {

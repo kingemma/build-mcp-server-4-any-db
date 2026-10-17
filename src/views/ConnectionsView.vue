@@ -1,19 +1,14 @@
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useAppStore } from '../stores/app';
 
 const store = useAppStore();
 
-const DB_TYPES = [
-  { value: 'sqlite', label: 'SQLite' },
-  { value: 'postgres', label: 'PostgreSQL' },
-  { value: 'mysql', label: 'MySQL' },
-];
-
 const form = reactive({
   name: 'app',
-  type: 'sqlite',
+  typeId: 'sqlite',
+  mode: 'path',
   path: '',
   host: '127.0.0.1',
   port: 5432,
@@ -21,17 +16,40 @@ const form = reactive({
   user: '',
   password: '',
   schema: '',
+  connectionString: '',
   isDefault: true,
   projectDir: 'projects/app',
   appName: 'MCP Builder',
 });
 
-const isSqlite = computed(() => form.type === 'sqlite');
+const isTesting = ref(false);
+const isSubmitting = ref(false);
+const isTemplateOpen = ref(false);
+const template = reactive({ id: '', label: '', wireType: '', defaultPort: null, note: '' });
 
-/** 只提交当前类型真正需要的字段，避免把空字符串写进 dev.yml */
+const selected = computed(() => store.dbTypes.find((item) => item.id === form.typeId) ?? null);
+const wireType = computed(() => selected.value?.wireType ?? '');
+const isFileBased = computed(() => form.mode === 'path');
+const isDsn = computed(() => form.mode === 'dsn');
+
+/** 切换类型时带上它的默认端口，省掉一次手填 */
+watch(selected, (item) => {
+  if (!item) return;
+  form.mode = item.mode ?? 'fields';
+  if (item.defaultPort) form.port = item.defaultPort;
+});
+
+onMounted(async () => {
+  await store.loadDbTypes();
+  if (!selected.value && store.dbTypes.length > 0) form.typeId = store.dbTypes[0].id;
+});
+
+/** 只提交当前模式真正用到的字段，避免把空值写进 dev.yml */
 function buildConnection() {
-  const connection = { type: form.type };
-  if (isSqlite.value) {
+  const connection = { type: wireType.value };
+  if (isDsn.value) {
+    connection.connection_string = form.connectionString;
+  } else if (isFileBased.value) {
     connection.path = form.path;
   } else {
     connection.host = form.host;
@@ -45,25 +63,45 @@ function buildConnection() {
   return connection;
 }
 
-const isSubmitting = ref(false);
+function validate() {
+  if (!wireType.value) return '请选择数据库类型';
+  if (isDsn.value && !form.connectionString) return '连接串不能为空';
+  if (isFileBased.value && !form.path) return '文件路径不能为空';
+  if (!isDsn.value && !isFileBased.value && !form.dbname) return '请填写数据库名';
+  return null;
+}
+
+async function test() {
+  const problem = validate();
+  if (problem) {
+    ElMessage.warning(problem);
+    return;
+  }
+  isTesting.value = true;
+  try {
+    const result = await store.testConnection(form.name, buildConnection());
+    ElMessage[result.ok ? 'success' : 'warning'](
+      result.message || (result.ok ? '连接可用' : '连接失败')
+    );
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    isTesting.value = false;
+  }
+}
 
 async function connect() {
-  const connection = buildConnection();
-  if (isSqlite.value && !connection.path) {
-    ElMessage.warning('SQLite 需要填写数据库文件路径');
+  const problem = validate();
+  if (problem) {
+    ElMessage.warning(problem);
     return;
   }
-  if (!isSqlite.value && !connection.dbname) {
-    ElMessage.warning('请填写数据库名');
-    return;
-  }
-
   isSubmitting.value = true;
   try {
     await store.startGraphJin({
       projectDir: form.projectDir,
       appName: form.appName,
-      databases: { [form.name]: connection },
+      databases: { [form.name]: buildConnection() },
     });
     ElMessage.success(`已启动，发现 ${store.tables.length} 张表`);
   } catch (error) {
@@ -73,11 +111,29 @@ async function connect() {
   }
 }
 
-async function test() {
-  await store.refreshStatus();
-  ElMessage[store.isRunning ? 'success' : 'warning'](
-    store.isRunning ? `服务运行中：${store.baseUrl}` : '服务未运行，请先连接'
-  );
+function openTemplate() {
+  template.id = '';
+  template.label = '';
+  template.wireType = wireType.value;
+  template.defaultPort = selected.value?.defaultPort ?? null;
+  template.note = '';
+  isTemplateOpen.value = true;
+}
+
+async function saveTemplate() {
+  try {
+    await store.addDbTemplate({ ...template, mode: form.mode });
+    isTemplateOpen.value = false;
+    ElMessage.success(`模板 ${template.label} 已保存`);
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function dropTemplate(id) {
+  await store.removeDbTemplate(id);
+  if (form.typeId === id) form.typeId = store.dbTypes[0]?.id ?? '';
+  ElMessage.success('模板已删除');
 }
 
 const summary = computed(() => ({
@@ -92,7 +148,7 @@ const summary = computed(() => ({
     <section class="panel">
       <div class="panel__head">
         <span class="panel__title">新建连接</span>
-        <span class="eyebrow">{{ form.type }}</span>
+        <span class="eyebrow">{{ wireType || '未选择' }}</span>
       </div>
       <div class="panel__body">
         <el-form label-position="top" size="small">
@@ -101,14 +157,49 @@ const summary = computed(() => ({
               <el-input v-model="form.name" placeholder="app" />
             </el-form-item>
             <el-form-item label="类型">
-              <el-select v-model="form.type">
-                <el-option v-for="t in DB_TYPES" :key="t.value" :label="t.label" :value="t.value" />
+              <el-select v-model="form.typeId" filterable>
+                <el-option-group label="内置">
+                  <el-option
+                    v-for="item in store.builtInTypes"
+                    :key="item.id"
+                    :label="item.label"
+                    :value="item.id"
+                  />
+                </el-option-group>
+                <el-option-group v-if="store.customTemplates.length" label="自定义模板">
+                  <el-option
+                    v-for="item in store.customTemplates"
+                    :key="item.id"
+                    :label="`${item.label} → ${item.wireType}`"
+                    :value="item.id"
+                  />
+                </el-option-group>
               </el-select>
             </el-form-item>
           </div>
 
-          <el-form-item v-if="isSqlite" label="数据库文件">
+          <p v-if="selected?.note" class="note">{{ selected.note }}</p>
+          <p v-if="selected && selected.driverVerified === false" class="note note--warn">
+            该类型在配置白名单内，但连接层实测报 unsupported database type，驱动可能未实现。
+          </p>
+
+          <el-form-item label="录入方式">
+            <el-radio-group v-model="form.mode">
+              <el-radio value="path">文件路径</el-radio>
+              <el-radio value="fields">连接字段</el-radio>
+              <el-radio value="dsn">连接串</el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item v-if="isFileBased" label="数据库文件">
             <el-input v-model="form.path" placeholder="D:/data/app.db 或相对路径 app.db" />
+          </el-form-item>
+
+          <el-form-item v-else-if="isDsn" label="连接串">
+            <el-input
+              v-model="form.connectionString"
+              :placeholder="selected?.dsnExample || 'postgres://user:pass@host:5432/db'"
+            />
           </el-form-item>
 
           <template v-else>
@@ -117,17 +208,17 @@ const summary = computed(() => ({
                 <el-input v-model="form.host" />
               </el-form-item>
               <el-form-item label="端口">
-                <el-input-number v-model="form.port" :min="1" :max="65535" controls-position="right" />
+                <el-input-number
+                  v-model="form.port"
+                  :min="1"
+                  :max="65535"
+                  controls-position="right"
+                />
               </el-form-item>
             </div>
-            <div class="pair">
-              <el-form-item label="数据库名">
-                <el-input v-model="form.dbname" />
-              </el-form-item>
-              <el-form-item label="Schema">
-                <el-input v-model="form.schema" placeholder="可留空" />
-              </el-form-item>
-            </div>
+            <el-form-item label="数据库名">
+              <el-input v-model="form.dbname" />
+            </el-form-item>
             <div class="pair">
               <el-form-item label="用户">
                 <el-input v-model="form.user" />
@@ -136,6 +227,9 @@ const summary = computed(() => ({
                 <el-input v-model="form.password" type="password" show-password />
               </el-form-item>
             </div>
+            <el-form-item label="Schema（可选）">
+              <el-input v-model="form.schema" />
+            </el-form-item>
           </template>
 
           <div class="pair">
@@ -147,11 +241,12 @@ const summary = computed(() => ({
             </el-form-item>
           </div>
 
-          <el-checkbox v-model="form.isDefault" label="设为默认库" />
+          <el-checkbox v-model="form.isDefault">设为默认库</el-checkbox>
 
           <div class="row">
-            <el-button type="primary" :loading="isSubmitting" @click="connect">连接并启动</el-button>
-            <el-button @click="test">测试连通性</el-button>
+            <el-button :loading="isTesting" @click="test">测试连接</el-button>
+            <el-button type="primary" :loading="isSubmitting" @click="connect">启动</el-button>
+            <el-button text @click="openTemplate">存为模板</el-button>
           </div>
         </el-form>
       </div>
@@ -159,82 +254,148 @@ const summary = computed(() => ({
 
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">当前连接</span>
-        <span class="pill" :class="store.isRunning ? 'pill--on' : 'pill--idle'">
-          <span class="dot" />{{ store.isRunning ? '已连接' : '空闲' }}
-        </span>
+        <span class="panel__title">已保存的模板</span>
+        <span class="pill pill--idle">{{ store.customTemplates.length }}</span>
       </div>
       <div class="panel__body">
-        <dl class="dl">
-          <dt>项目目录</dt>
-          <dd>{{ summary.project }}</dd>
-          <dt>库</dt>
-          <dd>{{ summary.databases.length ? summary.databases.join(', ') : '—' }}</dd>
-          <dt>已发现表</dt>
-          <dd>{{ summary.tables }}</dd>
-        </dl>
-        <p class="mono-dim note">
-          连接信息写入项目目录的 <code>dev.yml</code>，采用方案 B 的
-          <code>databases</code> 写法（不使用 <code>sources</code>），
-          这样才能启用 <code>roles[].tables</code> 的四项操作开关。
+        <ul v-if="store.customTemplates.length" class="templates">
+          <li v-for="item in store.customTemplates" :key="item.id">
+            <div>
+              <div class="templates__label">{{ item.label }}</div>
+              <div class="templates__meta mono-dim">{{ item.id }} → {{ item.wireType }}</div>
+            </div>
+            <el-button size="small" text type="danger" @click="dropTemplate(item.id)">
+              删除
+            </el-button>
+          </li>
+        </ul>
+        <p v-else class="mono-dim note">
+          还没有自定义模板。TiDB / CockroachDB 这类兼容库不能写自己的类型名，
+          只能以 postgres / mysql 协议接入，用模板把这个映射固化下来。
         </p>
+
+        <div class="facts">
+          <div class="fact">
+            <span class="eyebrow">项目目录</span>
+            <span class="fact__value fact__value--path">{{ summary.project }}</span>
+          </div>
+          <div class="fact">
+            <span class="eyebrow">已连接库</span>
+            <span class="fact__value">{{ summary.databases.join(', ') || '—' }}</span>
+          </div>
+          <div class="fact">
+            <span class="eyebrow">已发现表</span>
+            <span class="fact__value">{{ summary.tables }}</span>
+          </div>
+        </div>
       </div>
     </section>
+
+    <el-dialog v-model="isTemplateOpen" title="保存为连接模板" width="480">
+      <el-form label-position="top" size="small">
+        <el-form-item label="标识（英文，作为下拉的 value）">
+          <el-input v-model="template.id" placeholder="tidb" />
+        </el-form-item>
+        <el-form-item label="显示名">
+          <el-input v-model="template.label" placeholder="TiDB" />
+        </el-form-item>
+        <el-form-item label="实际协议（必须在白名单内）">
+          <el-select v-model="template.wireType" filterable>
+            <el-option v-for="type in store.builtInTypes" :key="type.id" :label="type.wireType" :value="type.wireType" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="默认端口">
+          <el-input-number v-model="template.defaultPort" :min="1" :max="65535" controls-position="right" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="template.note" placeholder="TiDB 走 MySQL 协议" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="isTemplateOpen = false">取消</el-button>
+        <el-button type="primary" @click="saveTemplate">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
 .duo {
   display: grid;
-  grid-template-columns: minmax(420px, 1.15fr) minmax(300px, 0.85fr);
   gap: var(--gutter);
-  align-items: start;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+
+@media (max-width: 1100px) {
+  .duo {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 12px;
+  grid-template-columns: 1fr 1fr;
 }
 
 .row {
   display: flex;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.dl {
-  display: grid;
-  grid-template-columns: 92px 1fr;
-  gap: 8px 12px;
-  margin: 0;
-  font-size: 12px;
-}
-
-.dl dt {
-  color: var(--text-faint);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  padding-top: 2px;
-}
-
-.dl dd {
-  margin: 0;
-  color: var(--text);
-  word-break: break-all;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .note {
-  margin: 16px 0 0;
+  margin: 0 0 10px;
   font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-faint);
 }
 
-code {
+.note--warn {
   color: var(--amber);
 }
 
-:deep(.el-form-item) {
-  margin-bottom: 12px;
+.templates {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.templates li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.templates__label {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.templates__meta {
+  font-size: 11px;
+}
+
+.facts {
+  display: grid;
+  gap: 10px;
+}
+
+.fact {
+  display: grid;
+  gap: 2px;
+}
+
+.fact__value {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.fact__value--path {
+  word-break: break-all;
 }
 </style>
