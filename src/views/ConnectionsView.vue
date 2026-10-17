@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAppStore } from '../stores/app';
 
 const store = useAppStore();
@@ -25,6 +25,8 @@ const form = reactive({
 const isTesting = ref(false);
 const isSubmitting = ref(false);
 const isTemplateOpen = ref(false);
+/** 正在用哪条已保存连接启动，用于按钮 loading */
+const startingId = ref(0);
 const template = reactive({ id: '', label: '', wireType: '', defaultPort: null, note: '' });
 
 const selected = computed(() => store.dbTypes.find((item) => item.id === form.typeId) ?? null);
@@ -42,6 +44,7 @@ watch(selected, (item) => {
 onMounted(async () => {
   await store.loadDbTypes();
   if (!selected.value && store.dbTypes.length > 0) form.typeId = store.dbTypes[0].id;
+  await store.loadConnections();
 });
 
 /** 只提交当前模式真正用到的字段，避免把空值写进 dev.yml */
@@ -79,10 +82,15 @@ async function test() {
   }
   isTesting.value = true;
   try {
-    const result = await store.testConnection(form.name, buildConnection());
+    const result = await store.testConnection(form.name, buildConnection(), {
+      projectDir: form.projectDir,
+      appName: form.appName,
+    });
     ElMessage[result.ok ? 'success' : 'warning'](
       result.message || (result.ok ? '连接可用' : '连接失败')
     );
+    // 后端在测试通过时已落盘，这里只把列表拉回来
+    if (result.ok) await store.loadConnections();
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -136,6 +144,100 @@ async function dropTemplate(id) {
   ElMessage.success('模板已删除');
 }
 
+/** 已保存连接的「目标」摘要 */
+function targetOf(row) {
+  if (row.mode === 'dsn') return '连接串';
+  if (row.mode === 'path') return row.path || '—';
+  const host = row.host || '—';
+  const port = row.port ? `:${row.port}` : '';
+  return `${host}${port}${row.dbname ? `/${row.dbname}` : ''}`;
+}
+
+function statusLabel(row) {
+  if (!row.readable) return '需重新录入';
+  return row.status === 'connected' ? '已连接' : '已测试';
+}
+
+function formatTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+/** wire type 反查下拉里的类型；自定义别名模板回落到同协议的模板 */
+function resolveTypeId(wireType) {
+  const exact = store.dbTypes.find((item) => item.id === wireType);
+  if (exact) return exact.id;
+  return store.dbTypes.find((item) => item.wireType === wireType)?.id ?? wireType;
+}
+
+async function fillForm(row) {
+  try {
+    const detail = await store.fetchConnection(row.id);
+    if (!detail) {
+      ElMessage.warning('这条连接不存在');
+      return;
+    }
+    form.typeId = resolveTypeId(detail.wireType);
+    // 切类型会触发 watch 覆盖 mode / port，等它跑完再回填其余字段
+    await nextTick();
+    form.name = detail.name;
+    form.projectDir = detail.projectDir;
+    form.appName = detail.appName;
+    form.mode = detail.mode;
+    form.isDefault = detail.isDefault;
+    form.path = detail.path ?? '';
+    form.host = detail.host || '127.0.0.1';
+    form.port = detail.port || selected.value?.defaultPort || 5432;
+    form.dbname = detail.dbname ?? '';
+    form.user = detail.user ?? '';
+    form.schema = detail.schema ?? '';
+    form.password = '';
+    form.connectionString = '';
+
+    // 摘要字段是明文列，payload 解不开时也能回填目标；敏感字段只能重填
+    if (detail.config) {
+      form.password = detail.config.password ?? '';
+      form.connectionString = detail.config.connection_string ?? '';
+      ElMessage.success(`已填入 ${detail.name}`);
+      return;
+    }
+    ElMessage.warning('这条记录无法解密，已回填非敏感字段，请重新填写密码或连接串');
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function activate(row) {
+  if (!row.readable) {
+    ElMessage.warning('这条连接无法解密，请重新填写并测试一次');
+    return;
+  }
+  startingId.value = row.id;
+  try {
+    const connection = await store.startFromSavedConnection(row.id);
+    ElMessage.success(`已用 ${connection.name} 启动，发现 ${store.tables.length} 张表`);
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    startingId.value = 0;
+  }
+}
+
+async function dropConnection(row) {
+  try {
+    await ElMessageBox.confirm(`删除连接 ${row.name}？`, '确认删除', { type: 'warning' });
+  } catch {
+    return;
+  }
+  try {
+    await store.removeConnection(row.id);
+    ElMessage.success('已删除');
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
 const summary = computed(() => ({
   project: store.status?.projectDir ?? '—',
   databases: store.databaseNames,
@@ -144,7 +246,8 @@ const summary = computed(() => ({
 </script>
 
 <template>
-  <div class="duo">
+  <div class="stack">
+    <div class="duo">
     <section class="panel">
       <div class="panel__head">
         <span class="panel__title">新建连接</span>
@@ -290,6 +393,68 @@ const summary = computed(() => ({
         </div>
       </div>
     </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel__head">
+        <span class="panel__title">已保存的连接</span>
+        <div class="head-actions">
+          <span class="eyebrow">{{ store.connections.length }} 条</span>
+          <el-button size="small" @click="store.loadConnections">刷新</el-button>
+        </div>
+      </div>
+      <div class="panel__body panel__body--flush">
+        <table v-if="store.connections.length" class="conns">
+          <thead>
+            <tr>
+              <th>连接名</th>
+              <th>类型</th>
+              <th>目标</th>
+              <th>状态</th>
+              <th>项目目录</th>
+              <th>更新时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in store.connections" :key="row.id">
+              <td class="conns__name">{{ row.name }}</td>
+              <td class="mono-dim">{{ row.wireType }}</td>
+              <td class="mono-dim conns__target">{{ targetOf(row) }}</td>
+              <td>
+                <span
+                  class="pill"
+                  :class="row.readable ? (row.status === 'connected' ? 'pill--on' : 'pill--idle') : 'pill--warn'"
+                >
+                  <span class="dot" />{{ statusLabel(row) }}
+                </span>
+              </td>
+              <td class="mono-dim conns__path">{{ row.projectDir }}</td>
+              <td class="mono-dim">{{ formatTime(row.updatedAt) }}</td>
+              <td class="conns__actions">
+                <el-button size="small" text @click="fillForm(row)">填入表单</el-button>
+                <el-button
+                  size="small"
+                  text
+                  type="primary"
+                  :loading="startingId === row.id"
+                  :disabled="!row.readable"
+                  @click="activate(row)"
+                >
+                  启动
+                </el-button>
+                <el-button size="small" text type="danger" @click="dropConnection(row)">
+                  删除
+                </el-button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="mono-dim note conns__empty">
+          还没有保存的连接。测试通过或启动成功后会自动记录在这里。
+        </p>
+      </div>
+    </section>
 
     <el-dialog v-model="isTemplateOpen" title="保存为连接模板" width="480">
       <el-form label-position="top" size="small">
@@ -320,6 +485,11 @@ const summary = computed(() => ({
 </template>
 
 <style scoped>
+.stack {
+  display: grid;
+  gap: var(--gutter);
+}
+
 .duo {
   display: grid;
   gap: var(--gutter);
@@ -397,5 +567,65 @@ const summary = computed(() => ({
 
 .fact__value--path {
   word-break: break-all;
+}
+
+.head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.conns {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.conns th {
+  padding: 9px 14px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  background: var(--ink-700);
+}
+
+.conns td {
+  padding: 8px 14px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.conns tbody tr:hover td {
+  background: rgba(217, 162, 75, 0.05);
+}
+
+.conns__name {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.conns__target,
+.conns__path {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conns__path {
+  font-size: 11px;
+}
+
+.conns__actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.conns__empty {
+  margin: 0;
+  padding: 16px;
 }
 </style>

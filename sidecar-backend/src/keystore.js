@@ -18,8 +18,7 @@ const path = require('node:path');
  * —— 说明它按 base64 解码后再校验长度。
  */
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const KEY_FILE = path.join(DATA_DIR, 'keystore.key');
+const { dataDir, dataFile } = require('./paths');
 
 const KEY_BYTES = 32;
 
@@ -34,13 +33,14 @@ function isUsableKey(value) {
  * @returns {string} base64 编码的 32 字节密钥
  */
 function ensureKeystoreKey() {
-  if (fs.existsSync(KEY_FILE)) {
-    const existing = fs.readFileSync(KEY_FILE, 'utf8').trim();
+  const keyFile = dataFile('keystore.key');
+  if (fs.existsSync(keyFile)) {
+    const existing = fs.readFileSync(keyFile, 'utf8').trim();
     if (isUsableKey(existing)) return existing;
   }
   const key = crypto.randomBytes(KEY_BYTES).toString('base64');
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(KEY_FILE, `${key}\n`, 'utf8');
+  fs.mkdirSync(dataDir(), { recursive: true });
+  fs.writeFileSync(keyFile, `${key}\n`, 'utf8');
   return key;
 }
 
@@ -53,4 +53,4 @@ function keystoreEnv() {
   return { GJ_SECRETS_KEYSTORE_KEY: ensureKeystoreKey() };
 }
 
-module.exports = { ensureKeystoreKey, keystoreEnv, KEY_FILE };
+module.exports = { ensureKeystoreKey, keystoreEnv };

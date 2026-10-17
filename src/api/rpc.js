@@ -1,14 +1,25 @@
 const PORT_KEY = 'mcpb.backendPort';
 
-let currentPort = Number(localStorage.getItem(PORT_KEY) ?? 0);
+/** Electron 主进程注入的端口；浏览器里没有这个对象 */
+const injectedPort = Number(globalThis.mcpBuilder?.backendPort ?? 0);
+
+let currentPort = injectedPort || Number(localStorage.getItem(PORT_KEY) ?? 0);
 let requestId = 0;
 
 /**
- * 后端 HTTP 端口。Tauri 启动后端后从 ready 通知里取到，开发模式下手动填。
+ * 是否运行在桌面外壳里。
+ * @returns {boolean}
+ */
+export function isDesktop() {
+  return Boolean(globalThis.mcpBuilder?.isDesktop);
+}
+
+/**
+ * 后端 HTTP 端口。桌面端由 Electron 注入，浏览器里手填。
  * @returns {number}
  */
 export function getPort() {
-  return currentPort;
+  return injectedPort || currentPort;
 }
 
 /**
@@ -16,7 +27,8 @@ export function getPort() {
  */
 export function setPort(port) {
   currentPort = Number(port) || 0;
-  localStorage.setItem(PORT_KEY, String(currentPort));
+  // 桌面端的端口来自主进程，手填的值不参与
+  if (!injectedPort) localStorage.setItem(PORT_KEY, String(currentPort));
 }
 
 /**

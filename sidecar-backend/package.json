@@ -11,10 +11,12 @@
     "verify:stdio": "node scripts/verify-stdio.js",
     "verify:schema": "node scripts/verify-schema.js",
     "verify:supervisor": "node scripts/verify-supervisor.js",
+    "verify:columns": "node scripts/verify-columns.js",
+    "verify:e2e": "node scripts/verify-e2e.js",
     "demo": "node scripts/demo.js",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
   }
 }

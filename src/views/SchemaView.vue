@@ -1,87 +1,222 @@
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { rpcSafe } from '../api/rpc';
 import { useAppStore } from '../stores/app';
 
 const store = useAppStore();
 
-const tree = computed(() =>
-  store.databaseNames.map((database) => ({
-    label: database,
-    kind: 'database',
-    children: store.tables
-      .filter((table) => table.database === database)
-      .map((table) => ({
-        label: table.name,
-        kind: 'table',
-        children: (store.schema?.tables.find((t) => t.name === table.name)?.columns ?? []).map(
-          (column) => ({
-            label: `${column.name} · ${column.type}${column.primaryKey ? ' · PK' : ''}`,
-            kind: 'column',
-          })
-        ),
-      })),
-  }))
+const tables = ref([]);
+const relationships = ref([]);
+const isLoading = ref(false);
+
+const databases = computed(() => store.connectedDatabases);
+const columnCount = computed(() =>
+  tables.value.reduce((total, table) => total + (table.columns?.length ?? 0), 0)
 );
 
-const relationships = computed(() => store.schema?.relationships ?? []);
+/** 结构树只展示当前选中的库，根节点就是库名 */
+const tree = computed(() => {
+  if (!store.activeDatabase) return [];
+  return [
+    {
+      label: store.activeDatabase,
+      kind: 'database',
+      children: tables.value.map((table) => ({
+        label: table.schema ? `${table.schema}.${table.name}` : table.name,
+        kind: 'table',
+        children: (table.columns ?? []).map((column) => ({
+          label: `${column.name} · ${column.type}${column.primaryKey ? ' · PK' : ''}`,
+          kind: 'column',
+        })),
+      })),
+    },
+  ];
+});
+
+/**
+ * 按库加载：query_catalog 的 where 里带 database_name，
+ * 表、列、关系都只来自这一个库。
+ *
+ * @param {string} database
+ */
+async function load(database) {
+  if (!database || !store.isRunning) {
+    tables.value = [];
+    relationships.value = [];
+    return;
+  }
+  isLoading.value = true;
+  try {
+    const result = await rpcSafe('schema.discover', { baseUrl: store.baseUrl, database });
+    if (!result.ok) {
+      ElMessage.error(result.error);
+      return;
+    }
+    tables.value = result.data.tables ?? [];
+    relationships.value = result.data.relationships ?? [];
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function select(database) {
+  if (database === store.activeDatabase) return;
+  store.activeDatabase = database;
+  await load(database);
+}
 
 async function reload() {
   if (!store.isRunning) {
     ElMessage.warning('服务未运行');
     return;
   }
-  await store.loadSchema();
-  ElMessage.success(`已刷新：${store.tables.length} 张表`);
+  await store.loadConnectedDatabases();
+  if (!store.activeDatabase) {
+    tables.value = [];
+    relationships.value = [];
+    ElMessage.warning('当前实例没有已连接的数据库');
+    return;
+  }
+  await load(store.activeDatabase);
+  ElMessage.success(`已刷新：${tables.value.length} 张表`);
 }
 
-onMounted(() => {
-  if (store.isRunning && store.tables.length === 0) store.loadSchema();
+onMounted(async () => {
+  if (!store.isRunning) return;
+  await store.loadConnectedDatabases();
+  await load(store.activeDatabase);
 });
 </script>
 
 <template>
-  <div class="duo">
+  <div class="stack">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">结构</span>
-        <el-button size="small" @click="reload">刷新</el-button>
+        <span class="panel__title">已连接的数据库</span>
+        <div class="head-actions">
+          <span class="eyebrow">{{ databases.length }} 个</span>
+          <el-button size="small" :loading="isLoading" @click="reload">刷新</el-button>
+        </div>
       </div>
       <div class="panel__body">
-        <el-tree v-if="tree.length" :data="tree" default-expand-all :props="{ children: 'children' }">
-          <template #default="{ data }">
-            <span class="node" :class="`node--${data.kind}`">
-              <span class="node__mark">
-                {{ data.kind === 'database' ? '▣' : data.kind === 'table' ? '▤' : '·' }}
-              </span>
-              {{ data.label }}
-            </span>
-          </template>
-        </el-tree>
-        <p v-else class="mono-dim">暂无 Schema。请先在「数据库连接」页启动服务。</p>
+        <div v-if="databases.length" class="databases">
+          <button
+            v-for="name in databases"
+            :key="name"
+            class="database"
+            :class="{ 'database--active': name === store.activeDatabase }"
+            @click="select(name)"
+          >
+            <span class="database__mark">▣</span>
+            {{ name }}
+          </button>
+        </div>
+        <p v-else class="mono-dim">
+          {{
+            store.isRunning
+              ? '当前实例没有加载任何数据库。'
+              : '服务未运行。请先在「数据库连接」页启动，或直接用一条已保存的连接启动。'
+          }}
+        </p>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel__head">
-        <span class="panel__title">关系</span>
-        <span class="eyebrow">{{ relationships.length }} 条</span>
-      </div>
-      <div class="panel__body">
-        <div v-for="rel in relationships" :key="rel.fromTable + rel.fromColumn" class="rel">
-          <span class="rel__from">{{ rel.fromTable }}.{{ rel.fromColumn }}</span>
-          <span class="rel__arrow">→</span>
-          <span class="rel__to">{{ rel.toTable }}.{{ rel.toColumn }}</span>
-          <span class="rel__type">{{ rel.relType }}</span>
-          <span v-if="rel.crossDatabase" class="pill pill--idle">跨库</span>
+    <div class="duo">
+      <section class="panel">
+        <div class="panel__head">
+          <span class="panel__title">结构 · {{ store.activeDatabase || '未选择' }}</span>
+          <span class="eyebrow">{{ tables.length }} 表 / {{ columnCount }} 列</span>
         </div>
-        <p v-if="!relationships.length" class="mono-dim">未发现外键关系。</p>
-      </div>
-    </section>
+        <div v-loading="isLoading" class="panel__body">
+          <el-tree v-if="tree.length" :data="tree" default-expand-all :props="{ children: 'children' }">
+            <template #default="{ data }">
+              <span class="node" :class="`node--${data.kind}`">
+                <span class="node__mark">
+                  {{ data.kind === 'database' ? '▣' : data.kind === 'table' ? '▤' : '·' }}
+                </span>
+                {{ data.label }}
+              </span>
+            </template>
+          </el-tree>
+          <p v-else class="mono-dim">
+            {{ store.activeDatabase ? '这个库里没有发现表。' : '请选择一个已连接的数据库。' }}
+          </p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__head">
+          <span class="panel__title">关系 · {{ store.activeDatabase || '未选择' }}</span>
+          <span class="eyebrow">{{ relationships.length }} 条</span>
+        </div>
+        <div class="panel__body">
+          <div
+            v-for="rel in relationships"
+            :key="`${rel.fromTable}.${rel.fromColumn}->${rel.toTable}.${rel.toColumn}`"
+            class="rel"
+          >
+            <span class="rel__from">{{ rel.fromTable }}.{{ rel.fromColumn }}</span>
+            <span class="rel__arrow">→</span>
+            <span class="rel__to">{{ rel.toTable }}.{{ rel.toColumn }}</span>
+            <span class="rel__type">{{ rel.relType }}</span>
+            <span v-if="rel.crossDatabase" class="pill pill--idle">跨库</span>
+          </div>
+          <p v-if="!relationships.length" class="mono-dim">未发现外键关系。</p>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.stack {
+  display: grid;
+  gap: var(--gutter);
+}
+
+.head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.databases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.database {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.database:hover {
+  color: var(--text);
+  border-color: var(--slate);
+}
+
+.database--active {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(217, 162, 75, 0.45);
+}
+
+.database__mark {
+  color: var(--text-faint);
+}
+
 .duo {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);

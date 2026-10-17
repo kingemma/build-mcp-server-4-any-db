@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
-// Tauri 用固定端口 + 严格端口，避免 devServer 随机跳端口导致前端连不上后端
+// Electron 打包后用 file:// 加载，资源必须用相对路径，否则 /assets/* 会 404
 export default defineConfig({
+  base: './',
   plugins: [vue()],
   clearScreen: false,
   server: {

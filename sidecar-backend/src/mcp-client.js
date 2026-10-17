@@ -90,6 +90,8 @@ class McpClient {
     this.clientInfo = clientInfo;
     this.sessionId = null;
     this.requestId = 0;
+    /** 请求串行队列：重连期间并发请求会互相覆盖 session，必须排队 */
+    this.requestQueue = Promise.resolve();
   }
 
   get endpoint() {
@@ -139,6 +141,51 @@ class McpClient {
     return message.result ?? null;
   }
 
+  /**
+   * 服务重启后旧 Mcp-Session-Id 会返回 404 session not found。
+   * 这种情况清掉会话重新握手一次，其它错误原样抛出。
+   *
+   * @param {Error} error
+   * @returns {Promise<boolean>} 是否已重连
+   */
+  async #reconnectIfStale(error) {
+    const stale =
+      error instanceof McpProtocolError &&
+      error.code === 404 &&
+      /session not found/i.test(error.message);
+    if (!stale) return false;
+    this.sessionId = null;
+    await this.connect();
+    return true;
+  }
+
+  /**
+   * 发请求；session 失效时重连并重试一次。
+   *
+   * 串行执行：两个并发请求同时拿到 404 时，各自 initialize 会互相覆盖
+   * Mcp-Session-Id，后重试的那个必然再失败（实测在"停止→启动"后必现）。
+   *
+   * @param {() => Object} buildPayload 每次调用都重建载荷，重试时 id 不会重复
+   * @returns {Promise<*>}
+   */
+  async #sendWithRecovery(buildPayload) {
+    const run = async () => {
+      try {
+        return await this.#send(buildPayload());
+      } catch (error) {
+        if (!(await this.#reconnectIfStale(error))) throw error;
+        return this.#send(buildPayload());
+      }
+    };
+    // 前一个任务失败不影响后续排队
+    const task = this.requestQueue.then(run, run);
+    this.requestQueue = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
   /** 完成握手，之后才能调用业务方法 */
   async connect() {
     const result = await this.#send({
@@ -161,12 +208,12 @@ class McpClient {
 
   /** @returns {Promise<Array<Object>>} 当前角色可见的工具列表 */
   async listTools() {
-    const result = await this.#send({
+    const result = await this.#sendWithRecovery(() => ({
       jsonrpc: '2.0',
       id: this.#nextId(),
       method: 'tools/list',
       params: {},
-    });
+    }));
     return result?.tools ?? [];
   }
 
@@ -178,12 +225,12 @@ class McpClient {
    * @returns {Promise<*>} 已解包的结果
    */
   async callTool(name, args = {}) {
-    const result = await this.#send({
+    const result = await this.#sendWithRecovery(() => ({
       jsonrpc: '2.0',
       id: this.#nextId(),
       method: 'tools/call',
       params: { name, arguments: args },
-    });
+    }));
     return unwrapToolResult(result);
   }
 }

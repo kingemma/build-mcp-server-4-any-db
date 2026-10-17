@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { GraphJinProcess, pickFreePort } = require('./graphjin-process');
-const { createProject } = require('./project');
+const { createProject, mergeProjectDatabases } = require('./project');
 const { keystoreEnv } = require('./keystore');
 
 /** 进程编排层的用法错误 */
@@ -81,11 +81,14 @@ class GraphJinSupervisor {
   }
 
   /**
-   * 启动服务。项目目录里没有 dev.yml 时按传入的 databases 初始化一个。
+   * 启动服务。
+   *
+   * dev.yml 不存在时按传入的 databases 初始化一个；已存在时把 databases 合并进
+   * 它的 `databases:` 段（保留 roles 等其余内容），所以第二次启动新加的库能生效。
    *
    * @param {Object} options
    * @param {string} options.projectDir
-   * @param {Object} [options.databases] 初始化项目用的库连接，形态同 project.js
+   * @param {Object} [options.databases] 库连接，形态同 project.js
    * @param {string} [options.appName]
    * @param {boolean} [options.webUi]
    * @returns {Promise<Object>} status()
@@ -104,6 +107,8 @@ class GraphJinSupervisor {
         throw new SupervisorError('项目目录缺少 dev.yml，且未提供 databases，无法初始化项目');
       }
       createProject({ dir, appName, port: await pickFreePort(), databases, webUi });
+    } else if (databases && Object.keys(databases).length > 0) {
+      mergeProjectDatabases(devYaml, databases);
     }
 
     this.projectDir = dir;

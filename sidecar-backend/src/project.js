@@ -124,4 +124,82 @@ function createProject({ dir, ...options }) {
   return file;
 }
 
-module.exports = { renderDevYaml, renderDatabase, createProject };
+/**
+ * 把一批连接合并进已有的 dev.yml。
+ *
+ * GraphJin 执行 update_current_config 后会把配置写回 dev.yml（roles 等都在里面），
+ * 所以启动时不能整份重渲染 —— 那会冲掉权限。这里只改 `databases:` 块，其余内容
+ * 逐字保留。
+ *
+ * @param {string} text dev.yml 内容
+ * @param {Object} databases 库名 → 连接信息
+ * @returns {string} 合并后的内容
+ */
+function mergeDatabaseBlock(text, databases) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => /^databases:\s*$/.test(line));
+  if (start < 0) throw new Error('dev.yml 缺少 databases 段，无法合并连接');
+
+  // 块 = databases: 之后连续的缩进行；空行不算结束，碰到下一个顶层键才停
+  let end = start + 1;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i].trim() === '') continue;
+    if (!/^\s/.test(lines[i])) break;
+    end = i + 1;
+  }
+
+  const entries = [];
+  let current = null;
+  for (let i = start + 1; i < end; i += 1) {
+    const header = /^ {2}([^\s:#][^:]*):\s*$/.exec(lines[i]);
+    if (header) {
+      current = { name: header[1], lines: [lines[i]] };
+      entries.push(current);
+    } else if (current) {
+      current.lines.push(lines[i]);
+    }
+  }
+
+  const provided = Object.entries(databases ?? {});
+  const defaultName = provided.find(([, conn]) => conn?.default === true)?.[0] ?? null;
+
+  for (const [name, conn] of provided) {
+    const rendered = renderDatabase(name, conn).split('\n');
+    const existing = entries.find((entry) => entry.name === name);
+    if (existing) existing.lines = rendered;
+    else entries.push({ name, lines: rendered });
+  }
+
+  // GraphJin 只允许一个默认库：新设为 default 时把其它条目的 default 去掉
+  if (defaultName) {
+    for (const entry of entries) {
+      if (entry.name === defaultName) continue;
+      entry.lines = entry.lines.filter((line) => !/^\s+default:\s*true\s*$/.test(line));
+    }
+  }
+
+  const block = entries.flatMap((entry) => entry.lines);
+  return [...lines.slice(0, start + 1), ...block, ...lines.slice(end)].join('\n');
+}
+
+/**
+ * 就地合并 dev.yml 里的 databases 段。
+ *
+ * @param {string} file dev.yml 路径
+ * @param {Object} databases 库名 → 连接信息
+ * @returns {string} 同一个路径
+ */
+function mergeProjectDatabases(file, databases) {
+  if (!databases || Object.keys(databases).length === 0) return file;
+  const text = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, mergeDatabaseBlock(text, databases), 'utf8');
+  return file;
+}
+
+module.exports = {
+  renderDevYaml,
+  renderDatabase,
+  createProject,
+  mergeDatabaseBlock,
+  mergeProjectDatabases,
+};

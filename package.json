@@ -2,7 +2,8 @@
   "name": "mcp-builder",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP Server 可视化构建平台：Tauri 2 外壳 + Vue 3 前端 + Node.js 后端 + GraphJin 内核",
+  "description": "MCP Server 可视化构建平台：Electron 外壳 + Vue 3 前端 + Node.js 后端 + GraphJin 内核",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,7 +11,42 @@
     "prepare:binaries": "node scripts/prepare-binaries.js",
     "fetch:binaries": "node scripts/fetch-binaries.js",
     "backend": "node sidecar-backend/src/index.js",
-    "backend:demo": "npm run demo --prefix sidecar-backend"
+    "backend:demo": "npm run demo --prefix sidecar-backend",
+    "verify:ui": "node scripts/verify-ui.js",
+    "electron:dev": "electron .",
+    "electron:serve": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.mcpbuilder.desktop",
+    "productName": "MCP Builder",
+    "directories": {
+      "output": "release-final"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "sidecar-backend/src/**/*",
+      "sidecar-backend/package.json",
+      "scripts/platforms.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "src-tauri/binaries",
+        "to": "binaries",
+        "filter": ["graphjin-*"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "MCP Builder"
+    }
   },
   "dependencies": {
     "element-plus": "^2.9.1",
@@ -20,6 +56,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "44.7.0",
+    "electron-builder": "^26.15.3",
     "vite": "^6.0.7"
   }
 }

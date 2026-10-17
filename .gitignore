@@ -9,3 +9,16 @@ projects/
 .backend-*.txt
 .vite-*.txt
 .probe/
+
+# electron-builder 产物
+release/
+release-app/
+release-win/
+release-mac/
+release-linux/
+release-final/
+release-final-app/
+release-final-win/
+release-final-mac/
+release-final-linux/
+src-tauri/

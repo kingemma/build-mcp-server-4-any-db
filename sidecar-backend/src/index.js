@@ -7,7 +7,15 @@ const readline = require('node:readline');
 
 const { RpcRouter, RpcError } = require('./rpc');
 const { UserStore, syncRolesToGraphJin } = require('./users');
+const {
+  ConnectionStore,
+  ORIGIN_START,
+  ORIGIN_TEST,
+  STATUS_CONNECTED,
+  STATUS_VERIFIED,
+} = require('./connections');
 const { GraphJinService } = require('./graphjin');
+const { probeConnection } = require('./connection-probe');
 const { discoverSchema, listTables } = require('./schema');
 const { GraphJinSupervisor } = require('./supervisor');
 const { buildRoleTableConfig, summarizePatch } = require('./permissions');
@@ -20,6 +28,7 @@ const {
   removeTemplate,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
+const { dataFile } = require('./paths');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
 const serviceCache = new Map();
@@ -55,18 +64,48 @@ function requireBaseUrl(params) {
 }
 
 /**
+ * validate_config 的返回形态不统一：成功可能落在 success 或 valid 上。
+ *
+ * @param {Object} result
+ * @returns {boolean}
+ */
+function isConnectionOk(result) {
+  return result?.success === true || result?.valid === true;
+}
+
+/**
  * 组装 JSON-RPC 方法表。
  *
  * 同一份路由同时挂在两种传输上：Tauri 走 stdin/stdout，前端走 HTTP POST /rpc。
  *
  * @param {Object} options
  * @param {UserStore} options.store
+ * @param {ConnectionStore} [options.connections] 本地连接记录；缺省时连接类方法会报错
  * @param {GraphJinSupervisor} [options.supervisor] 进程编排，缺省时自建一个
  * @returns {RpcRouter}
  */
-function createRouter({ store, supervisor = null }) {
+function createRouter({ store, connections = null, supervisor = null }) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
+
+  /** 连接存储只在 createBackend 里装配，单测里可以省略 */
+  const connectionStore = () => {
+    if (!connections) throw RpcError.invalidParams('连接存储未初始化');
+    return connections;
+  };
+
+  /**
+   * 落盘一条连接。写盘失败只记日志 —— 连接本身已经可用，
+   * 不该因为持久化失败把测试/启动结果改成失败。
+   */
+  const remember = (name, connection, { projectDir, appName, status, origin }) => {
+    if (!connections) return;
+    try {
+      connections.save({ name, projectDir, appName, config: connection, status, origin });
+    } catch (error) {
+      console.error(`[rpc] 保存连接 ${name} 失败: ${error.stack ?? error.message}`);
+    }
+  };
 
   router
     .register('ping', () => 'pong')
@@ -134,19 +173,71 @@ function createRouter({ store, supervisor = null }) {
     })
     // 连接测试：validate_config 会真的去连目标库，不必自己实现 ping（基线 §12.5）
     .register('connections.test', async (params) => {
-      const service = await getService(requireBaseUrl(params));
       const name = params?.name ?? 'probe_db';
       const connection = params?.connection ?? {};
-      return service.mcp.callTool('validate_config', { databases: { [name]: connection } });
+      const baseUrl =
+        typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null;
+      // 服务在跑就复用现成实例；没跑就起一个用完即停的临时实例，不必先启动才能测
+      const result = baseUrl
+        ? await (await getService(baseUrl)).mcp.callTool('validate_config', {
+            databases: { [name]: connection },
+          })
+        : await probeConnection({ name, connection });
+      // 测试通过才落盘，列表里看到的都是"真的连通过"的记录
+      if (isConnectionOk(result) && params?.projectDir) {
+        remember(name, connection, {
+          projectDir: params.projectDir,
+          appName: params?.appName,
+          status: STATUS_VERIFIED,
+          origin: ORIGIN_TEST,
+        });
+      }
+      return result;
+    })
+    // 本地已保存的连接
+    .register('connections.list', () => connectionStore().list())
+    .register('connections.get', (params) => {
+      const id = params?.id;
+      if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
+      return connectionStore().get(id);
+    })
+    .register('connections.remove', (params) => {
+      const id = params?.id;
+      if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
+      return { deleted: connectionStore().remove(id) };
     })
     // GraphJin 进程生命周期
-    .register('graphjin.start', (params) => services.start(params ?? {}))
+    .register('graphjin.start', async (params) => {
+      const status = await services.start(params ?? {});
+      // 只有真的跑起来才记为 connected；库配置以项目里的 dev.yml 为准
+      if (status?.running && params?.databases) {
+        for (const [name, connection] of Object.entries(params.databases)) {
+          remember(name, connection, {
+            projectDir: params.projectDir,
+            appName: params?.appName,
+            status: STATUS_CONNECTED,
+            origin: ORIGIN_START,
+          });
+        }
+      }
+      return status;
+    })
     .register('graphjin.tools', async (params) => {
       const service = await getService(requireBaseUrl(params));
       return service.listTools();
     })
     .register('graphjin.stop', () => services.stop())
     .register('graphjin.status', () => services.status())
+    // 运行中实例实际加载的库名：Schema 页顶部的库选择器以它为准
+    .register('graphjin.databases', async (params) => {
+      const service = await getService(requireBaseUrl(params));
+      const config = await service.readConfig('databases');
+      const databases = Object.keys(config?.databases ?? {}).sort();
+      return {
+        activeDatabase: config?.active_database ?? databases[0] ?? null,
+        databases,
+      };
+    })
     .register('graphjin.health', () => services.health())
     // 2.7 当前生效策略。gj_security root 走 /api/v1/graphql 需 admin JWT（实测不可达），
     // 所以策略真相来源是 MCP 的 get_current_config，其顶层键含 roles / system / databases
@@ -303,25 +394,49 @@ function emitReady(port) {
   );
 }
 
-async function main() {
-  const dbPath = process.env.MCP_BUILDER_DB
-    || path.join(__dirname, '..', 'data', 'mcp-builder.db');
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+/**
+ * 组装一个可编程启停的后端实例。
+ *
+ * Electron 主进程直接复用这个入口：后端跑在同一个 Node 运行时里，
+ * 既不用 pkg 打成 exe，也不用 stdio 转发。
+ *
+ * @param {Object} [options]
+ * @param {string} [options.dbPath] 用户库路径，缺省读 MCP_BUILDER_DB 或数据目录
+ * @returns {Promise<{port: number, router: Object, dbPath: string, stop: () => Promise<void>}>}
+ */
+async function createBackend({ dbPath } = {}) {
+  const resolvedDbPath = dbPath || process.env.MCP_BUILDER_DB || dataFile('mcp-builder.db');
+  fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
 
-  const store = new UserStore(dbPath);
-  const router = createRouter({ store });
+  const store = new UserStore(resolvedDbPath);
+  // 两张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
+  const connections = new ConnectionStore(resolvedDbPath);
+  const supervisor = new GraphJinSupervisor();
+  const router = createRouter({ store, connections, supervisor });
   const server = await startHttpServer({ router, port: 0 });
-  const { port } = server.address();
 
-  emitReady(port);
-  const stdio = attachStdioTransport({ router });
+  return {
+    port: server.address().port,
+    router,
+    dbPath: resolvedDbPath,
+    /** 先停 GraphJin 再关服务，避免子进程残留锁住二进制 */
+    async stop() {
+      await supervisor.stop();
+      await new Promise((resolve) => server.close(resolve));
+      store.close();
+      connections.close();
+    },
+  };
+}
+
+async function main() {
+  const backend = await createBackend();
+  emitReady(backend.port);
+  const stdio = attachStdioTransport({ router: backend.router });
 
   const shutdown = () => {
     stdio.close();
-    server.close(() => {
-      store.close();
-      process.exit(0);
-    });
+    backend.stop().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -334,4 +449,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRouter, startHttpServer, attachStdioTransport, emitReady };
+module.exports = { createBackend, createRouter, startHttpServer, attachStdioTransport, emitReady };

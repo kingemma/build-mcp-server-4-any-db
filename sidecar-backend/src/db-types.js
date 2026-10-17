@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 
 /**
  * 数据库类型与连接模板。
@@ -162,8 +161,7 @@ const BUILT_IN_TYPES = [
   },
 ];
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const TEMPLATES_FILE = path.join(DATA_DIR, 'db-templates.json');
+const { dataDir, dataFile } = require('./paths');
 
 /** 模板校验不通过 */
 class DbTemplateError extends Error {
@@ -174,13 +172,14 @@ class DbTemplateError extends Error {
 }
 
 function readTemplates() {
-  if (!fs.existsSync(TEMPLATES_FILE)) return [];
-  return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8'));
+  const file = dataFile('db-templates.json');
+  if (!fs.existsSync(file)) return [];
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
 function writeTemplates(templates) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(TEMPLATES_FILE, `${JSON.stringify(templates, null, 2)}\n`, 'utf8');
+  fs.mkdirSync(dataDir(), { recursive: true });
+  fs.writeFileSync(dataFile('db-templates.json'), `${JSON.stringify(templates, null, 2)}\n`, 'utf8');
 }
 
 /**

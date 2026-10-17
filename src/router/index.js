@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router';
+import { createRouter, createWebHashHistory } from 'vue-router';
 
 import StatusView from '../views/StatusView.vue';
 import ConnectionsView from '../views/ConnectionsView.vue';
@@ -17,7 +17,8 @@ export const routes = [
   { path: '/settings', name: 'settings', component: SettingsView, meta: { title: '设置', hint: '版本与端口' } },
 ];
 
+// 桌面端用 file:// 加载打包产物，history 模式在 file:// 下无法工作，故统一走 hash
 export const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes,
 });

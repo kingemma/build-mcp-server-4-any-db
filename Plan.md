@@ -393,11 +393,51 @@ src/
 | 任务 | 内容 |
 |:---|:---|
 | 0.1 | 下载 GraphJin **v3.21.14** 全平台 `*.tar.gz`（各 42–48 MB）与 `checksums.txt`，建立 `graphjin-binaries/v3.21.14/`，写 `version.json` 记录版本与 SHA256（已完成：`scripts/fetch-binaries.js`，6 个平台全部校验通过） |
-| 0.2 | 初始化 Tauri 2 + Vue 3 + TypeScript + Vite 项目 |
-| 0.3 | 创建 `sidecar-backend/` Node.js 项目，配置 `@yao-pkg/pkg` 编译流程 |
+| 0.2 | 初始化桌面外壳 + Vue 3 + Vite 项目（**已改为 Electron 44.7.0**：`electron/main.js` + `electron/preload.js`，渲染进程复用现有 Vue 构建产物） |
+| 0.3 | Node.js 后端（**不再需要 pkg 打包**：Electron 主进程直接 `require` 后端，`createBackend()` 返回可编程启停的实例。Electron 44 内置 Node 24.21.0，`node:sqlite` 可用） |
 | 0.4 | 编写 `scripts/prepare-binaries.js`（下载走 `scripts/fetch-binaries.js`），构建时把当前平台的 GraphJin 二进制复制/解压到 `src-tauri/binaries/` 并按目标三元组命名（已完成；注意 `os.platform()` 返回 `win32`，需映射成 `windows`） |
-| 0.5 | 配置 `tauri.conf.json` 的 `externalBin` 和 `capabilities/default.json` 的 shell 权限 |
-| 0.6 | 验证：`tauri build` 生成安装包，GraphJin 和 Node.js 后端均可作为 sidecar 正常启动 |
+| 0.5 | 配置打包资源：`build.files` 含 `dist / electron / sidecar-backend/src / sidecar-backend/package.json / scripts/platforms.js`，`extraResources` 把 `src-tauri/binaries/graphjin-*` 放到 `resources/binaries/`；`electronDist` 复用已解压的 Electron，避免重复下载 |
+| 0.6 | 验证：`electron-builder --win nsis` 产出 `release-win/MCP Builder Setup 0.1.0.exe`（150 MB），打包产物实测可启动（进程内后端 :65339、数据落 `%APPDATA%\mcp-builder\data`） |
+
+> **Windows 构建环境（2026-10-17 实测）**
+>
+> - `rustup` 已装好（rustc/cargo 1.99.1，`x86_64-pc-windows-msvc` 含 rust-std）。
+> - **本机必须走系统代理**：`HTTPS_PROXY=http://127.0.0.1:7897`，否则 `rustup` / `cargo` 直连
+>   `static.rust-lang.org`、`crates.io` 全部 `tls handshake eof`；curl 走 WinHTTP 代理所以看着是通的。
+> - **缺 C++ 工具链**：VS 2026 Community 已装但 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`
+>   不存在，`Windows Kits\10\Lib` 也不存在 → `cargo build` 报 `linker link.exe not found`。
+>   补装需要提权，自动化环境里 UAC 无法确认，需手工执行：
+>
+>   ```powershell
+>   # 管理员 PowerShell
+>   & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify `
+>     --installPath "C:\Program Files\Microsoft Visual Studio\18\Community" `
+>     --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --norestart
+>   ```
+>
+> - 装完后 cargo 需要在 VS 开发者环境下运行（`VsDevCmd.bat -arch=x64`），或直接用
+>   `tauri build`（CLI 会自己找）。
+> - **必须从真正的管理员窗口执行**：本机 `EnableLUA=1`、`ConsentPromptBehaviorAdmin=5`、
+>   `PromptOnSecureDesktop=1`，UAC 弹窗在安全桌面上，脚本/自动化点不到，`Start-Process -Verb RunAs`
+>   会静默超时。用 Win+X →「终端(管理员)」，先自检
+>   `([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')`
+>   返回 `True` 再执行上面的命令（非提权时会直接 `Exit Code: 5007`）。
+> - 备用方案（不推荐）：`rustup target add x86_64-pc-windows-gnu` + MinGW-w64。gnu 目标能编译，
+>   但产物需要额外带 `libgcc/libstdc++/libwinpthread` 运行时 DLL，NSIS 打包要自己补，且 Tauri
+>   官方只保证 MSVC，故仅作最后手段。
+>
+> **决定**：桌面外壳改用 **Electron 44.7.0**（2026-10-17）。上述 Tauri/MSVC 阻塞不再影响主线，
+> `src-tauri/` 保留作为备选，不参与当前构建。
+
+> **Electron 打包踩坑（均已验证修复）**
+>
+> - 后端 `src/index.js` 启动时读 `sidecar-backend/package.json` 取版本号，`build.files` 必须包含它，
+>   否则打包后报 `ENOENT ... sidecar-backend\package.json not found in app.asar`。
+> - `vite.config.js` 必须 `base: './'`、路由必须 **hash 模式**，否则 `file://` 下资源 404、路由空白。
+> - 端口通过 `webPreferences.additionalArguments` + preload 同步注入，渲染进程不必等 IPC。
+> - `electronDist` 指向 `node_modules/electron/dist`，跳过 158 MB 的重复下载。
+> - 同一输出目录重复构建会被环境里的 safe-delete 拦截（`trash` 操作失败），换 `directories.output`
+>   或先手工清空即可。
 
 ### 阶段 1：Node.js 后端服务（3 周）
 
@@ -434,18 +474,18 @@ src/
 
 | 任务 | 内容 |
 |:---|:---|
-| 3.1 | Rust 侧封装 sidecar 生命周期：拉起 / 停止 / 重启 GraphJin 与后端，解析启动横幅取端口 |
-| 3.2 | 应用退出与升级时的 sidecar 清理（先 kill 再退出，避免文件占用） |
-| 3.3 | 设置页：展示内置 GraphJin 版本（`graphjin version`），提供「复制版本信息」，**不做在线更新** |
-| 3.4 | 编写各平台 CI/CD 构建脚本（GitHub Actions）：拉二进制 → 校验 → `prepare-binaries` → `tauri build` |
+| 3.1 | 封装 sidecar 生命周期：拉起 / 停止 / 重启 GraphJin 与后端，解析启动横幅取端口（**已由 Electron 主进程接管**：后端在进程内 `createBackend()`，GraphJin 仍由 `supervisor.js` 拉起并从横幅解析端口） |
+| 3.2 | 应用退出与升级时的 sidecar 清理（先 kill 再退出，避免文件占用）（**已实现**：`app.on('before-quit')` 先 `backend.stop()` → `supervisor.stop()` 再退出） |
+| 3.3 | 设置页：展示内置 GraphJin 版本（`graphjin version`），提供「复制版本信息」，**不做在线更新**（已实现） |
+| 3.4 | 编写各平台 CI/CD 构建脚本（GitHub Actions）：拉二进制 → 校验 → `prepare-binaries` → `electron-builder` |
 
 ### 阶段 4：测试与打包（1.5 周）
 
 | 任务 | 内容 |
 |:---|:---|
-| 4.1 | 端到端测试：添加数据库 → 浏览 Schema → 配置权限 → 启动 MCP → 客户端连接验证 |
-| 4.2 | 权限验证测试：验证只读角色无法执行 insert/update/delete |
-| 4.3 | Tauri 跨平台打包：Windows (.msi/.nsis)、macOS (.dmg/.app)、Linux (.deb/.rpm/.AppImage) |
+| 4.1 | 端到端测试：添加数据库 → 浏览 Schema → 配置权限 → 启动 MCP → 客户端连接验证（已实现：`scripts/verify-e2e.js`，17 项断言全通过。全链路走真实入口：拉起后端 → HTTP `/rpc` → 建库/发现/配权限/起 GraphJin → 用生成的客户端配置真实建立 MCP 会话） |
+| 4.2 | 权限验证测试：验证只读角色无法执行 insert/update/delete（已实现：同一脚本内断言 `Insert/Update/Delete blocked`、`db column blocked`、query 被拦静默返回 null） |
+| 4.3 | 跨平台打包：Windows NSIS（**已完成**：`release-win/MCP Builder Setup 0.1.0.exe`）、macOS (.dmg)、Linux (.AppImage/.deb) 待做 |
 | 4.4 | macOS 代码签名和公证（notarization） |
 | 4.5 | 用户文档和快速入门向导 |
 

@@ -41,6 +41,12 @@ export const useAppStore = defineStore('app', {
     currentPolicy: {},
     /** 内置数据库类型 + 用户自定义别名模板 */
     dbTypes: [],
+    /** 本地已保存的连接（测试通过 / 启动成功后才会有） */
+    connections: [],
+    /** 运行中实例实际加载的库名 */
+    connectedDatabases: [],
+    /** Schema 页当前选中的库 */
+    activeDatabase: '',
     lastError: '',
   }),
 
@@ -89,6 +95,8 @@ export const useAppStore = defineStore('app', {
       try {
         this.status = await rpc('graphjin.start', payload);
         await this.loadSchema();
+        // 后端在启动成功时已落盘连接，这里把列表和实际加载的库同步过来
+        await Promise.all([this.loadConnections(), this.loadConnectedDatabases()]);
       } catch (error) {
         this.lastError = error.message;
         throw error;
@@ -103,6 +111,8 @@ export const useAppStore = defineStore('app', {
         this.status = await rpc('graphjin.stop');
         this.tables = [];
         this.schema = null;
+        this.connectedDatabases = [];
+        this.activeDatabase = '';
       } finally {
         this.isBusy = false;
       }
@@ -260,18 +270,85 @@ export const useAppStore = defineStore('app', {
      * @param {Object} connection dev.yml 里的库连接配置
      * @returns {Promise<{ok: boolean, message: string}>}
      */
-    async testConnection(name, connection) {
-      if (!this.isRunning) return { ok: false, message: 'GraphJin 未运行，无法测试连接' };
+    async testConnection(name, connection, { projectDir = null, appName = null } = {}) {
       const result = await rpc('connections.test', {
-        baseUrl: this.baseUrl,
+        // 未启动时留空：后端会起一个用完即停的临时实例做验证
+        baseUrl: this.isRunning ? this.baseUrl : null,
         name,
         connection,
+        projectDir,
+        appName,
       });
       const errors = result?.errors ?? [];
       return {
         ok: result?.success === true || result?.valid === true,
         message: errors.length > 0 ? errors.join('；') : (result?.message ?? ''),
       };
+    },
+
+    /** 本地已保存的连接列表（摘要，不含密码） */
+    async loadConnections() {
+      const result = await rpcSafe('connections.list');
+      if (result.ok) this.connections = result.data;
+      else this.lastError = result.error ?? '';
+    },
+
+    /**
+     * 取单条已保存连接，含解密后的 config。
+     *
+     * @param {number} id
+     * @returns {Promise<Object|null>}
+     */
+    async fetchConnection(id) {
+      return rpc('connections.get', { id });
+    },
+
+    /**
+     * @param {number} id
+     */
+    async removeConnection(id) {
+      await rpc('connections.remove', { id });
+      await this.loadConnections();
+    },
+
+    /**
+     * 用已保存的连接直接启动。
+     *
+     * 服务在跑时先停掉：supervisor 只托管一个实例，且启动参数只在项目没有
+     * dev.yml 时生效，不先停就会让人误以为换了库、实际还是旧的。
+     *
+     * @param {number} id
+     * @returns {Promise<Object>} 被启动的连接记录
+     */
+    async startFromSavedConnection(id) {
+      const connection = await this.fetchConnection(id);
+      if (!connection) throw new Error('保存的连接不存在');
+      if (!connection.config) throw new Error('这条连接无法解密，请重新填写并测试一次');
+      if (this.isRunning) await this.stopGraphJin();
+      await this.startGraphJin({
+        projectDir: connection.projectDir,
+        appName: connection.appName,
+        databases: { [connection.name]: connection.config },
+      });
+      return connection;
+    },
+
+    /** Schema 页顶部的库列表：以运行中实例的实际配置为准 */
+    async loadConnectedDatabases() {
+      if (!this.isRunning) {
+        this.connectedDatabases = [];
+        this.activeDatabase = '';
+        return;
+      }
+      const result = await rpcSafe('graphjin.databases', { baseUrl: this.baseUrl });
+      if (!result.ok) {
+        this.lastError = result.error ?? '';
+        return;
+      }
+      this.connectedDatabases = result.data.databases ?? [];
+      if (!this.connectedDatabases.includes(this.activeDatabase)) {
+        this.activeDatabase = this.connectedDatabases[0] ?? '';
+      }
     },
 
     async loadClientConfig() {

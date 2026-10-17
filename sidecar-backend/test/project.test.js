@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { renderDevYaml, renderDatabase } = require('../src/project');
+const { renderDevYaml, renderDatabase, mergeDatabaseBlock } = require('../src/project');
 
 const BASE = { appName: 'Demo', port: 8080, databases: {} };
 
@@ -51,4 +51,57 @@ test('renderDatabase: 只输出有值的字段', () => {
 test('renderDatabase: default 为 true 时才写 default', () => {
   assert.match(renderDatabase('a', { type: 'sqlite', default: true }), /default: true/);
   assert.doesNotMatch(renderDatabase('a', { type: 'sqlite' }), /default/);
+});
+
+const DEV_YAML = `app_name: Demo
+mode: dev
+databases:
+  app:
+    type: "sqlite"
+    path: "app.db"
+    default: true
+roles:
+  - name: admin
+`;
+
+test('mergeDatabaseBlock: 新增库，其余段逐字保留', () => {
+  const merged = mergeDatabaseBlock(DEV_YAML, {
+    analytics: { type: 'sqlite', path: 'analytics.db' },
+  });
+  assert.match(merged, /  app:\n {4}type: "sqlite"\n {4}path: "app\.db"\n {4}default: true/);
+  assert.match(merged, /  analytics:\n {4}type: "sqlite"\n {4}path: "analytics\.db"/);
+  assert.match(merged, /roles:\n {2}- name: admin/);
+  assert.doesNotMatch(merged, /\bsources:/);
+});
+
+test('mergeDatabaseBlock: 已存在的库原地更新，不重复追加', () => {
+  const merged = mergeDatabaseBlock(DEV_YAML, {
+    app: { type: 'sqlite', path: 'new.db', default: true },
+  });
+  assert.match(merged, /path: "new\.db"/);
+  assert.doesNotMatch(merged, /app\.db/);
+  assert.strictEqual(merged.match(/^ {2}app:$/gm).length, 1);
+});
+
+test('mergeDatabaseBlock: 新默认库会摘掉其它库的 default', () => {
+  const merged = mergeDatabaseBlock(DEV_YAML, {
+    analytics: { type: 'sqlite', path: 'analytics.db', default: true },
+  });
+  assert.strictEqual((merged.match(/default: true/g) ?? []).length, 1);
+  assert.match(merged, /analytics:[\s\S]*default: true/);
+  assert.doesNotMatch(merged, /app\.db"\n {4}default: true/);
+});
+
+test('mergeDatabaseBlock: 未改动的条目保留注释', () => {
+  const yaml = 'databases:\n  app:\n    type: "sqlite" # 主库\n    path: "app.db"\n';
+  const merged = mergeDatabaseBlock(yaml, { analytics: { type: 'sqlite', path: 'a.db' } });
+  assert.match(merged, /# 主库/);
+  assert.match(merged, /analytics:/);
+});
+
+test('mergeDatabaseBlock: 幂等，且缺 databases 段时报错', () => {
+  const once = mergeDatabaseBlock(DEV_YAML, { analytics: { type: 'sqlite', path: 'a.db' } });
+  const twice = mergeDatabaseBlock(once, { analytics: { type: 'sqlite', path: 'a.db' } });
+  assert.strictEqual(twice, once);
+  assert.throws(() => mergeDatabaseBlock('app_name: Demo\n', {}), /缺少 databases 段/);
 });
