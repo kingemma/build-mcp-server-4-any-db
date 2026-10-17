@@ -1,0 +1,11 @@
+node_modules/
+dist/
+package-lock.json
+
+# 运行时生成的 GraphJin 项目（dev.yml 可能含数据库凭据）
+projects/
+
+# 脚本的临时输出
+.backend-*.txt
+.vite-*.txt
+.probe/

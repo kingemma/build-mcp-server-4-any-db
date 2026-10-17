@@ -1,0 +1,7 @@
+# 入库内容：各平台 *.tar.gz（42–48 MB/个）、checksums.txt、version.json
+# 不入库：解压产物。单个 graphjin 二进制约 158.6 MiB，全平台近 800 MB，
+# 构建期由 scripts/prepare-binaries.js 解压并重命名即可
+graphjin.exe
+graphjin
+LICENSE
+README.md

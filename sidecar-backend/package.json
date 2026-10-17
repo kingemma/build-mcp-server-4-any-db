@@ -1,0 +1,20 @@
+{
+  "name": "mcp-builder-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP Server 构建平台的 Node.js 后端：GraphJin MCP 客户端与权限编排",
+  "main": "src/index.js",
+  "scripts": {
+    "verify": "node scripts/verify.js",
+    "verify:plan-b": "node scripts/verify-plan-b.js",
+    "verify:process": "node scripts/verify-process.js",
+    "verify:stdio": "node scripts/verify-stdio.js",
+    "verify:schema": "node scripts/verify-schema.js",
+    "verify:supervisor": "node scripts/verify-supervisor.js",
+    "demo": "node scripts/demo.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

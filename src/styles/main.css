@@ -1,0 +1,220 @@
+:root {
+  /* 暗色工业仪表盘：近黑底 + 琥珀金主色 */
+  --ink-900: #0a0d10;
+  --ink-800: #0f1418;
+  --ink-700: #151b21;
+  --ink-600: #1d252c;
+  --line: #262f38;
+  --line-soft: #1b2228;
+
+  --text: #dfe6ec;
+  --text-dim: #8b9aa6;
+  --text-faint: #5d6b77;
+
+  --amber: #d9a24b;
+  --amber-soft: rgba(217, 162, 75, 0.14);
+  --mint: #55d6a8;
+  --mint-soft: rgba(85, 214, 168, 0.13);
+  --coral: #e2735e;
+  --coral-soft: rgba(226, 115, 94, 0.13);
+  --slate: #6f8ba3;
+
+  --mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --serif: 'IBM Plex Serif', Georgia, serif;
+
+  --radius: 3px;
+  --gutter: 20px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ink-900);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 背景：极淡的网格，强化“仪器面板”的观感 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.35;
+  z-index: 0;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 500;
+}
+
+.panel {
+  position: relative;
+  background: var(--ink-800);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.panel__title {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.panel__body {
+  padding: 16px;
+}
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.serif {
+  font-family: var(--serif);
+  font-style: italic;
+}
+
+.mono-dim {
+  color: var(--text-dim);
+}
+
+/* 状态药丸 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  border: 1px solid transparent;
+}
+
+.pill--on {
+  color: var(--mint);
+  background: var(--mint-soft);
+  border-color: rgba(85, 214, 168, 0.35);
+}
+
+.pill--off {
+  color: var(--coral);
+  background: var(--coral-soft);
+  border-color: rgba(226, 115, 94, 0.35);
+}
+
+.pill--idle {
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line);
+}
+
+.pill--warn {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(217, 162, 75, 0.4);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Element Plus 暗色对齐 */
+.el-card,
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  background: var(--ink-700) !important;
+  border-color: var(--line) !important;
+  box-shadow: none !important;
+  color: var(--text) !important;
+  border-radius: var(--radius) !important;
+}
+
+.el-input__inner,
+.el-textarea__inner {
+  color: var(--text) !important;
+  font-family: var(--mono) !important;
+}
+
+.el-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: transparent;
+  --el-table-border-color: var(--line-soft);
+  --el-table-text-color: var(--text);
+  --el-table-header-text-color: var(--text-dim);
+  --el-table-row-hover-bg-color: rgba(217, 162, 75, 0.06);
+  font-family: var(--mono);
+}
+
+.el-table th.el-table__cell {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.el-button {
+  border-radius: var(--radius) !important;
+  font-family: var(--mono) !important;
+}
+
+.el-button--primary {
+  background: var(--amber) !important;
+  border-color: var(--amber) !important;
+  color: #1a1206 !important;
+  font-weight: 600;
+}
+
+.el-dialog {
+  background: var(--ink-800) !important;
+  border: 1px solid var(--line);
+}
+
+.el-dialog__title,
+.el-form-item__label {
+  color: var(--text) !important;
+}
+
+.el-tree {
+  background: transparent !important;
+  color: var(--text) !important;
+}
+
+.el-tree-node__content:hover,
+.el-tree-node:focus > .el-tree-node__content {
+  background: rgba(217, 162, 75, 0.08) !important;
+}
