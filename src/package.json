@@ -1,0 +1,5 @@
+{
+  "//": "仅用于让 node --test 把 src 下的 .js 当作 ESM；Vite 本身已按 ESM 处理",
+  "type": "module",
+  "private": true
+}

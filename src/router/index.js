@@ -1,11 +1,13 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 
-import StatusView from '../views/StatusView.vue';
-import ConnectionsView from '../views/ConnectionsView.vue';
-import SchemaView from '../views/SchemaView.vue';
-import PermissionsView from '../views/PermissionsView.vue';
-import PolicyView from '../views/PolicyView.vue';
-import SettingsView from '../views/SettingsView.vue';
+// 页面按路由懒加载：首屏只下载当前页面，其余页面点开再取。
+// 之前六个页面全部静态 import，单 chunk 1.17 MB（gzip 383 kB）。
+const StatusView = () => import('../views/StatusView.vue');
+const ConnectionsView = () => import('../views/ConnectionsView.vue');
+const SchemaView = () => import('../views/SchemaView.vue');
+const PermissionsView = () => import('../views/PermissionsView.vue');
+const PolicyView = () => import('../views/PolicyView.vue');
+const SettingsView = () => import('../views/SettingsView.vue');
 
 // meta 只存 i18n key：切换语言时导航与顶栏标题要跟着变
 export const routes = [

@@ -72,8 +72,11 @@ function normalizeOperation(raw) {
 /**
  * 把 get_current_config 的结果归一化成与前端矩阵同构的结构。
  *
+ * 表键带库名（`database::table`）：多库项目里同名表不能互相覆盖，
+ * 展示和写入前再用 scopeToDatabase 还原成纯表名。
+ *
  * @param {Object} config config.current 的返回值
- * @returns {Object} { roleName: { tableName: { query, insert, update, delete } } }
+ * @returns {Object} { roleName: { 'database::table': { query, insert, update, delete } } }
  */
 export function normalizeCurrentRoles(config = {}) {
   const result = {};
@@ -84,16 +87,74 @@ export function normalizeCurrentRoles(config = {}) {
     for (const table of toArray(pick(role, 'tables'))) {
       const tableName = pick(table, 'name', 'Name');
       if (!tableName) continue;
+      // RoleTable.database 是小写；缺这个字段时 GraphJin 会把规则挂到内部库
+      const database = pick(table, 'database') ?? '';
       const operations = {};
       for (const operation of OPERATIONS) {
         // Go 直出的是 Query / Insert / Update / Delete，yaml 写入侧可能是小写
         operations[operation] = normalizeOperation(pick(table, operation, capitalize(operation)));
       }
-      tables[tableName] = operations;
+      tables[database ? `${database}::${tableName}` : tableName] = operations;
     }
     result[roleName] = tables;
   }
   return result;
+}
+
+/**
+ * 取出某个库的条目，并把 `database::table` 键还原成纯表名。
+ *
+ * database 为空时保留全部条目并统一剥掉已有的库前缀：启动早期还没确定目标库，
+ * 此时至少要让策略页能展示内容，而不是整片空白。
+ *
+ * @param {Object} map { roleName: { 'database::table': value } }
+ * @param {string} database 库名
+ * @returns {Object} { roleName: { tableName: value } }；该库下没有表时省略该角色
+ */
+export function scopeToDatabase(map = {}, database = '') {
+  const prefix = database ? `${database}::` : '';
+  const result = {};
+  for (const [role, entries] of Object.entries(map ?? {})) {
+    const scoped = {};
+    for (const [key, value] of Object.entries(entries ?? {})) {
+      if (prefix) {
+        if (!key.startsWith(prefix)) continue;
+        scoped[key.slice(prefix.length)] = value;
+        continue;
+      }
+      const separator = key.indexOf('::');
+      scoped[separator >= 0 ? key.slice(separator + 2) : key] = value;
+    }
+    if (Object.keys(scoped).length > 0) result[role] = scoped;
+  }
+  return result;
+}
+
+/**
+ * 找出「block 模式列管控」但缺少表列清单的条目。
+ *
+ * GraphJin 的 `columns` 只接受白名单，block 模式必须展开成补集；表还没被
+ * catalog 发现时补集无从计算，直接写会把所有列静默放行（基线 §6.6）。
+ *
+ * @param {Object} matrix { role: { tableName: { query, insert, update, delete } } }
+ * @param {Object} columnsByTable { tableName: string[] }
+ * @returns {string[]} 无法展开的表名（去重）
+ */
+export function unresolvedBlockTables(matrix = {}, columnsByTable = {}) {
+  const unresolved = new Set();
+  for (const tables of Object.values(matrix ?? {})) {
+    for (const [table, operations] of Object.entries(tables ?? {})) {
+      if ((columnsByTable[table] ?? []).length > 0) continue;
+      for (const operation of OPERATIONS) {
+        const entry = operations?.[operation];
+        if (entry?.columnMode === 'block' && (entry.columns ?? []).length > 0) {
+          unresolved.add(table);
+          break;
+        }
+      }
+    }
+  }
+  return [...unresolved];
 }
 
 function capitalize(value) {

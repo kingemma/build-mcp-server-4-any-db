@@ -377,9 +377,9 @@ src/
 1. 用户选择角色和组织
 2. 系统从 GraphJin 获取该数据源的所有表
 3. 用户通过勾选框配置每张表的四项权限
-4. 点击“预览变更”调用 `gj_config` 的 `preview` 模式
-5. 确认后点击“应用”执行 `apply` 模式
-6. 应用成功后提示重启 GraphJin 使配置生效
+4. 点击“应用”时先在平台侧计算逐项 diff，并展示二次确认（legacy 模式没有 GraphJin preview）
+5. 确认前自动把当前 `roles` 保存为快照；确认后调用 `update_current_config` 写入
+6. 应用成功后重载生效策略；需要时可在“写入历史”里回滚到任意快照
 
 ### 4.3 MCP Server 监控
 
@@ -446,7 +446,7 @@ src/
 | 1.1 | 实现本地 HTTP 服务框架，动态分配端口，通过 stdin/stdout 与 Tauri 通信（已实现：`src/index.js` + `src/rpc.js`，一套路由同时挂 stdio 与 `POST /rpc`） |
 | 1.2 | 封装 MCP 客户端（会话保持、SSE 解析、`X-User-Role` 头）与连接管理：用 `get_current_config` 读生效配置，用 `update_current_config` 的 `databases` 写连接信息（**只输出 `databases:` map，绝不写 `sources`**） |
 | 1.3 | 封装 Schema 发现 API（已实现：`src/schema.js`）。`query_catalog` 用 `where: {kind: {eq: ...}}` 过滤 table/column/relationship，单次 `limit` 上限 500、需按 `offset` 翻页直到 `truncated` 为 false；列定义优先从 table 卡片的 `details_json[].data_json.columns` 取，取不到再退回 `kind=column` 查询。RPC 方法 `schema.discover` / `schema.tables`。**仍未验证**：`audit_role_permissions` 等 dev tools 的启用条件 |
-| 1.4 | 封装权限配置 API：legacy 模式下 `update_current_config` 立即生效，故平台侧先算 diff + 二次确认再写入；保留写入前快照以支持回滚 |
+| 1.4 | 封装权限配置 API：legacy 模式下 `update_current_config` 立即生效，故平台侧先算 diff + 二次确认再写入；写入前自动保存 `roles` 快照，`permissions.rollback` 可恢复并清理本次新增角色（已实现：`src/snapshots.js`） |
 | 1.5 | 实现 `buildRoleTableConfig(database, matrix)`（方案 B）：输出 `roles[].tables[]`，每项带 `database` 字段与 query/insert/update/delete 四项开关 |
 | 1.6 | 实现用户/组织管理模块：本地 SQLite 存储，与 GraphJin RBAC 角色映射（已实现：`src/users.js`，用 Node 内置 `node:sqlite`，避免原生依赖给后续 pkg 打包添麻烦；`syncRolesToGraphJin` 负责把本地角色补进 GraphJin） |
 | 1.7 | 实现 GraphJin 进程管理（已实现：`src/supervisor.js` + `graphjin.start/stop/status/health` RPC）。崩溃自动重启：窗口内（默认 60s）最多重启 3 次，超限记 `lastError` 并放弃；二进制按 显式入参 > `GRAPHJIN_BIN` > `src-tauri/binaries/<三元组>` 解析 |
@@ -477,17 +477,17 @@ src/
 | 3.1 | 封装 sidecar 生命周期：拉起 / 停止 / 重启 GraphJin 与后端，解析启动横幅取端口（**已由 Electron 主进程接管**：后端在进程内 `createBackend()`，GraphJin 仍由 `supervisor.js` 拉起并从横幅解析端口） |
 | 3.2 | 应用退出与升级时的 sidecar 清理（先 kill 再退出，避免文件占用）（**已实现**：`app.on('before-quit')` 先 `backend.stop()` → `supervisor.stop()` 再退出） |
 | 3.3 | 设置页：展示内置 GraphJin 版本（`graphjin version`），提供「复制版本信息」，**不做在线更新**（已实现） |
-| 3.4 | 编写各平台 CI/CD 构建脚本（GitHub Actions）：拉二进制 → 校验 → `prepare-binaries` → `electron-builder` |
+| 3.4 | 编写各平台 CI/CD 构建脚本（GitHub Actions）：拉二进制 → 校验 → `prepare-binaries` → `electron-builder`（**已完成**：`.github/workflows/build.yml`，Windows / macOS 13 / macOS 14 / Ubuntu 矩阵，二进制 `version` 冒烟 + 安装包上传） |
 
 ### 阶段 4：测试与打包（1.5 周）
 
 | 任务 | 内容 |
 |:---|:---|
-| 4.1 | 端到端测试：添加数据库 → 浏览 Schema → 配置权限 → 启动 MCP → 客户端连接验证（已实现：`scripts/verify-e2e.js`，17 项断言全通过。全链路走真实入口：拉起后端 → HTTP `/rpc` → 建库/发现/配权限/起 GraphJin → 用生成的客户端配置真实建立 MCP 会话） |
+| 4.1 | 端到端测试：添加数据库 → 浏览 Schema → 配置权限 → 启动 MCP → 客户端连接验证（已实现：`scripts/verify-e2e.js`，24 项断言全通过。全链路走真实入口：拉起后端 → HTTP `/rpc` → 建库/发现/配权限/起 GraphJin → 用生成的客户端配置真实建立 MCP 会话 → 快照回滚） |
 | 4.2 | 权限验证测试：验证只读角色无法执行 insert/update/delete（已实现：同一脚本内断言 `Insert/Update/Delete blocked`、`db column blocked`、query 被拦静默返回 null） |
-| 4.3 | 跨平台打包：Windows NSIS（**已完成**：`release-win/MCP Builder Setup 0.1.0.exe`）、macOS (.dmg)、Linux (.AppImage/.deb) 待做 |
-| 4.4 | macOS 代码签名和公证（notarization） |
-| 4.5 | 用户文档和快速入门向导 |
+| 4.3 | 跨平台打包：Windows NSIS（**已完成**：`release-final/MCP Builder Setup 0.1.0.exe`）；macOS dmg/zip 与 Linux AppImage/deb 的 electron-builder 配置、`dist:mac` / `dist:linux` 脚本和 GitHub Actions 矩阵已完成，本机仅实测 Windows |
+| 4.4 | macOS 代码签名和公证（**未做**：需要 Apple Developer 证书；CI 当前显式跳过签名发现） |
+| 4.5 | 用户文档和快速入门向导（**已完成**：中英文 README、功能进度表、Docker 测试库说明、截图） |
 
 | 阶段 | 周期 | 核心交付物 |
 |:---|:---|:---|
@@ -518,21 +518,23 @@ src/
 | **Node.js 后端体积** | `pkg` 编译的 Node.js 二进制体积较大（约 40-50MB） | 使用 `node18` target 并启用压缩；或考虑 Bun 编译替代 |
 | **secret 必须先配 keystore**（新增，实测） | `password` 与 `connection_string` 都被 GraphJin 当 secret 处理，未设 `secrets.keystore.key` 时写入被拒：`secrets.keystore.key must be set ... GJ_SECRETS_KEYSTORE_KEY` | 后端拉起 GraphJin 时注入 `GJ_SECRETS_KEYSTORE_KEY`（本地生成并持久化），否则所有带密码/连接串的库都配不进去 |
 
-### 6.1 未覆盖风险与遗留待办（**项目完成后再实现**）
+### 6.1 未覆盖风险与遗留待办
 
-以下均为已知但未处理项，按优先级登记，主体功能完成后统一处理：
+以下为**仍存在**的已知限制；原先登记的 R1 / R2 / R5 / R7 / R8 / R9 已完成，保留编号便于追溯。
 
 | # | 项目 | 现状与影响 | 处理方向 |
 |:---|:---|:---|:---|
-| R1 | `block` 模式依赖 Schema | 列阻止列表要展开成补集白名单，表未被 catalog 发现时补集不完整，可能把新列意外放行 | 写入前校验「表列清单非空」，否则拒绝展开并提示先刷新 Schema |
-| R2 | `admin` 角色不进矩阵 | 平台自身以 `admin` 执行 GraphQL，但矩阵里没有 admin 时 GraphJin 侧不会创建该角色 | 启动时确保 `roles` 含 admin，或在 UI 显式提示 |
-| R3 | `gj_security` 策略不可读 | 该 root 走 `/api/v1/graphql` 且需 admin JWT，实测不可达；策略预览目前以 `get_current_config.roles` 为准 | 需要时再设计 JWT 签发方案，预览面板已注明来源 |
-| R4 | 非 Windows 二进制未实机验证 | 6 个平台只做了下载 + SHA256 校验，未真实启动 | 阶段 3 CI 里加各平台冒烟 |
-| R5 | 权限变更无回滚 | legacy 模式立即生效，虽有二次确认但未保留写入前快照 | 写入前把 `get_current_config` 结果落盘做快照，支持一键回滚 |
-| R6 | `sources` 模式迁移预案 | 方案 B 被官方标 `risk_level: high`，未来版本可能移除 | 权限编排已集中在 `permissions.js`，迁移时只改这一个模块 |
-| R7 | 声明支持但驱动未实现 | `nanodb` / `cassandra` / `clickhouse` / `redshift` 在配置白名单内，但连接层报 `unsupported database type` | 见 §2.3；UI 需把这些类型标注为「白名单可用、驱动未验证」 |
-| R8 | 前端包体积 | 单 chunk 1.06 MB（gzip 351 kB），构建有警告 | 按路由 `dynamic import()` 拆包 |
-| R9 | 端到端测试缺失 | 阶段 4 的 4.1 / 4.2 未开始 | 项目完成后补：建库 → 发现 → 配权限 → 起 MCP → 客户端连通 |
+| R1 | `block` 模式依赖 Schema | **已缓解**：前端在展开补集前校验表的列清单，缺失时拒绝写入并提示先刷新 Schema；后端写入前统一留快照 | — |
+| R2 | `admin` 角色不进矩阵 | **已完成**：启动与每次写入前自动补齐 admin；UI 明示其为保留角色、不参与矩阵 | — |
+| R3 | `gj_security` 策略不可读 | 该 root 走 `/api/v1/graphql` 且需 admin JWT，实测不可达；策略预览以 `get_current_config.roles` 为准 | 需要时再设计 JWT 签发方案；当前不影响功能 |
+| R4 | 非 Windows 二进制未实机验证 | **已缓解**：`scripts/smoke-binaries.js` 在 CI 的 Windows / macOS / Linux 矩阵真实执行 `graphjin version`；完整 UI 冒烟仍只在 Windows 跑 | 后续可把 `verify:ui` 移植到 macOS / Linux runner |
+| R5 | 权限变更无回滚 | **已完成**：写入前自动快照（每项目保留 30 份），`permissions.rollback` 恢复 roles 并删除本次新增角色，回滚前再快照；UI 有「写入历史」 | — |
+| R6 | `sources` 模式迁移预案 | 方案 B 被官方标 `risk_level: high`，未来版本可能移除 | 权限编排仍集中在 `permissions.js`，迁移时只改这一个模块 |
+| R7 | 声明支持但驱动未实现 | **已完成**：`driverVerified=false` 的类型在后端前置拦截，前端禁用测试/启动并提示改用兼容协议 | — |
+| R8 | 前端包体积 | **已完成**：路由懒加载 + `element-plus` / `vue` vendor chunk；首页 chunk 从 1.17 MB 降到约 39 kB，Element Plus 单独缓存 | 如需进一步压缩可改为按需引入组件 |
+| R9 | 端到端测试缺失 | **已完成**：`verify:e2e` 24 项（含快照回滚）、后端单测 127 项、前端策略单测 8 项、UI 冒烟 10 项 | — |
+| R10 | 安装包签名 / 公证 | CI 产物未签名，macOS 首次打开需手动放行 | 配置 Apple Developer 证书与 Windows 签名证书后接入 |
+| R11 | `dev.yml` 合并非通用 YAML | 已覆盖项目生成格式、flow map、引号键、GraphJin 4 空格回写；anchors / merge keys 仍不支持 | 需要时引入完整的 YAML 解析库 |
 
 
 ## 七、DeepSeek Harness 使用建议

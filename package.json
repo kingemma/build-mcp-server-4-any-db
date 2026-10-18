@@ -10,12 +10,17 @@
     "preview": "vite preview",
     "prepare:binaries": "node scripts/prepare-binaries.js",
     "fetch:binaries": "node scripts/fetch-binaries.js",
+    "smoke:binaries": "node scripts/smoke-binaries.js",
+    "test": "npm run test:frontend && npm --prefix sidecar-backend test",
+    "test:frontend": "node --test src/utils/policy.test.mjs",
     "backend": "node sidecar-backend/src/index.js",
     "backend:demo": "npm run demo --prefix sidecar-backend",
     "verify:ui": "node scripts/verify-ui.js",
     "electron:dev": "electron .",
     "electron:serve": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win nsis"
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb"
   },
   "build": {
     "appId": "com.mcpbuilder.desktop",
@@ -29,6 +34,7 @@
       "electron/**/*",
       "sidecar-backend/src/**/*",
       "sidecar-backend/package.json",
+      "graphjin-binaries/version.json",
       "scripts/platforms.js",
       "package.json"
     ],
@@ -50,6 +56,21 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "MCP Builder"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "maintainer": "MCP Builder"
     }
   },
   "dependencies": {

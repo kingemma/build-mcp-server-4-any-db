@@ -444,6 +444,14 @@ async function main() {
     console.log(`      ${analyticsShot}`);
     console.log(`      ${appShot}`);
   } finally {
+    // 先让浏览器自己退出，再杀进程树；只 taskkill 父进程会留下 helper，
+    // 它们继续占用 9333 端口，下一次运行会连到旧页面
+    try {
+      await cdp?.send('Browser.close');
+    } catch {
+      // 页面已经断开时忽略
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
     cdp?.close();
     killTree(edge);
     await new Promise((resolve) => server.close(resolve));

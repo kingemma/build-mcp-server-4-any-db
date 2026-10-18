@@ -107,6 +107,9 @@ async function main() {
     });
     const baseUrl = started.baseUrl;
     record('GraphJin 启动', started.running === true, baseUrl);
+    record('启动时补齐 admin 角色', started.adminRole?.created?.includes('admin') === true ||
+      started.adminRole?.existing?.includes('admin') === true,
+    JSON.stringify(started.adminRole ?? started.adminRoleError));
 
     // 2. Schema 发现
     const schema = await rpc('schema.discover', { baseUrl });
@@ -156,6 +159,8 @@ async function main() {
     });
     record('权限写入成功', applied.applied.success === true,
       (applied.applied.changes ?? []).join(' | '));
+    record('写入前自动保存快照', Number.isInteger(applied.snapshot?.id),
+      JSON.stringify(applied.snapshot ?? null));
 
     // 4. 以角色执行：查询通过、行过滤生效
     const readonlyQuery = await rpc('graphql.execute', {
@@ -226,7 +231,28 @@ async function main() {
       (viaClient?.data?.accounts ?? []).length === 2,
       JSON.stringify(viaClient?.data ?? viaClient?.errors));
 
-    // 9. 停止
+    // 9. 写入历史与回滚：恢复到写入前快照，本次新增的角色应被移除
+    const history = await rpc('permissions.snapshots', { baseUrl, projectDir: PROJECT_DIR });
+    record('写入历史可查询', history.length >= 1, JSON.stringify(history.map((item) => item.id)));
+
+    const rolled = await rpc('permissions.rollback', {
+      baseUrl,
+      projectDir: PROJECT_DIR,
+      id: applied.snapshot.id,
+    });
+    record('回滚成功', rolled.applied.success === true,
+      (rolled.applied.changes ?? []).join(' | '));
+    record('回滚移除了本次新增的角色', rolled.removed.includes('readonly') &&
+      rolled.removed.includes('no_access'), JSON.stringify(rolled.removed));
+    record('回滚前再次保存快照（回滚本身可撤销）', rolled.before.reason === 'before-rollback',
+      JSON.stringify(rolled.before));
+
+    const afterRollback = await rpc('config.current', { baseUrl });
+    const roleNames = (afterRollback.roles ?? []).map((role) => role.name).sort();
+    record('回滚后只剩 admin（受保护角色）', roleNames.includes('admin') &&
+      !roleNames.includes('readonly') && !roleNames.includes('no_access'), roleNames.join(','));
+
+    // 10. 停止
     const stopped = await rpc('graphjin.stop');
     record('GraphJin 已停止', stopped.running === false);
   } finally {

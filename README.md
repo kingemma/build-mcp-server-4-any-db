@@ -16,7 +16,7 @@ GraphJin 的配置细节。
 - [架构](#架构)
 - [功能](#功能)
 - [环境要求](#环境要求)
-- [安装与运行](#安装与运行)
+- [本地启动](#本地启动)
 - [本地测试数据库（Docker）](#本地测试数据库docker)
 - [GraphJin 二进制](#graphjin-二进制)
 - [数据与安全](#数据与安全)
@@ -61,7 +61,9 @@ GraphJin 的配置细节。
 - 三种录入方式：文件路径、连接字段、连接串；
 - **测试通过或启动成功后自动保存到本地**，下方列表可回填表单、一键启动、删除；
 - 连接凭据用 keystore key 加密后写入 SQLite，列表只显示非敏感摘要；
-- 未启动服务也能测试连接：后端会临时拉起一个用完即停的 GraphJin 实例。
+- 未启动服务也能测试连接：后端会临时拉起一个用完即停的 GraphJin 实例；
+- 白名单里 `driverVerified=false` 的类型（ClickHouse / Redshift / BigQuery 等）在当前
+  GraphJin 版本连接层未实现，测试与启动按钮会直接禁用，并提示改用 postgres / mysql 协议。
 
 ### Schema 浏览器
 
@@ -78,7 +80,12 @@ GraphJin 的配置细节。
 - 列管控：白名单，或「阻止列表」自动转成补集白名单（GraphJin 的 `columns` 只接受数组）；
 - 查询默认 `limit`。
 
-写入前展示逐项 diff 并二次确认。
+启动后自动用生效策略回填矩阵（只补空格子，不覆盖本地改动）；也可以点「从生效策略导入」
+用生效策略覆盖本地未提交的改动。写入前展示逐项 diff 并二次确认。
+
+每次写入前会自动保存一份策略快照（`mcp-builder.db` 的 `policy_snapshots` 表），
+点「写入历史」可查看并按时间恢复；回滚前会再存一份，所以回滚本身也能撤销。
+`admin` 是平台保留角色，不进入矩阵，平台也不会为它写限制规则；它不会被回滚删除。
 
 ![权限矩阵](./docs/screenshots/zh-CN/permissions.png)
 
@@ -105,39 +112,219 @@ GraphJin 的配置细节。
 |:--|:--|
 | Node.js | **>= 22.5**（后端使用 `node:sqlite`） |
 | npm | 随 Node 分发 |
-| GraphJin 二进制 | 需要自行准备（见下节），仓库不提交二进制 |
+| GraphJin 二进制 | 仓库内带 `v3.21.14` 压缩包，构建期解压；见「本地启动」第 3 步 |
 | 浏览器（可选） | `verify:ui` 需要本机 Edge / Chrome |
 | Docker（可选） | 只想连 SQLite 或已有数据库可不装；跑本地测试库需要 Docker + compose v2 |
 
-## 安装与运行
+## 本地启动
+
+最短路径（已有 GraphJin 压缩包时）：
+
+```bash
+npm install
+npm run prepare:binaries
+npm run smoke:binaries
+
+# 终端 1
+npm run dev
+# 终端 2（等 Vite 打印 Local 后再执行）
+npm run electron:dev
+```
+
+下面是每一步的详细说明与常见问题。
+
+### 1. 准备环境
+
+| 依赖 | 要求 |
+|:--|:--|
+| Node.js | **>= 22.5**，推荐 24.x（后端使用内置 `node:sqlite`） |
+| npm | 随 Node 分发 |
+| GraphJin 二进制 | 构建期从 `graphjin-binaries/` 解压，见第 3 步 |
+| 可用端口 | Vite 固定使用 `127.0.0.1:1420`；后端与 GraphJin 端口动态分配 |
+| Docker（可选） | 只有跑本地测试数据库时需要 |
+
+先确认版本：
+
+```bash
+node -v    # 应 >= v22.5.0
+npm -v
+```
+
+### 2. 安装依赖
+
+在项目根目录执行：
 
 ```bash
 npm install
 ```
 
-### 桌面端开发
+> Electron 首次安装会下载约 100 MB 的运行时。如果下载慢或被代理拦截，可以设置镜像后重试：
+>
+> ```bash
+> # Windows PowerShell
+> $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+> npm install
+> ```
+>
+> 也可以设置 `HTTPS_PROXY` / `HTTP_PROXY` 走本地代理。
+
+### 3. 准备 GraphJin 二进制
+
+仓库内已带 `graphjin-binaries/v3.21.14/*.tar.gz` 时，直接解压当前平台的二进制：
 
 ```bash
-# 终端 1：Vite 开发服务器（127.0.0.1:1420）
-npm run dev
+npm run prepare:binaries
+```
 
-# 终端 2：Electron 载入开发服务器，并在进程内启动后端
+如果缺少压缩包，先下载当前平台的发布包，再解压：
+
+```bash
+# 平台可选：windows-amd64 / windows-arm64 / linux-amd64 /
+#           linux-arm64 / darwin-amd64 / darwin-arm64
+npm run fetch:binaries -- --only windows-amd64
+npm run prepare:binaries
+```
+
+验证二进制能真实启动：
+
+```bash
+npm run smoke:binaries
+# 期望输出：PASS  windows-amd64  ...  GraphJin 3.21.14
+```
+
+解压后的文件位于 `src-tauri/binaries/graphjin-<target-triple>[.exe]`。
+如需使用自定义路径，可设置环境变量 `GRAPHJIN_BIN`。
+
+### 4. 启动桌面端（推荐）
+
+需要两个终端，**先起 Vite，再起 Electron**。
+
+终端 1：
+
+```bash
+npm run dev
+```
+
+等到出现 `Local: http://127.0.0.1:1420` 后再继续。
+
+终端 2：
+
+```bash
 npm run electron:dev
 ```
 
-### 纯浏览器调试
+Electron 会：
+
+1. 在进程内启动 Node 后端（动态端口）；
+2. 把后端端口通过启动参数注入渲染进程；
+3. 打开桌面窗口并加载 Vite 页面。
+
+看到窗口即启动成功。Windows / Linux 关闭窗口会先停止 GraphJin 和后端再退出；
+macOS 关闭窗口只隐藏窗口，退出请用 `Cmd+Q`。开发态数据落在 Electron 的
+`userData/data`（Windows 通常是 `%APPDATA%\mcp-builder\data`）。
+
+### 5. 纯浏览器调试（可选）
+
+不想开 Electron 时，可以用两个终端手动起前后端：
+
+终端 1：
 
 ```bash
-npm run backend     # 打印 ready JSON，其中 port 即后端端口
-npm run dev         # 浏览器打开 http://127.0.0.1:1420
+npm run backend
 ```
 
-打开「设置」页填入后端端口，点「保存并连接」即可。
+它会打印一行 ready JSON，记下其中的端口：
 
-### 构建 Windows 安装包
+```json
+{"jsonrpc":"2.0","method":"ready","params":{"port":50123,"pid":12345}}
+```
+
+终端 2：
 
 ```bash
-npm run dist:win    # 产物：release-final/
+npm run dev
+```
+
+浏览器打开 <http://127.0.0.1:1420>，进入「设置」页，填入上一步的 `port`，
+点「保存并连接」。右上角出现「后端在线」即接通。
+
+纯浏览器模式的数据目录是 `sidecar-backend/data`。`npm run backend` 的进程必须
+保持运行；停止后前端会显示后端离线。
+
+### 6. 首次配置流程
+
+1. **数据库连接页**：填写连接名、类型和连接信息。
+   - SQLite：录入方式选「文件路径」，填已有的 `.db` 文件；
+   - MySQL / PostgreSQL 等：填主机、端口、库名、用户、密码；
+   - 「项目目录」填 `projects/demo` 之类的目录（开发时相对仓库根目录，
+     打包后建议填绝对路径），GraphJin 的 `dev.yml` 会写在这里。
+2. 点「测试连接」。测试通过后连接会自动保存到本地列表。
+3. 点「启动」。后端会创建/合并 `dev.yml` 并拉起 GraphJin。
+4. 到 **Schema 浏览器** 确认表、列和关系已经发现。
+5. 到 **权限矩阵** 添加角色、配置四项操作、行过滤和列管控；
+   点「应用到 GraphJin」后按 diff 确认，写入前会自动保存快照。
+6. 到 **运行状态** 页查看端点、探活、复制 MCP 客户端配置。
+
+> `admin` 是平台保留角色：不进入矩阵，平台不会为它写限制规则，也不会在回滚时删除它。
+
+### 7. 停止
+
+- 桌面端：Windows / Linux 关闭窗口即可，主进程会先停 GraphJin 再退出；
+  macOS 关闭窗口只隐藏窗口，请用 `Cmd+Q` 退出应用。
+- 浏览器模式：先在「运行状态」点「停止」，再在终端 `Ctrl+C` 结束后端。
+- 如果终端被强制关闭，检查是否还有 `graphjin` 进程占用端口。
+
+### 8. 常见问题
+
+| 现象 | 处理 |
+|:--|:--|
+| `npm run dev` 报 `EADDRINUSE` / 1420 被占用 | 关掉旧的 Vite 进程，或用 `netstat -ano \| findstr :1420`（Windows）找到 PID 后结束 |
+| Electron 窗口空白 | 确认终端 1 的 Vite 已经打印 `Local: ...`；必要时设置 `MCP_BUILDER_DEV_URL=http://127.0.0.1:1420` 再启动 |
+| 右上角显示后端离线 | 浏览器模式下端口填错或 `npm run backend` 没在运行；访问 `http://127.0.0.1:<port>/health` 应返回 `{"ok":true,...}` |
+| 提示找不到 GraphJin 二进制 | 执行 `npm run prepare:binaries` 和 `npm run smoke:binaries`，或设置 `GRAPHJIN_BIN` 指向可执行文件 |
+| `electron:dev` 报 `Cannot read properties of undefined (reading 'isPackaged')` | 环境里设置了 `ELECTRON_RUN_AS_NODE=1`，Electron 被当成 Node 运行；取消该变量后重试 |
+| GraphJin 启动后立刻退出 | 查看「运行状态」里的日志和项目目录下 `dev.yml`；常见原因是端口冲突、数据库连不上或连接字段缺失 |
+| `node:sqlite` 相关报错 | Node 版本低于 22.5，升级 Node 后重新 `npm install` |
+| 带密码的连接保存失败 | 确认数据目录下的 `keystore.key` 存在且可读；丢失后旧连接需要重新录入密码 |
+| `fetch:binaries` 失败 | 确认本机有 `curl` 且能访问 GitHub；也可以手动把官方压缩包放进 `graphjin-binaries/<version>/` |
+
+### 9. 本地验证（可选）
+
+```bash
+npm test                 # 前端策略单测 + 后端单测
+npm run smoke:binaries   # GraphJin 二进制冒烟
+npm run build            # 前端生产构建
+npm run verify:ui        # 真实后端 + Edge headless（10 项）
+```
+
+完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
+
+```bash
+cd sidecar-backend
+npm run verify:e2e       # 24 项
+```
+
+### 构建安装包
+
+```bash
+npm run dist:win    # Windows NSIS
+npm run dist:mac    # macOS dmg + zip（需在 macOS 上执行）
+npm run dist:linux  # Linux AppImage + deb（需在 Linux 上执行）
+```
+
+产物都在 `release-final/`。跨平台打包由 `.github/workflows/build.yml` 的矩阵在
+Windows / macOS 13 / macOS 14 / Ubuntu 上完成；CI 没有签名证书，产物未签名。
+
+需要签名时在对应平台设置 electron-builder 的标准环境变量后再执行构建：
+
+```bash
+# macOS：证书 + 公证
+CSC_LINK=/path/to/dev-id.p12 CSC_KEY_PASSWORD=... \
+APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... APPLE_TEAM_ID=... \
+npm run dist:mac
+
+# Windows：代码签名证书
+WIN_CSC_LINK=C:/path/to/cert.pfx WIN_CSC_KEY_PASSWORD=... npm run dist:win
 ```
 
 ### 本地测试数据库（Docker）
@@ -179,6 +366,9 @@ npm run fetch:binaries -- --only windows-amd64
 
 # 解压并重命名当前平台的二进制
 npm run prepare:binaries
+
+# 真实执行 graphjin version，核对版本号（CI 三平台各跑一次）
+npm run smoke:binaries
 ```
 
 版本与校验信息见 `graphjin-binaries/version.json`，GraphJin 的实测行为记录在
@@ -189,7 +379,7 @@ npm run prepare:binaries
 | 内容 | 位置 |
 |:--|:--|
 | 数据目录 | 打包后 `userData/data`；`npm run backend` 时是 `sidecar-backend/data` |
-| 用户库 / 连接记录 | 数据目录下 `mcp-builder.db`（可用 `MCP_BUILDER_DB` 覆盖） |
+| 用户库 / 连接记录 / 策略快照 | 数据目录下 `mcp-builder.db`（可用 `MCP_BUILDER_DB` 覆盖） |
 | 加密密钥 | 数据目录下 `keystore.key`（可用 `MCP_BUILDER_DATA_DIR` 改目录） |
 | 连接模板 | 数据目录下 `db-templates.json` |
 | GraphJin 项目 | 连接页里填写的「项目目录」，例如 `projects/app/dev.yml` |
@@ -197,17 +387,20 @@ npm run prepare:binaries
 - 连接记录里的 `payload` 整段用 AES-256-GCM 加密（密钥复用 GraphJin keystore key），
   密码与连接串不落明文；列表只返回 host / port / dbname / user / path 等摘要。
 - `keystore.key` 丢失后旧记录无法解密，界面会标记「需重新录入」，可回填非敏感字段后重测。
-- 策略写入没有回滚快照：legacy 模式下 `update_current_config` 立即生效。
+- 策略快照明文保存角色与表规则（不含数据库凭据），每个项目保留最近 30 份；
+  写入前自动保存，可在权限矩阵的「写入历史」里回滚。
 
 ## 验证
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（104 项）
+npm test                 # 后端单测（127 项）
 
-npm run verify:e2e       # 真机全链路：启动 → 发现 → 权限写入（17 项）
+npm run verify:e2e       # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 
 cd ..
+npm run test:frontend    # 前端策略归一化 / diff（8 项）
+npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
 npm run verify:ui        # 真实后端 + Edge headless，含中英文切换（10 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
@@ -220,23 +413,25 @@ npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 electron/              Electron 主进程、preload（注入后端端口）
 src/                   Vue 3 前端
-  views/               6 个页面
+  views/               6 个页面（路由懒加载）
   locales/             zh-CN / en-US 文案
-  stores/app.js        Pinia：服务状态、Schema、权限矩阵
+  stores/app.js        Pinia：服务状态、Schema、权限矩阵、写入快照
 sidecar-backend/       Node 后端
-  src/                 JSON-RPC、GraphJin 客户端、权限编排、连接存储
+  src/                 JSON-RPC、GraphJin 客户端、权限编排、快照、连接存储
   test/                node:test 单测
   scripts/             真机验证脚本
-scripts/               二进制准备、UI 冒烟
+scripts/               二进制准备 / 冒烟、UI 冒烟
+.github/workflows/     四平台打包 CI
 docs/                  基线文档、功能矩阵、UI 截图
 src-tauri/binaries/    GraphJin 二进制（构建期解压）
 ```
 
 ## 已知限制
 
-- 权限矩阵的表清单来自全部已发现表，尚未按选中库过滤；
-- macOS / Linux 安装包、代码签名与 CI 尚未接入；
+- 安装包签名 / 公证未接入：CI 产出未签名包，macOS 首次打开需手动放行；
 - `gj_security` 需要 admin JWT，策略真相来源是 MCP 的 `get_current_config`；
-- `dev.yml` 合并是文本级操作，只识别本项目生成的缩进格式。
+- `dev.yml` 合并覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式，
+  但不是通用 YAML 解析器（anchors / merge keys 等不支持）；
+- 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
 
 完整的「已完成 / 未完成」清单见 [docs/FEATURES.md](./docs/FEATURES.md)。

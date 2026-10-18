@@ -23,12 +23,14 @@ const { buildClientConfig, buildCliCommands, listClients, normalizeEndpoint } = 
 const {
   BUILT_IN_TYPES,
   SUPPORTED_TYPES,
+  UNVERIFIED_DRIVERS,
   addTemplate,
   listTypes,
   removeTemplate,
+  unsupportedDriverReason,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
-const { dataFile } = require('./paths');
+const { SnapshotStore, buildRollbackPatch } = require('./snapshots');const { dataFile } = require('./paths');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
 const serviceCache = new Map();
@@ -82,9 +84,10 @@ function isConnectionOk(result) {
  * @param {UserStore} options.store
  * @param {ConnectionStore} [options.connections] 本地连接记录；缺省时连接类方法会报错
  * @param {GraphJinSupervisor} [options.supervisor] 进程编排，缺省时自建一个
+ * @param {SnapshotStore} [options.snapshots] 权限快照；缺省时写入不回滚
  * @returns {RpcRouter}
  */
-function createRouter({ store, connections = null, supervisor = null }) {
+function createRouter({ store, connections = null, supervisor = null, snapshots = null }) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
 
@@ -92,6 +95,32 @@ function createRouter({ store, connections = null, supervisor = null }) {
   const connectionStore = () => {
     if (!connections) throw RpcError.invalidParams('连接存储未初始化');
     return connections;
+  };
+
+  /** 快照存储同理：没有装配时只跳过回滚能力，不影响正常写入 */
+  const snapshotStore = () => {
+    if (!snapshots) throw RpcError.invalidParams('快照存储未初始化');
+    return snapshots;
+  };
+
+  /**
+   * 快照身份：projectDir 优先，缺失时从 supervisor 当前项目补；
+   * 再退回 baseUrl（端口每次启动都会变，只作为最后兜底）。
+   */
+  const snapshotScope = (params) => {
+    let projectDir =
+      typeof params?.projectDir === 'string' && params.projectDir !== '' ? params.projectDir : null;
+    if (!projectDir) {
+      try {
+        projectDir = services.status?.()?.projectDir ?? null;
+      } catch {
+        projectDir = null;
+      }
+    }
+    return {
+      projectDir,
+      baseUrl: typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null,
+    };
   };
 
   /**
@@ -175,6 +204,14 @@ function createRouter({ store, connections = null, supervisor = null }) {
     .register('connections.test', async (params) => {
       const name = params?.name ?? 'probe_db';
       const connection = params?.connection ?? {};
+      // 实测这些类型在预置的 3.21.14 连接层直接报 unsupported，提前返回比拉起进程再失败快得多
+      if (UNVERIFIED_DRIVERS.has(connection.type)) {
+        return {
+          success: false,
+          unsupported: true,
+          errors: [unsupportedDriverReason(connection.type)],
+        };
+      }
       const baseUrl =
         typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null;
       // 服务在跑就复用现成实例；没跑就起一个用完即停的临时实例，不必先启动才能测
@@ -208,7 +245,28 @@ function createRouter({ store, connections = null, supervisor = null }) {
     })
     // GraphJin 进程生命周期
     .register('graphjin.start', async (params) => {
+      // 驱动未实现的类型不必拉起进程：写进 dev.yml 只会让 GraphJin 启动失败
+      for (const [name, connection] of Object.entries(params?.databases ?? {})) {
+        if (UNVERIFIED_DRIVERS.has(connection?.type)) {
+          throw RpcError.invalidParams(`库 ${name}: ${unsupportedDriverReason(connection.type)}`);
+        }
+      }
       const status = await services.start(params ?? {});
+      // 平台以 admin 执行 GraphJin；roles 里没有 admin 时连它自己都会被拒
+      // （基线 §6.5：roles '<role>' not defined，包括 admin）。
+      if (status?.running && status.baseUrl) {
+        try {
+          const service = await getService(status.baseUrl);
+          status.adminRole = await syncRolesToGraphJin({
+            store,
+            service,
+            roleNames: ['admin'],
+          });
+        } catch (error) {
+          // 补角色失败不该让「进程已启动」变成启动失败，但要让人看得见
+          status.adminRoleError = error.message;
+        }
+      }
       // 只有真的跑起来才记为 connected；库配置以项目里的 dev.yml 为准
       if (status?.running && params?.databases) {
         for (const [name, connection] of Object.entries(params.databases)) {
@@ -265,16 +323,77 @@ function createRouter({ store, connections = null, supervisor = null }) {
       if (typeof database !== 'string' || database === '') {
         throw RpcError.invalidParams('database 不能为空');
       }
-      const service = await getService(requireBaseUrl(params));
-      // 角色必须先存在，否则 roles[].tables 会被拒
+      const baseUrl = requireBaseUrl(params);
+      const service = await getService(baseUrl);
+      const matrix = params?.matrix ?? {};
+
+      // 写之前先留快照：legacy 模式立即生效，写坏了只能靠它恢复。
+      // 必须在 syncRoles 之前拍，否则本次新建的角色会被记进快照、回滚时删不掉。
+      let snapshot = null;
+      if (snapshots) {
+        const current = await service.readConfig('roles');
+        snapshot = snapshots.save({
+          ...snapshotScope(params),
+          database,
+          reason: 'before-apply',
+          roles: current?.roles ?? [],
+        });
+      }
+
+      // 角色必须先存在，否则 roles[].tables 会被拒。
+      // admin 是平台自身执行配置读写用的角色，即使不在矩阵里也一并补齐。
       const synced = await syncRolesToGraphJin({
         store,
         service,
-        roleNames: Object.keys(params?.matrix ?? {}),
+        roleNames: [...new Set([...Object.keys(matrix), 'admin'])],
       });
-      const patch = buildRoleTableConfig(database, params.matrix);
+      const patch = buildRoleTableConfig(database, matrix);
       const applied = await service.applyConfig(patch);
-      return { synced, applied };
+      return { synced, applied, snapshot };
+    })
+    // 写入历史：只返回摘要，roles 全文按需用 permissions.rollback 恢复
+    .register('permissions.snapshots', (params) => {
+      if (!snapshots) return [];
+      return snapshots.list({
+        ...snapshotScope(params),
+        limit: Number.isInteger(params?.limit) ? params.limit : 20,
+      });
+    })
+    // 回滚到某份快照；不传 id 时恢复最近一份。回滚前再拍一份，回滚本身也可撤销。
+    .register('permissions.rollback', async (params) => {
+      const baseUrl = requireBaseUrl(params);
+      const snapshotDb = snapshotStore();
+      const scope = snapshotScope(params);
+
+      let target = null;
+      if (params?.id !== undefined) {
+        if (!Number.isInteger(params.id)) throw RpcError.invalidParams('id 必须是整数');
+        target = snapshotDb.get(params.id);
+      } else {
+        const [latest] = snapshotDb.list({ ...scope, limit: 1 });
+        target = latest ? snapshotDb.get(latest.id) : null;
+      }
+      if (!target) throw RpcError.invalidParams('没有可回滚的快照');
+      // 快照按项目隔离：不允许把别的项目的 roles 写进当前实例
+      if (target.projectKey !== SnapshotStore.projectKey(scope)) {
+        throw RpcError.invalidParams('该快照不属于当前项目');
+      }
+
+      const service = await getService(baseUrl);
+      const current = await service.readConfig('roles');
+      const before = snapshotDb.save({
+        ...scope,
+        database: target.database,
+        reason: 'before-rollback',
+        roles: current?.roles ?? [],
+      });
+
+      const patch = buildRollbackPatch(target.roles, current?.roles ?? [], {
+        database: target.database,
+      });
+      const applied = await service.applyConfig(patch);
+      const { roles, ...summary } = target;
+      return { target: summary, before, applied, removed: patch.remove_roles ?? [] };
     })
     // 以某个角色真实执行一条 GraphQL，用于验证权限是否生效
     .register('graphql.execute', async (params) => {
@@ -411,8 +530,9 @@ async function createBackend({ dbPath } = {}) {
   const store = new UserStore(resolvedDbPath);
   // 两张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
   const connections = new ConnectionStore(resolvedDbPath);
+  const snapshots = new SnapshotStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
-  const router = createRouter({ store, connections, supervisor });
+  const router = createRouter({ store, connections, supervisor, snapshots });
   const server = await startHttpServer({ router, port: 0 });
 
   return {
@@ -425,6 +545,7 @@ async function createBackend({ dbPath } = {}) {
       await new Promise((resolve) => server.close(resolve));
       store.close();
       connections.close();
+      snapshots.close();
     },
   };
 }

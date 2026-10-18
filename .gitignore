@@ -21,4 +21,5 @@ release-final-app/
 release-final-win/
 release-final-mac/
 release-final-linux/
+release-ci-check/
 src-tauri/

@@ -131,3 +131,49 @@ test('schema.discover 与 schema.tables 缺少 baseUrl 时报错而不访问网�
     }
   });
 });
+
+test('permissions.snapshots 未装配快照存储时返回空列表', async () => {
+  await withServer(async ({ port }) => {
+    const response = await (await post(port, {
+      jsonrpc: '2.0', id: 11, method: 'permissions.snapshots', params: { projectDir: 'p' },
+    })).json();
+    assert.deepStrictEqual(response.result, []);
+  });
+});
+
+test('permissions.rollback 未装配快照存储时返回明确错误', async () => {
+  await withServer(async ({ port }) => {
+    const response = await (await post(port, {
+      jsonrpc: '2.0', id: 12, method: 'permissions.rollback',
+      params: { baseUrl: 'http://127.0.0.1:1', projectDir: 'p' },
+    })).json();
+    assert.strictEqual(response.error.code, -32602);
+    assert.match(response.error.message, /快照存储未初始化/);
+  });
+});
+
+test('connections.test 对驱动未实现的类型直接返回 unsupported，不拉起进程', async () => {
+  await withServer(async ({ port }) => {
+    const response = await (await post(port, {
+      jsonrpc: '2.0', id: 13, method: 'connections.test',
+      params: { name: 'x', connection: { type: 'clickhouse' } },
+    })).json();
+    assert.strictEqual(response.result.success, false);
+    assert.strictEqual(response.result.unsupported, true);
+    assert.match(response.result.errors[0], /clickhouse/);
+  });
+});
+
+test('graphjin.start 对驱动未实现的类型提前报错', async () => {
+  await withServer(async ({ port }) => {
+    const response = await (await post(port, {
+      jsonrpc: '2.0', id: 14, method: 'graphjin.start',
+      params: {
+        projectDir: 'temp-project',
+        databases: { chip: { type: 'clickhouse', host: '127.0.0.1' } },
+      },
+    })).json();
+    assert.strictEqual(response.error.code, -32602);
+    assert.match(response.error.message, /unsupported database type/);
+  });
+});

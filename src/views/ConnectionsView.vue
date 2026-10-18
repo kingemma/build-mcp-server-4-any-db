@@ -33,6 +33,8 @@ const template = reactive({ id: '', label: '', wireType: '', defaultPort: null, 
 
 const selected = computed(() => store.dbTypes.find((item) => item.id === form.typeId) ?? null);
 const wireType = computed(() => selected.value?.wireType ?? '');
+/** 白名单通过但连接层没实现的类型：直接禁用测试/启动，避免用户以为是自己填错了 */
+const selectedUnverified = computed(() => selected.value?.driverVerified === false);
 const isFileBased = computed(() => form.mode === 'path');
 const isDsn = computed(() => form.mode === 'dsn');
 
@@ -283,7 +285,7 @@ const summary = computed(() => ({
                   <el-option
                     v-for="item in store.builtInTypes"
                     :key="item.id"
-                    :label="item.label"
+                    :label="item.driverVerified === false ? `${item.label} · ${t('connections.form.unverifiedTag')}` : item.label"
                     :value="item.id"
                   />
                 </el-option-group>
@@ -306,7 +308,6 @@ const summary = computed(() => ({
           <p v-if="selected && selected.driverVerified === false" class="note note--warn">
             {{ t('connections.form.driverUnverified') }}
           </p>
-
           <el-form-item :label="t('connections.form.inputMode')">
             <el-radio-group v-model="form.mode">
               <el-radio value="path">{{ t('connections.form.modePath') }}</el-radio>
@@ -374,10 +375,15 @@ const summary = computed(() => ({
           <el-checkbox v-model="form.isDefault">{{ t('connections.form.setDefault') }}</el-checkbox>
 
           <div class="row">
-            <el-button :loading="isTesting" @click="test">
+            <el-button :loading="isTesting" :disabled="selectedUnverified" @click="test">
               {{ t('connections.actions.test') }}
             </el-button>
-            <el-button type="primary" :loading="isSubmitting" @click="connect">
+            <el-button
+              type="primary"
+              :loading="isSubmitting"
+              :disabled="selectedUnverified"
+              @click="connect"
+            >
               {{ t('connections.actions.start') }}
             </el-button>
             <el-button text @click="openTemplate">

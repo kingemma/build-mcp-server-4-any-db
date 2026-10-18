@@ -30,6 +30,7 @@ export default {
     reload: 'Reload',
     delete: 'Delete',
     cancel: 'Cancel',
+    close: 'Close',
     save: 'Save',
     copy: 'Copy',
     confirm: 'Confirm',
@@ -77,7 +78,8 @@ export default {
       groupBuiltIn: 'Built-in',
       groupCustom: 'Custom templates',
       driverUnverified:
-        'This type passes the config allowlist, but the driver reports "unsupported database type" — it may not be implemented.',
+        'This type passes the config allowlist, but the connection layer reports "unsupported database type" — the driver is not implemented, so test and start are disabled. Connect through the postgres / mysql protocol or a custom alias template instead.',
+      unverifiedTag: 'driver unverified',
       inputMode: 'Input mode',
       modePath: 'File path',
       modeFields: 'Connection fields',
@@ -233,6 +235,30 @@ export default {
     failed: 'failed',
     syncedRoles: 'Roles created: {names}',
     noneSynced: '(none)',
+    importPolicy: 'Import effective policy',
+    importConfirm:
+      'This overwrites uncommitted matrix edits with the effective policy (only tables of the selected database). Continue?',
+    importSubmit: 'Import',
+    importEmpty:
+      'The effective policy has no roles or tables for this database — reload the policy first',
+    imported: 'Imported {roles} role(s), {tables} table(s)',
+    blockNeedsSchema:
+      'Table(s) {tables} use block-list column control, but no column list has been discovered. Refresh the schema first; without the complement all columns would be allowed.',
+    adminReserved:
+      'admin is a reserved platform role: the platform never writes restrictive rules for it and keeps it out of the matrix, ensuring it exists before every write.',
+    rollback: 'Rollback',
+    history: 'Write history',
+    historyTitle: 'Permission write snapshots',
+    historyEmpty:
+      'No snapshots yet. Every "Apply to GraphJin" automatically saves one before writing.',
+    snapshotMeta: '{roles} roles',
+    snapshotDatabase: 'database {database}',
+    restore: 'Restore this snapshot',
+    restoreConfirm:
+      'Restore GraphJin roles to this snapshot ({time}, {roles} roles)? The current state is snapshotted first, so the restore itself can be rolled back.',
+    restored: 'Rolled back to snapshot #{id}',
+    snapshotBeforeApply: 'auto snapshot before write',
+    snapshotBeforeRollback: 'auto snapshot before rollback',
     editor: {
       filters: 'Row filters (one per line, GraphJin DSL)',
       filtersPlaceholder: '{ org_id: { _eq: $user.org_id } }',
@@ -249,7 +275,7 @@ export default {
     confirm: {
       title: 'Confirm write',
       warning:
-        'In legacy mode a config update takes effect immediately, with no preview and no rollback. Confirm the {count} changes below before writing.',
+        'In legacy mode a config update takes effect immediately. The platform snapshots the current policy before writing so it can be rolled back, but please confirm the {count} changes below.',
       submit: 'Write',
     },
     detail: {
@@ -312,5 +338,6 @@ export default {
   errors: {
     portMissing: 'Backend port is not set — fill it in on the settings page',
     requestFailed: '[{code}] {message}',
+    rollbackNeedsRunning: 'GraphJin is not running — cannot roll back',
   },
 };

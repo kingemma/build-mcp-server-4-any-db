@@ -1,0 +1,93 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: unit tests + web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # 仓库没有提交 package-lock.json（见 .gitignore），用 install 而不是 ci
+      - name: Install web dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Backend unit tests
+        working-directory: sidecar-backend
+        run: npm test
+
+      - name: Frontend policy unit tests
+        run: npm run test:frontend
+
+      - name: Frontend production build
+        run: npm run build
+
+  package:
+    name: package ${{ matrix.platform }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-amd64
+            script: dist:win
+            artifact: mcp-builder-windows-amd64
+          - os: macos-14
+            platform: darwin-arm64
+            script: dist:mac
+            artifact: mcp-builder-darwin-arm64
+          - os: macos-13
+            platform: darwin-amd64
+            script: dist:mac
+            artifact: mcp-builder-darwin-amd64
+          - os: ubuntu-latest
+            platform: linux-amd64
+            script: dist:linux
+            artifact: mcp-builder-linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # 从仓库内的压缩包解压出当前平台二进制，再真实执行一次 version
+      - name: Prepare GraphJin binary
+        run: node scripts/prepare-binaries.js --platform ${{ matrix.platform }}
+
+      - name: Smoke-test GraphJin binary
+        run: node scripts/smoke-binaries.js --platform ${{ matrix.platform }}
+
+      - name: Build installer
+        run: npm run ${{ matrix.script }}
+        env:
+          # CI 没有签名证书：不自动发现 identity，产出未签名安装包（见 README 已知限制）
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            release-final/*.exe
+            release-final/*.dmg
+            release-final/*.zip
+            release-final/*.AppImage
+            release-final/*.deb

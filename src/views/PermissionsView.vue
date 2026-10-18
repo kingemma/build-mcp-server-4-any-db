@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
 import { formatDetail } from '../utils/policy';
@@ -9,9 +9,10 @@ const store = useAppStore();
 const { t } = useI18n();
 
 const newRole = ref('');
-const selectedDatabase = ref('');
 const isEditorOpen = ref(false);
 const isConfirmOpen = ref(false);
+const isHistoryOpen = ref(false);
+const restoringId = ref(0);
 const editing = reactive({
   role: '',
   table: '',
@@ -27,15 +28,11 @@ const UNRESTRICTED = 'none';
 
 const columnsOf = (table) => store.columnsByTable[table] ?? [];
 
-watch(
-  () => store.databaseNames,
-  (names) => {
-    if (!selectedDatabase.value && names.length) selectedDatabase.value = names[0];
-  },
-  { immediate: true }
-);
-
 function addRole() {
+  if ((newRole.value ?? '').trim() === 'admin') {
+    ElMessage.warning(t('permissions.adminReserved'));
+    return;
+  }
   const added = store.addRole(newRole.value);
   if (!added) {
     ElMessage.warning(t('permissions.roleExists'));
@@ -44,7 +41,8 @@ function addRole() {
   newRole.value = '';
 }
 
-const operationOf = (role, table, operation) => store.matrix[role]?.[table]?.[operation];
+/** 视图只认纯表名，库名前缀由 store 统一补 */
+const operationOf = (role, table, operation) => store.operationOf(role, table, operation);
 
 const stateOf = (role, table, operation) => {
   const entry = operationOf(role, table, operation);
@@ -74,6 +72,8 @@ function ruleBadge(role, table, operation) {
 }
 
 function openEditor(role, table, operation) {
+  // 矩阵是懒创建的：第一次点规则时才落格子，避免空占位挡住策略回填
+  store.ensureOperations(role, table);
   const entry = operationOf(role, table, operation);
   if (!entry) return;
   editing.role = role;
@@ -101,11 +101,12 @@ function saveEditor() {
   isEditorOpen.value = false;
 }
 
-const rows = computed(() => store.tables.map((table) => table.name));
+/** 只列写入目标库的表：跨库同名表不能混在同一张矩阵里 */
+const rows = computed(() => store.applyTables);
 const changes = computed(() => store.changes);
 
 async function apply() {
-  if (!selectedDatabase.value) {
+  if (!store.applyDatabase) {
     ElMessage.warning(t('permissions.selectDatabase'));
     return;
   }
@@ -118,17 +119,93 @@ async function apply() {
 
 async function confirmApply() {
   isConfirmOpen.value = false;
+  // 写入成功后会重载生效策略，diff 归零，所以变更数要在写入前取
+  const count = changes.value.length;
   try {
-    const result = await store.applyPermissions(selectedDatabase.value);
+    const result = await store.applyPermissions(store.applyDatabase);
     lastSummary.value = result;
-    ElMessage.success(t('permissions.applied', { count: changes.value.length }));
+    ElMessage.success(t('permissions.applied', { count }));
   } catch (error) {
     ElMessage.error(error.message);
   }
 }
 
+/**
+ * 用生效策略覆盖本地矩阵。
+ *
+ * 自动回填只补空格子，所以这里必须先确认：用户可能有一批没提交的改动。
+ */
+async function importPolicy() {
+  if (!store.applyDatabase) {
+    ElMessage.warning(t('permissions.selectDatabase'));
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(t('permissions.importConfirm'), t('permissions.importPolicy'), {
+      confirmButtonText: t('permissions.importSubmit'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning',
+    });
+  } catch {
+    return; // 用户取消
+  }
+  const imported = store.hydrateMatrixFromPolicy({ overwrite: true });
+  if (imported.roles === 0) {
+    ElMessage.warning(t('permissions.importEmpty'));
+    return;
+  }
+  ElMessage.success(t('permissions.imported', imported));
+}
+
+/** 打开写入历史：每次写入前都有一份快照，可恢复到任意一份 */
+async function openHistory() {
+  if (!store.isRunning) {
+    ElMessage.warning(t('errors.rollbackNeedsRunning'));
+    return;
+  }
+  await store.loadSnapshots();
+  isHistoryOpen.value = true;
+}
+
+function formatTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function reasonLabel(reason) {
+  return reason === 'before-rollback'
+    ? t('permissions.snapshotBeforeRollback')
+    : t('permissions.snapshotBeforeApply');
+}
+
+async function restoreSnapshot(snapshot) {
+  try {
+    await ElMessageBox.confirm(
+      t('permissions.restoreConfirm', {
+        time: formatTime(snapshot.createdAt),
+        roles: snapshot.roleCount,
+      }),
+      t('permissions.restore'),
+      { confirmButtonText: t('permissions.restore'), cancelButtonText: t('common.cancel'), type: 'warning' }
+    );
+  } catch {
+    return;
+  }
+  restoringId.value = snapshot.id;
+  try {
+    const result = await store.rollbackPermissions(snapshot.id);
+    ElMessage.success(t('permissions.restored', { id: result.target.id }));
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    restoringId.value = 0;
+  }
+}
+
 onMounted(() => {
   if (store.isRunning && store.tables.length === 0) store.loadSchema();
+  if (store.isRunning) store.loadSnapshots();
 });
 </script>
 
@@ -162,6 +239,7 @@ onMounted(() => {
           </button>
         </div>
         <p v-else class="mono-dim">{{ t('permissions.noRoles') }}</p>
+        <p class="admin-note mono-dim">{{ t('permissions.adminReserved') }}</p>
       </div>
     </section>
 
@@ -175,11 +253,22 @@ onMounted(() => {
           }}
         </span>
         <div class="actions">
-          <el-select v-model="selectedDatabase" size="small" style="width: 150px">
+          <el-select
+            :model-value="store.applyDatabase"
+            size="small"
+            style="width: 150px"
+            @change="store.selectDatabase"
+          >
             <el-option v-for="name in store.databaseNames" :key="name" :label="name" :value="name" />
           </el-select>
           <el-button size="small" @click="store.loadCurrentPolicy">
             {{ t('permissions.reloadPolicy') }}
+          </el-button>
+          <el-button size="small" @click="importPolicy">
+            {{ t('permissions.importPolicy') }}
+          </el-button>
+          <el-button size="small" @click="openHistory">
+            {{ t('permissions.history') }}
           </el-button>
           <el-button size="small" type="primary" :loading="store.isBusy" @click="apply">
             {{ t('permissions.apply') }}
@@ -209,7 +298,9 @@ onMounted(() => {
                   {{
                     stateOf(store.currentRole, table, operation) === 'allowed'
                       ? t('permissions.states.allowed')
-                      : t('permissions.states.blocked')
+                      : stateOf(store.currentRole, table, operation) === 'none'
+                        ? t('permissions.states.default')
+                        : t('permissions.states.blocked')
                   }}
                 </button>
                 <button class="rule" @click="openEditor(store.currentRole, table, operation)">
@@ -286,6 +377,38 @@ onMounted(() => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="isHistoryOpen" :title="t('permissions.historyTitle')" width="640">
+      <p v-if="store.snapshots.length === 0" class="mono-dim">
+        {{ t('permissions.historyEmpty') }}
+      </p>
+      <ul v-else class="snapshots">
+        <li v-for="snapshot in store.snapshots" :key="snapshot.id">
+          <div class="snapshots__meta">
+            <span class="mono-dim">#{{ snapshot.id }}</span>
+            <span>{{ formatTime(snapshot.createdAt) }}</span>
+            <span class="mono-dim">
+              {{ reasonLabel(snapshot.reason) }} ·
+              {{ t('permissions.snapshotMeta', { roles: snapshot.roleCount }) }}
+            </span>
+            <span v-if="snapshot.database" class="mono-dim">
+              {{ t('permissions.snapshotDatabase', { database: snapshot.database }) }}
+            </span>
+          </div>
+          <el-button
+            size="small"
+            :loading="restoringId === snapshot.id"
+            :disabled="!store.isRunning"
+            @click="restoreSnapshot(snapshot)"
+          >
+            {{ t('permissions.restore') }}
+          </el-button>
+        </li>
+      </ul>
+      <template #footer>
+        <el-button @click="isHistoryOpen = false">{{ t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="isConfirmOpen" :title="t('permissions.confirm.title')" width="640">
       <p class="warn">{{ t('permissions.confirm.warning', { count: changes.length }) }}</p>
       <ul class="changes">
@@ -324,6 +447,35 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.admin-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.snapshots {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.snapshots li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.snapshots__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text);
 }
 
 .role {

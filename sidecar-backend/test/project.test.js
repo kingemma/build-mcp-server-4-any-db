@@ -105,3 +105,82 @@ test('mergeDatabaseBlock: 幂等，且缺 databases 段时报错', () => {
   assert.strictEqual(twice, once);
   assert.throws(() => mergeDatabaseBlock('app_name: Demo\n', {}), /缺少 databases 段/);
 });
+
+test('mergeDatabaseBlock: 支持手写引号键，原地更新不重复', () => {
+  const yaml = 'databases:\n  "app":\n    type: "sqlite"\n    path: "app.db"\nroles:\n';
+  const merged = mergeDatabaseBlock(yaml, {
+    app: { type: 'sqlite', path: 'new.db' },
+    analytics: { type: 'sqlite', path: 'a.db' },
+  });
+
+  assert.strictEqual(merged.match(/^ {2}(?:"?app"?):$/gm).length, 1);
+  assert.match(merged, /path: "new\.db"/);
+  assert.doesNotMatch(merged, /app\.db/);
+  assert.match(merged, /analytics:/);
+  assert.match(merged, /roles:/);
+});
+
+test('mergeDatabaseBlock: flow 风格 databases 段会转成块风格并保留其它配置', () => {
+  const yaml = `app_name: Demo
+databases: { app: { type: sqlite, path: app.db, default: true }, old: { type: postgres, host: db } }
+roles:
+  - name: admin
+`;
+  const merged = mergeDatabaseBlock(yaml, {
+    analytics: { type: 'sqlite', path: 'a.db', default: true },
+  });
+
+  assert.match(merged, /^databases:$/m);
+  assert.match(merged, /  app:\n {4}type: "sqlite"\n {4}path: "app\.db"/);
+  assert.match(merged, /  old:\n {4}type: "postgres"\n {4}host: "db"/);
+  assert.match(merged, /  analytics:\n {4}type: "sqlite"\n {4}path: "a\.db"\n {4}default: true/);
+  // 新默认库摘掉旧默认库
+  assert.strictEqual((merged.match(/default: true/g) ?? []).length, 1);
+  assert.match(merged, /roles:\n {2}- name: admin/);
+});
+
+test('mergeDatabaseBlock: 块内的单行 flow 条目按条目识别，不会重复新增', () => {
+  const yaml = 'databases:\n  app: { type: sqlite, path: app.db }\n  other:\n    type: sqlite\n';
+  const merged = mergeDatabaseBlock(yaml, {
+    app: { type: 'sqlite', path: 'new.db' },
+  });
+
+  assert.strictEqual(merged.match(/^ {2}app:/gm).length, 1);
+  assert.match(merged, /path: "new\.db"/);
+  assert.match(merged, /  other:\n {4}type: sqlite/);
+});
+
+test('mergeDatabaseBlock: 兼容 GraphJin 回写的 4 空格缩进', () => {
+  const yaml = `app_name: Demo
+databases:
+    app:
+        type: sqlite
+        path: app.db
+        default: true
+    old:
+        type: postgres
+        host: db
+roles:
+    - name: admin
+      tables: []
+default_block: false
+`;
+  const merged = mergeDatabaseBlock(yaml, {
+    analytics: { type: 'sqlite', path: 'a.db', default: true },
+  });
+
+  assert.match(merged, /^databases:$/m);
+  assert.match(merged, /^ {4}analytics:\n {8}type: "sqlite"\n {8}path: "a\.db"\n {8}default: true/m);
+  assert.match(merged, /^ {4}app:\n {8}type: sqlite/m);
+  assert.match(merged, /^ {4}old:\n {8}type: postgres/m);
+  assert.ok(merged.indexOf('analytics:') < merged.indexOf('default_block:'));
+  assert.strictEqual((merged.match(/default: true/g) ?? []).length, 1);
+  assert.match(merged, /roles:\n {4}- name: admin/);
+});
+
+test('mergeDatabaseBlock: flow 段未闭合时报错', () => {
+  assert.throws(
+    () => mergeDatabaseBlock('databases: { app: { type: sqlite }\nroles:\n', {}),
+    /flow 段未闭合/
+  );
+});

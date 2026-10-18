@@ -32,6 +32,26 @@ const SUPPORTED_TYPES = [
 /** 实测连接层报 unsupported database type 的类型（基线 §12.2） */
 const UNVERIFIED_DRIVERS = new Set(['clickhouse', 'redshift', 'bigquery', 'nanodb', 'cassandra']);
 
+/**
+ * 该类型的驱动是否在预置版本上实测可用。
+ *
+ * @param {string} type dev.yml 里的 type
+ * @returns {boolean}
+ */
+function isDriverVerified(type) {
+  return !UNVERIFIED_DRIVERS.has(type);
+}
+
+/**
+ * 未验证驱动的统一提示，前后端共用同一句话避免文案漂移。
+ *
+ * @param {string} type
+ * @returns {string}
+ */
+function unsupportedDriverReason(type) {
+  return `数据库类型 ${type} 在配置白名单内，但当前 GraphJin 3.21.14 的连接层实测报 unsupported database type，驱动未实现。请改用 postgres / mysql 协议或自定义别名模板。`;
+}
+
 const FIELD_MODE = 'fields';
 const PATH_MODE = 'path';
 const DSN_MODE = 'dsn';
@@ -262,6 +282,8 @@ module.exports = {
   PATH_MODE,
   DSN_MODE,
   DbTemplateError,
+  isDriverVerified,
+  unsupportedDriverReason,
   listTypes,
   addTemplate,
   removeTemplate,

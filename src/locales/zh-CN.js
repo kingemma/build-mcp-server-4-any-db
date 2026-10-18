@@ -30,6 +30,7 @@ export default {
     reload: '重载',
     delete: '删除',
     cancel: '取消',
+    close: '关闭',
     save: '保存',
     copy: '复制',
     confirm: '确认',
@@ -77,7 +78,8 @@ export default {
       groupBuiltIn: '内置',
       groupCustom: '自定义模板',
       driverUnverified:
-        '该类型在配置白名单内，但连接层实测报 unsupported database type，驱动可能未实现。',
+        '该类型在配置白名单内，但连接层实测报 unsupported database type，驱动未实现，测试与启动已禁用。请改用 postgres / mysql 协议或自定义别名模板接入。',
+      unverifiedTag: '驱动未验证',
       inputMode: '录入方式',
       modePath: '文件路径',
       modeFields: '连接字段',
@@ -231,6 +233,24 @@ export default {
     failed: '失败',
     syncedRoles: '补齐的角色：{names}',
     noneSynced: '（无）',
+    importPolicy: '从生效策略导入',
+    importConfirm: '将用当前生效策略覆盖本地未提交的矩阵改动（只覆盖所选库已有的表），确定继续？',
+    importSubmit: '覆盖导入',
+    importEmpty: '生效策略里没有该库的角色或表，先点「重载生效策略」拉取一次',
+    imported: '已导入 {roles} 个角色、{tables} 张表',
+    blockNeedsSchema: '表 {tables} 使用了「阻止列表」列管控，但还没有发现列清单。请先刷新 Schema 再写入，否则补集无法计算，会把全部列放行。',
+    adminReserved: 'admin 是平台保留角色，平台不会为它写限制规则，也不参与矩阵编辑；每次写入前会自动补齐。',
+    rollback: '回滚',
+    history: '写入历史',
+    historyTitle: '权限写入快照',
+    historyEmpty: '还没有写入快照。每次「应用到 GraphJin」都会在写入前自动保存一份。',
+    snapshotMeta: '{roles} 个角色',
+    snapshotDatabase: '库 {database}',
+    restore: '恢复到此处',
+    restoreConfirm: '将把 GraphJin 的 roles 恢复为这份快照（{time}，{roles} 个角色）。恢复前会再保存一次当前状态，可再次回滚。继续？',
+    restored: '已回滚到快照 #{id}',
+    snapshotBeforeApply: '写入前自动快照',
+    snapshotBeforeRollback: '回滚前自动快照',
     editor: {
       filters: '行过滤条件（每行一条，GraphJin DSL）',
       filtersPlaceholder: '{ org_id: { _eq: $user.org_id } }',
@@ -247,7 +267,7 @@ export default {
     confirm: {
       title: '确认写入',
       warning:
-        'legacy 模式下配置更新立即生效，没有 preview / 回滚。请确认下面 {count} 项变更后再写入。',
+        'legacy 模式下配置更新立即生效；平台会在写入前自动保存快照，可回滚，但仍请确认下面 {count} 项变更。',
       submit: '确认写入',
     },
     detail: {
@@ -308,5 +328,6 @@ export default {
   errors: {
     portMissing: '尚未设置后端端口，请先在设置页填写',
     requestFailed: '[{code}] {message}',
+    rollbackNeedsRunning: 'GraphJin 未运行，无法回滚',
   },
 };
