@@ -1,0 +1,64 @@
+name: test-db-connection
+
+# 一键启动 MySQL / PostgreSQL / MongoDB / SQL Server / Oracle 免费版，用于本地数据库连接测试
+# Oracle is disabled in this as it is huge for CPU
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: test-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: test123456
+      MYSQL_DATABASE: testdb
+    command: --default-authentication-plugin=mysql_native_password
+    restart: no
+    volumes: []
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: test-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test123456
+      POSTGRES_DB: testdb
+    restart: no
+
+  mongodb:
+    image: mongo:7.0
+    container_name: test-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: test
+      MONGO_INITDB_ROOT_PASSWORD: test123456
+    restart: no
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: test-mssql
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: Y
+      SA_PASSWORD: Test@123456
+    restart: no
+
+  # oracle:
+  #   image: gvenzl/oracle-free:23.4-slim
+  #   container_name: test-oracle
+  #   ports:
+  #     - "1521:1521"
+  #   environment:
+  #     ORACLE_PASSWORD: test123456
+  #     APP_USER: test
+  #     APP_USER_PASSWORD: test123456
+  #   restart: no
+  #   # Oracle 内存限制，可按需调大
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 4G

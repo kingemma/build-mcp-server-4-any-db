@@ -17,6 +17,7 @@ GraphJin 的配置细节。
 - [功能](#功能)
 - [环境要求](#环境要求)
 - [安装与运行](#安装与运行)
+- [本地测试数据库（Docker）](#本地测试数据库docker)
 - [GraphJin 二进制](#graphjin-二进制)
 - [数据与安全](#数据与安全)
 - [验证](#验证)
@@ -106,6 +107,7 @@ GraphJin 的配置细节。
 | npm | 随 Node 分发 |
 | GraphJin 二进制 | 需要自行准备（见下节），仓库不提交二进制 |
 | 浏览器（可选） | `verify:ui` 需要本机 Edge / Chrome |
+| Docker（可选） | 只想连 SQLite 或已有数据库可不装；跑本地测试库需要 Docker + compose v2 |
 
 ## 安装与运行
 
@@ -137,6 +139,34 @@ npm run dev         # 浏览器打开 http://127.0.0.1:1420
 ```bash
 npm run dist:win    # 产物：release-final/
 ```
+
+### 本地测试数据库（Docker）
+
+仓库自带 [`docs/docker-compose-4-test-db-connection.yml`](./docs/docker-compose-4-test-db-connection.yml)，
+一键拉起四种免费版数据库，用来验证「数据库连接」页的各类驱动（Oracle 默认注释掉，镜像偏大）。
+
+```bash
+docker compose -f docs/docker-compose-4-test-db-connection.yml up -d
+docker compose -f docs/docker-compose-4-test-db-connection.yml ps
+docker compose -f docs/docker-compose-4-test-db-connection.yml down
+```
+
+| 数据库 | 端口 | 用户 | 默认库 |
+|:--|:--|:--|:--|
+| MySQL 8.0 | 3306 | root | testdb |
+| PostgreSQL 16 | 5432 | test | testdb |
+| MongoDB 7.0 | 27017 | test | — |
+| SQL Server 2022 | 1433 | sa | — |
+| Oracle 23 Free（默认注释） | 1521 | test | FREE |
+
+密码不在这里复制，统一以 yml 里 `environment` 的取值为准（`MYSQL_ROOT_PASSWORD`、
+`POSTGRES_PASSWORD`、`MONGO_INITDB_ROOT_PASSWORD`、`SA_PASSWORD`、`ORACLE_PASSWORD`）。
+连接页选对应类型，主机填 `127.0.0.1`，端口 / 用户 / 密码与 yml 保持一致，点「测试连接」即可；
+要换密码直接改 yml 后重启容器。
+要用 Oracle 就打开 yml 里的注释块（`gvenzl/oracle-free:23.4-slim`），内存建议留 4 GB 以上。
+
+> 这组容器只用于本地测试：凭据明文写在文件里、不挂数据卷（`restart: no`），
+> 停止后数据即丢弃。刚起来的库是空的，Schema 浏览器要先建表才有内容。
 
 ## GraphJin 二进制
 

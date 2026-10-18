@@ -18,6 +18,7 @@ GraphJin's config format.
 - [Features](#features)
 - [Requirements](#requirements)
 - [Install and run](#install-and-run)
+- [Local test databases (Docker)](#local-test-databases-docker)
 - [The GraphJin binary](#the-graphjin-binary)
 - [Data and security](#data-and-security)
 - [Verification](#verification)
@@ -112,6 +113,7 @@ UI switches between **中文 / English** (top right) and remembers the choice.
 | npm | ships with Node |
 | GraphJin binary | You must fetch it yourself (see below); binaries are not committed |
 | Browser (optional) | `verify:ui` drives a local Edge / Chrome |
+| Docker (optional) | only needed for the bundled test databases (Docker + compose v2) |
 
 ## Install and run
 
@@ -143,6 +145,38 @@ Enter the backend port on the Settings page and click "Save and connect".
 ```bash
 npm run dist:win    # output: release-final/
 ```
+
+### Local test databases (Docker)
+
+The repo ships
+[`docs/docker-compose-4-test-db-connection.yml`](./docs/docker-compose-4-test-db-connection.yml):
+four free-tier databases in one command, for exercising the driver list on the
+Connections page (Oracle is commented out — the image is big).
+
+```bash
+docker compose -f docs/docker-compose-4-test-db-connection.yml up -d
+docker compose -f docs/docker-compose-4-test-db-connection.yml ps
+docker compose -f docs/docker-compose-4-test-db-connection.yml down
+```
+
+| Database | Port | User | Default database |
+|:--|:--|:--|:--|
+| MySQL 8.0 | 3306 | root | testdb |
+| PostgreSQL 16 | 5432 | test | testdb |
+| MongoDB 7.0 | 27017 | test | — |
+| SQL Server 2022 | 1433 | sa | — |
+| Oracle 23 Free (commented) | 1521 | test | FREE |
+
+Passwords are not duplicated here — take them from the `environment` block in the yml
+(`MYSQL_ROOT_PASSWORD`, `POSTGRES_PASSWORD`, `MONGO_INITDB_ROOT_PASSWORD`, `SA_PASSWORD`,
+`ORACLE_PASSWORD`). Pick the matching type on the Connections page, use host `127.0.0.1`
+with the port / user / password from the yml, then click "Test connection". To change a
+password, edit the yml and recreate the container. To use Oracle, uncomment the block
+(`gvenzl/oracle-free:23.4-slim`) and give it at least ~4 GB of memory.
+
+> These containers are local test fixtures only: credentials are plain text in the file,
+> no volumes are mounted (`restart: no`), and data is dropped on stop. They also start
+> empty — create tables before expecting anything in the Schema browser.
 
 ## The GraphJin binary
 

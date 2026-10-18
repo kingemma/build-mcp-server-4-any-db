@@ -51,6 +51,7 @@
 | 中英文 README（介绍、截图、部署运行） | `README.md` / `README.en.md` |
 | 功能进度（本文件） | `docs/FEATURES.md` |
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
+| 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
 | 后端单测 | `cd sidecar-backend && npm test`（104 项） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（17 项） |
 | UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（10 项，含语言切换） |
