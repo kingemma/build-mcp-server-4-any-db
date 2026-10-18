@@ -22,6 +22,19 @@ const { DatabaseSync } = require('node:sqlite');
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 
+/** --shots=<dir> 时逐页截图，供 README 引用 */
+const SHOT_DIR = (process.argv.find((arg) => arg.startsWith('--shots=')) ?? '').slice('--shots='.length) || null;
+
+/** 页面 key 与两种语言下的顶栏标题，用来判断页面渲染完成 */
+const PAGE_SHOTS = [
+  { route: 'status', title: { 'zh-CN': '运行状态', 'en-US': 'Runtime' } },
+  { route: 'connections', title: { 'zh-CN': '数据库连接', 'en-US': 'Connections' } },
+  { route: 'schema', title: { 'zh-CN': 'Schema 浏览器', 'en-US': 'Schema Browser' } },
+  { route: 'permissions', title: { 'zh-CN': '权限矩阵', 'en-US': 'Permission Matrix' } },
+  { route: 'policy', title: { 'zh-CN': '策略预览', 'en-US': 'Policy Preview' } },
+  { route: 'settings', title: { 'zh-CN': '设置', 'en-US': 'Settings' } },
+];
+
 const checks = [];
 function record(name, pass, detail) {
   checks.push({ name, pass, detail });
@@ -158,6 +171,80 @@ async function findPageTarget(debugPort, expectedPort) {
   return page?.webSocketDebuggerUrl ?? null;
 }
 
+/**
+ * 切换语言并等页面重新渲染。
+ *
+ * @param {CdpSession} cdp
+ * @param {string} locale
+ */
+async function switchLocale(cdp, locale) {
+  try {
+    await cdp.evaluate(
+      `localStorage.setItem('mcpb.locale', '${locale}');
+       location.assign(location.pathname + '?locale=' + Date.now() + location.hash);
+       'ok'`
+    );
+  } catch {
+    // 导航会销毁执行上下文
+  }
+  await waitFor(`界面切换为 ${locale}`, async () =>
+    (await cdp.evaluate(
+      `document.querySelector('.topbar__title')?.textContent.trim().length ?? 0`
+    )) > 0
+  );
+}
+
+/**
+ * 给权限矩阵造数据：加一个角色并翻一个开关，策略页才有 diff 可截。
+ *
+ * 角色只存在内存里，reload 后就没了，所以每个语言都要重新造一次。
+ *
+ * @param {CdpSession} cdp
+ */
+async function seedPermissions(cdp) {
+  await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
+  await waitFor('权限矩阵就绪', async () =>
+    (await cdp.evaluate(`Boolean(document.querySelector('.add input'))`)) === true
+  );
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('.add input');
+    input.value = 'readonly';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const button = [...document.querySelectorAll('.add button')]
+      .find((item) => ['添加', 'Add'].includes(item.textContent.trim()));
+    button?.click();
+    return 'ok';
+  })()`);
+  await waitFor('矩阵出现', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.matrix tbody tr').length`)) > 0
+  );
+  await cdp.evaluate(`(() => { document.querySelector('.toggle')?.click(); return 'ok'; })()`);
+}
+
+/**
+ * 逐页截图，中英文各一套。
+ *
+ * @param {CdpSession} cdp
+ * @param {string} dir 输出目录
+ */
+async function capturePages(cdp, dir) {
+  for (const locale of ['zh-CN', 'en-US']) {
+    await switchLocale(cdp, locale);
+    await seedPermissions(cdp);
+    for (const page of PAGE_SHOTS) {
+      await cdp.evaluate(`location.hash = '#/${page.route}'; 'ok'`);
+      await waitFor(`${locale}/${page.route} 渲染`, async () =>
+        (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
+        page.title[locale]
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      fs.mkdirSync(path.join(dir, locale), { recursive: true });
+      await cdp.screenshot(path.join(dir, locale, `${page.route}.png`));
+      console.log(`截图 ${locale}/${page.route}.png`);
+    }
+  }
+}
+
 function killTree(child) {
   if (!child?.pid) return;
   try {
@@ -173,7 +260,9 @@ async function main() {
   }
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-ui-'));
-  const projectDir = path.join(workDir, 'project');
+  // 固定放在被 gitignore 的 projects/ 下：截图里的项目目录比系统临时路径可读
+  const projectDir = path.join(ROOT, 'projects', 'ui-verify-demo');
+  fs.rmSync(projectDir, { recursive: true, force: true });
   fs.mkdirSync(projectDir, { recursive: true });
 
   const appDb = new DatabaseSync(path.join(projectDir, 'app.db'));
@@ -237,22 +326,53 @@ async function main() {
 
     // 端口由 Electron 注入，浏览器里只能走 localStorage；写入后 reload 让 app 读新端口
     try {
+      // 带 query 才会真正重载：只改 hash 是 same-document 导航，app 不会重新读端口
       await cdp.evaluate(
         `localStorage.setItem('mcpb.backendPort', '${backend.port}');
-         location.hash = '#/connections';
-         location.reload();
+         location.assign(location.pathname + '?boot=' + Date.now() + '#/connections');
          'ok'`
       );
     } catch {
-      // reload 会销毁执行上下文，evaluate 在这里报错是预期行为
+      // 导航会销毁执行上下文，evaluate 在这里报错是预期行为
     }
 
-    await waitFor('连接列表出现', async () =>
-      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
-    );
+    try {
+      await waitFor('连接列表出现', async () =>
+        (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
+      );
+    } catch (error) {
+      // 失败时把页面文本打出来，比只报超时好定位
+      const text = await cdp.evaluate(`document.body.innerText.slice(0, 800)`);
+      console.error(`页面内容：${text}`);
+      throw error;
+    }
     const savedText = await cdp.evaluate(`document.querySelector('.conns').textContent`);
     record('连接页列出已保存连接', savedText.includes('app') && savedText.includes('analytics'));
     record('连接状态显示已连接', savedText.includes('已连接'));
+
+    // 切语言要整棵树重渲染：顶部标题 + 表格表头都跟着变，防漏翻
+    await switchLocale(cdp, 'en-US');
+    await waitFor('英文界面下连接列表仍在', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
+    );
+    const enTitle = await cdp.evaluate(
+      `document.querySelector('.topbar__title').textContent.trim()`
+    );
+    const enHeader = await cdp.evaluate(`document.querySelector('.conns thead').textContent`);
+    record(
+      '切换英文后导航与表头变英文',
+      enTitle === 'Connections' && enHeader.includes('Name'),
+      enTitle
+    );
+
+    await switchLocale(cdp, 'zh-CN');
+    await waitFor('中文界面下连接列表仍在', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
+    );
+    const zhTitle = await cdp.evaluate(
+      `document.querySelector('.topbar__title').textContent.trim()`
+    );
+    record('切回中文复原', zhTitle === '数据库连接', zhTitle);
 
     const connectionsShot = path.join(workDir, 'connections.png');
     await cdp.screenshot(connectionsShot);
@@ -318,6 +438,8 @@ async function main() {
     const appShot = path.join(workDir, 'schema-app.png');
     await cdp.screenshot(appShot);
 
+    if (SHOT_DIR) await capturePages(cdp, SHOT_DIR);
+
     console.log(`\n截图：${connectionsShot}`);
     console.log(`      ${analyticsShot}`);
     console.log(`      ${appShot}`);
@@ -326,6 +448,7 @@ async function main() {
     killTree(edge);
     await new Promise((resolve) => server.close(resolve));
     await backend.stop();
+    fs.rmSync(projectDir, { recursive: true, force: true });
     if (process.env.KEEP_UI_ARTIFACTS) {
       console.log(`产物目录保留：${workDir}`);
     } else {

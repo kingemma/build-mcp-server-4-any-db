@@ -1,15 +1,17 @@
 import { defineStore } from 'pinia';
+import i18n from '../i18n';
 import { getPort, rpc, rpcSafe, setPort } from '../api/rpc';
 import {
   OPERATIONS,
-  OPERATION_LABELS,
+  OPERATION_KEYS,
+  STATE_KEYS,
   diffPolicy,
   normalizeCurrentRoles,
   normalizePendingMatrix,
   resolveColumns,
 } from '../utils/policy';
 
-export { OPERATIONS, OPERATION_LABELS };
+export { OPERATIONS, OPERATION_KEYS, STATE_KEYS };
 
 function emptyOperation() {
   // columnMode: allow = 白名单；block = 阻止列表（写库时转成补集白名单）
@@ -322,8 +324,8 @@ export const useAppStore = defineStore('app', {
      */
     async startFromSavedConnection(id) {
       const connection = await this.fetchConnection(id);
-      if (!connection) throw new Error('保存的连接不存在');
-      if (!connection.config) throw new Error('这条连接无法解密，请重新填写并测试一次');
+      if (!connection) throw new Error(i18n.global.t('connections.messages.missing'));
+      if (!connection.config) throw new Error(i18n.global.t('connections.errors.unreadable'));
       if (this.isRunning) await this.stopGraphJin();
       await this.startGraphJin({
         projectDir: connection.projectDir,

@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 import { rpcSafe } from '../api/rpc';
 import { useAppStore } from '../stores/app';
 
 const store = useAppStore();
+const { t } = useI18n();
 
 const tables = ref([]);
 const relationships = ref([]);
@@ -68,18 +70,18 @@ async function select(database) {
 
 async function reload() {
   if (!store.isRunning) {
-    ElMessage.warning('服务未运行');
+    ElMessage.warning(t('common.notRunning'));
     return;
   }
   await store.loadConnectedDatabases();
   if (!store.activeDatabase) {
     tables.value = [];
     relationships.value = [];
-    ElMessage.warning('当前实例没有已连接的数据库');
+    ElMessage.warning(t('schema.noConnectedDatabases'));
     return;
   }
   await load(store.activeDatabase);
-  ElMessage.success(`已刷新：${tables.value.length} 张表`);
+  ElMessage.success(t('schema.refreshed', { count: tables.value.length }));
 }
 
 onMounted(async () => {
@@ -93,10 +95,12 @@ onMounted(async () => {
   <div class="stack">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">已连接的数据库</span>
+        <span class="panel__title">{{ t('schema.connectedDatabases') }}</span>
         <div class="head-actions">
-          <span class="eyebrow">{{ databases.length }} 个</span>
-          <el-button size="small" :loading="isLoading" @click="reload">刷新</el-button>
+          <span class="eyebrow">{{ t('schema.databaseCount', { count: databases.length }) }}</span>
+          <el-button size="small" :loading="isLoading" @click="reload">
+            {{ t('common.refresh') }}
+          </el-button>
         </div>
       </div>
       <div class="panel__body">
@@ -113,11 +117,7 @@ onMounted(async () => {
           </button>
         </div>
         <p v-else class="mono-dim">
-          {{
-            store.isRunning
-              ? '当前实例没有加载任何数据库。'
-              : '服务未运行。请先在「数据库连接」页启动，或直接用一条已保存的连接启动。'
-          }}
+          {{ store.isRunning ? t('schema.noDatabases') : t('schema.notRunningHint') }}
         </p>
       </div>
     </section>
@@ -125,8 +125,12 @@ onMounted(async () => {
     <div class="duo">
       <section class="panel">
         <div class="panel__head">
-          <span class="panel__title">结构 · {{ store.activeDatabase || '未选择' }}</span>
-          <span class="eyebrow">{{ tables.length }} 表 / {{ columnCount }} 列</span>
+          <span class="panel__title">
+            {{ store.activeDatabase ? t('schema.structure', { database: store.activeDatabase }) : t('schema.structureNone') }}
+          </span>
+          <span class="eyebrow">
+            {{ t('schema.tableColumnCount', { tables: tables.length, columns: columnCount }) }}
+          </span>
         </div>
         <div v-loading="isLoading" class="panel__body">
           <el-tree v-if="tree.length" :data="tree" default-expand-all :props="{ children: 'children' }">
@@ -140,15 +144,23 @@ onMounted(async () => {
             </template>
           </el-tree>
           <p v-else class="mono-dim">
-            {{ store.activeDatabase ? '这个库里没有发现表。' : '请选择一个已连接的数据库。' }}
+            {{ store.activeDatabase ? t('schema.noTables') : t('schema.selectHint') }}
           </p>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel__head">
-          <span class="panel__title">关系 · {{ store.activeDatabase || '未选择' }}</span>
-          <span class="eyebrow">{{ relationships.length }} 条</span>
+          <span class="panel__title">
+            {{
+              store.activeDatabase
+                ? t('schema.relationships', { database: store.activeDatabase })
+                : t('schema.relationshipsNone')
+            }}
+          </span>
+          <span class="eyebrow">
+            {{ t('schema.relationCount', { count: relationships.length }) }}
+          </span>
         </div>
         <div class="panel__body">
           <div
@@ -160,9 +172,11 @@ onMounted(async () => {
             <span class="rel__arrow">→</span>
             <span class="rel__to">{{ rel.toTable }}.{{ rel.toColumn }}</span>
             <span class="rel__type">{{ rel.relType }}</span>
-            <span v-if="rel.crossDatabase" class="pill pill--idle">跨库</span>
+            <span v-if="rel.crossDatabase" class="pill pill--idle">
+              {{ t('schema.crossDatabase') }}
+            </span>
           </div>
-          <p v-if="!relationships.length" class="mono-dim">未发现外键关系。</p>
+          <p v-if="!relationships.length" class="mono-dim">{{ t('schema.noRelationships') }}</p>
         </div>
       </section>
     </div>

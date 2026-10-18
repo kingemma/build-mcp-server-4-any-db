@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 import { useAppStore } from '../stores/app';
 import { rpcSafe } from '../api/rpc';
 
 const store = useAppStore();
+const { t } = useI18n();
 const tools = ref([]);
 const isLoadingTools = ref(false);
 
@@ -29,14 +31,15 @@ async function refreshAll() {
 
 async function copy(text, label) {
   await navigator.clipboard.writeText(text);
-  ElMessage.success(`${label}已复制`);
+  ElMessage.success(t('common.copied', { label }));
 }
 
 async function health() {
   const result = await rpcSafe('graphjin.health');
   if (result.ok) {
     ElMessage[result.data.healthy ? 'success' : 'warning'](
-      result.data.healthy ? `健康（HTTP ${result.data.httpStatus}）` : result.data.reason
+      // 不健康时后端给的 reason 本身就是可读文案，原样展示
+      result.data.healthy ? t('status.healthy', { status: result.data.httpStatus }) : result.data.reason
     );
   }
 }
@@ -44,7 +47,7 @@ async function health() {
 async function stop() {
   await store.stopGraphJin();
   tools.value = [];
-  ElMessage.success('已停止');
+  ElMessage.success(t('status.stoppedHint'));
 }
 
 onMounted(refreshAll);
@@ -54,27 +57,29 @@ onMounted(refreshAll);
   <div class="stack">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">服务</span>
+        <span class="panel__title">{{ t('status.service') }}</span>
         <span class="pill" :class="store.isRunning ? 'pill--on' : 'pill--off'">
-          <span class="dot" />{{ store.isRunning ? '运行中' : '未运行' }}
+          <span class="dot" />{{ store.isRunning ? t('common.running') : t('common.stopped') }}
         </span>
       </div>
       <div class="panel__body">
         <div class="facts">
           <div class="fact">
-            <span class="eyebrow">端点</span>
-            <span class="fact__value">{{ store.baseUrl || '—' }}</span>
+            <span class="eyebrow">{{ t('status.endpoint') }}</span>
+            <span class="fact__value">{{ store.baseUrl || t('common.dash') }}</span>
           </div>
           <div class="fact">
-            <span class="eyebrow">进程</span>
-            <span class="fact__value">{{ store.status?.pid ?? '—' }}</span>
+            <span class="eyebrow">{{ t('status.process') }}</span>
+            <span class="fact__value">{{ store.status?.pid ?? t('common.dash') }}</span>
           </div>
           <div class="fact">
-            <span class="eyebrow">项目目录</span>
-            <span class="fact__value fact__value--path">{{ store.status?.projectDir ?? '—' }}</span>
+            <span class="eyebrow">{{ t('status.projectDir') }}</span>
+            <span class="fact__value fact__value--path">
+              {{ store.status?.projectDir ?? t('common.dash') }}
+            </span>
           </div>
           <div class="fact">
-            <span class="eyebrow">崩溃重启次数</span>
+            <span class="eyebrow">{{ t('status.restarts') }}</span>
             <span class="fact__value">{{ store.status?.restarts ?? 0 }}</span>
           </div>
         </div>
@@ -82,17 +87,15 @@ onMounted(refreshAll);
         <p v-if="store.status?.lastError" class="alert">{{ store.status.lastError }}</p>
 
         <div class="row">
-          <el-button :loading="store.isBusy" @click="refreshAll">刷新</el-button>
-          <el-button @click="health">探活</el-button>
-          <el-button
-            type="danger"
-            :disabled="!store.isRunning || store.isBusy"
-            @click="stop"
-          >
-            停止
+          <el-button :loading="store.isBusy" @click="refreshAll">
+            {{ t('status.refreshAll') }}
+          </el-button>
+          <el-button @click="health">{{ t('status.probe') }}</el-button>
+          <el-button type="danger" :disabled="!store.isRunning || store.isBusy" @click="stop">
+            {{ t('status.stop') }}
           </el-button>
           <RouterLink to="/connections">
-            <el-button type="primary">去配置连接</el-button>
+            <el-button type="primary">{{ t('status.goConnections') }}</el-button>
           </RouterLink>
         </div>
       </div>
@@ -101,39 +104,39 @@ onMounted(refreshAll);
     <div class="duo">
       <section class="panel">
         <div class="panel__head">
-          <span class="panel__title">MCP 工具</span>
-          <span class="eyebrow">{{ tools.length }} 个</span>
+          <span class="panel__title">{{ t('status.tools') }}</span>
+          <span class="eyebrow">{{ t('status.toolCount', { count: tools.length }) }}</span>
         </div>
         <div class="panel__body">
           <div v-if="tools.length" class="chips">
             <span v-for="tool in tools" :key="tool" class="chip">{{ tool }}</span>
           </div>
-          <p v-else class="mono-dim">服务未运行或工具不可用。</p>
+          <p v-else class="mono-dim">{{ t('status.toolsEmpty') }}</p>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel__head">
-          <span class="panel__title">客户端配置</span>
+          <span class="panel__title">{{ t('status.clientConfig') }}</span>
           <el-button
             size="small"
             :disabled="!endpoint"
-            @click="copy(JSON.stringify(store.clientConfig?.mcpServers, null, 2), '配置')"
+            @click="copy(JSON.stringify(store.clientConfig?.mcpServers, null, 2), t('status.clientConfig'))"
           >
-            复制
+            {{ t('common.copy') }}
           </el-button>
         </div>
         <div class="panel__body">
-          <div v-if="endpoint" class="endpoint" @click="copy(endpoint, '端点')">
+          <div v-if="endpoint" class="endpoint" @click="copy(endpoint, t('status.endpoint'))">
             {{ endpoint }}
-            <span class="endpoint__hint">点击复制</span>
+            <span class="endpoint__hint">{{ t('status.clickToCopy') }}</span>
           </div>
           <div v-for="command in store.clientConfig?.cliCommands ?? []" :key="command.label" class="cmd">
             <span class="cmd__label">{{ command.label }}</span>
             <code>{{ command.command }}</code>
           </div>
           <p class="mono-dim note">
-            默认生成 HTTP 传输直连 <code>/api/v1/mcp</code>，不经过 v3.21.14 有缺陷的内置 stdio proxy。
+            {{ t('status.transportNote') }}
           </p>
         </div>
       </section>

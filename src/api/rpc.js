@@ -1,3 +1,5 @@
+import i18n from '../i18n';
+
 const PORT_KEY = 'mcpb.backendPort';
 
 /** Electron 主进程注入的端口；浏览器里没有这个对象 */
@@ -40,7 +42,7 @@ export function setPort(port) {
  */
 export async function rpc(method, params = {}) {
   if (!currentPort) {
-    throw new Error('尚未设置后端端口，请先在设置页填写');
+    throw new Error(i18n.global.t('errors.portMissing'));
   }
   requestId += 1;
   const response = await fetch(`http://127.0.0.1:${currentPort}/rpc`, {
@@ -51,7 +53,12 @@ export async function rpc(method, params = {}) {
 
   const payload = await response.json();
   if (payload.error) {
-    throw new Error(`[${payload.error.code}] ${payload.error.message}`);
+    throw new Error(
+      i18n.global.t('errors.requestFailed', {
+        code: payload.error.code,
+        message: payload.error.message,
+      })
+    );
   }
   return payload.result;
 }

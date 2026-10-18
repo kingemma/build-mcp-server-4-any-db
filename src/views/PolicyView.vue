@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useAppStore, OPERATIONS, OPERATION_LABELS } from '../stores/app';
-import { STATES } from '../utils/policy';
+import { useI18n } from 'vue-i18n';
+import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
+import { formatDetail, formatOperationRules } from '../utils/policy';
 
 const store = useAppStore();
+const { t } = useI18n();
 
 const currentRows = computed(() => {
   const rows = [];
@@ -19,16 +21,12 @@ const currentRows = computed(() => {
 const changes = computed(() => store.changes);
 
 function detailsOf(operation) {
-  const parts = [];
-  if (operation.filters.length > 0) parts.push(`过滤 ${operation.filters.join(' / ')}`);
-  if (operation.columns.length > 0) parts.push(`列 ${operation.columns.join(', ')}`);
-  if (operation.limit !== null) parts.push(`默认 limit ${operation.limit}`);
-  return parts.join(' · ') || '—';
+  return formatOperationRules(operation, t) || t('common.dash');
 }
 
 async function refresh() {
   await store.loadCurrentPolicy();
-  ElMessage.success('已重载生效策略');
+  ElMessage.success(t('policy.reloaded'));
 }
 
 onMounted(() => {
@@ -42,20 +40,24 @@ onMounted(() => {
   <div class="stack">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">当前生效策略</span>
+        <span class="panel__title">{{ t('policy.current') }}</span>
         <div class="actions">
-          <span class="pill pill--idle">来源 get_current_config</span>
-          <el-button size="small" :loading="store.isBusy" @click="refresh">重载</el-button>
+          <span class="pill pill--idle">{{ t('policy.source') }}</span>
+          <el-button size="small" :loading="store.isBusy" @click="refresh">
+            {{ t('policy.reload') }}
+          </el-button>
         </div>
       </div>
       <div class="panel__body panel__body--flush">
         <table v-if="currentRows.length" class="policy">
           <thead>
             <tr>
-              <th>角色</th>
-              <th>表</th>
-              <th v-for="operation in OPERATIONS" :key="operation">{{ OPERATION_LABELS[operation] }}</th>
-              <th>附加规则</th>
+              <th>{{ t('policy.role') }}</th>
+              <th>{{ t('policy.table') }}</th>
+              <th v-for="operation in OPERATIONS" :key="operation">
+                {{ t(OPERATION_KEYS[operation]) }}
+              </th>
+              <th>{{ t('policy.extraRules') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -64,7 +66,7 @@ onMounted(() => {
               <td class="mono">{{ row.table }}</td>
               <td v-for="operation in OPERATIONS" :key="operation">
                 <span class="state" :class="`state--${row.operations[operation].state}`">
-                  {{ STATES[row.operations[operation].state] }}
+                  {{ t(STATE_KEYS[row.operations[operation].state]) }}
                 </span>
               </td>
               <td class="detail">{{ detailsOf(row.operations.query) }}</td>
@@ -72,37 +74,36 @@ onMounted(() => {
           </tbody>
         </table>
         <p v-else class="mono-dim pad">
-          {{ store.isRunning ? '还没读到生效策略，点「重载」拉取一次。' : 'GraphJin 未运行。' }}
+          {{ store.isRunning ? t('policy.emptyRunning') : t('policy.emptyStopped') }}
         </p>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">待应用变更</span>
+        <span class="panel__title">{{ t('policy.pending') }}</span>
         <span class="pill" :class="changes.length ? 'pill--warn' : 'pill--on'">
-          <span class="dot" />{{ changes.length ? `${changes.length} 项` : '与生效策略一致' }}
+          <span class="dot" />
+          {{
+            changes.length ? t('policy.changeCount', { count: changes.length }) : t('policy.inSync')
+          }}
         </span>
       </div>
       <div class="panel__body">
         <ul v-if="changes.length" class="changes">
           <li v-for="(change, index) in changes" :key="index">
-            <b>{{ change.role }}</b> · {{ change.table }} · {{ OPERATION_LABELS[change.operation] }}
-            <span class="pill pill--tiny">{{ change.kind === 'added' ? '新增' : '修改' }}</span>
-            <span class="from">{{ STATES[change.from.state] }}</span>
+            <b>{{ change.role }}</b> · {{ change.table }} · {{ t(OPERATION_KEYS[change.operation]) }}
+            <span class="pill pill--tiny">
+              {{ change.kind === 'added' ? t('policy.added') : t('policy.changed') }}
+            </span>
+            <span class="from">{{ t(STATE_KEYS[change.from.state]) }}</span>
             <span class="arrow">→</span>
-            <span class="to">{{ STATES[change.to.state] }}</span>
-            <span v-if="change.detail" class="detail">{{ change.detail }}</span>
+            <span class="to">{{ t(STATE_KEYS[change.to.state]) }}</span>
+            <span v-if="change.detail" class="detail">{{ formatDetail(change.detail, t) }}</span>
           </li>
         </ul>
-        <p v-else class="mono-dim">
-          权限矩阵与当前生效策略一致。改动开关或规则后这里会出现 diff。
-        </p>
-        <p class="note">
-          说明：<code>gj_security</code> 走 <code>/api/v1/graphql</code> 的 root，需要 admin JWT，
-          实测在 anon/dev 头下均不可达，因此策略真相来源是 MCP 的
-          <code>get_current_config</code>（顶层键：roles / system / databases / mcp / workflows）。
-        </p>
+        <p v-else class="mono-dim">{{ t('policy.noChanges') }}</p>
+        <p class="note">{{ t('policy.sourceNote') }}</p>
       </div>
     </section>
   </div>

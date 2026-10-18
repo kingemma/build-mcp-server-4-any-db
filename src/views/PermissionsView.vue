@@ -1,9 +1,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useAppStore, OPERATIONS, OPERATION_LABELS } from '../stores/app';
+import { useI18n } from 'vue-i18n';
+import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
+import { formatDetail } from '../utils/policy';
 
 const store = useAppStore();
+const { t } = useI18n();
 
 const newRole = ref('');
 const selectedDatabase = ref('');
@@ -35,7 +38,7 @@ watch(
 function addRole() {
   const added = store.addRole(newRole.value);
   if (!added) {
-    ElMessage.warning('角色名为空或已存在');
+    ElMessage.warning(t('permissions.roleExists'));
     return;
   }
   newRole.value = '';
@@ -54,9 +57,19 @@ function ruleBadge(role, table, operation) {
   const entry = operationOf(role, table, operation);
   if (!entry) return '';
   const parts = [];
-  if (entry.filters?.length) parts.push(`${entry.filters.length} 过滤`);
-  if (entry.columns?.length) parts.push(entry.columnMode === 'block' ? '列黑名单' : '列白名单');
-  if (operation === 'query' && entry.limit) parts.push(`limit ${entry.limit}`);
+  if (entry.filters?.length) {
+    parts.push(t('permissions.badge.filters', { count: entry.filters.length }));
+  }
+  if (entry.columns?.length) {
+    parts.push(
+      entry.columnMode === 'block'
+        ? t('permissions.badge.blockList')
+        : t('permissions.badge.allowList')
+    );
+  }
+  if (operation === 'query' && entry.limit) {
+    parts.push(t('permissions.badge.limit', { count: entry.limit }));
+  }
   return parts.join(' · ');
 }
 
@@ -93,11 +106,11 @@ const changes = computed(() => store.changes);
 
 async function apply() {
   if (!selectedDatabase.value) {
-    ElMessage.warning('请选择目标库');
+    ElMessage.warning(t('permissions.selectDatabase'));
     return;
   }
   if (changes.value.length === 0) {
-    ElMessage.info('与当前生效策略一致，没有需要写入的变更');
+    ElMessage.info(t('permissions.noChanges'));
     return;
   }
   isConfirmOpen.value = true;
@@ -108,7 +121,7 @@ async function confirmApply() {
   try {
     const result = await store.applyPermissions(selectedDatabase.value);
     lastSummary.value = result;
-    ElMessage.success(`已写入：${changes.value.length} 项变更`);
+    ElMessage.success(t('permissions.applied', { count: changes.value.length }));
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -123,10 +136,17 @@ onMounted(() => {
   <div class="stack">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">角色</span>
+        <span class="panel__title">{{ t('permissions.roles') }}</span>
         <div class="add">
-          <el-input v-model="newRole" size="small" placeholder="角色名，如 readonly" style="width: 200px" />
-          <el-button size="small" type="primary" @click="addRole">添加</el-button>
+          <el-input
+            v-model="newRole"
+            size="small"
+            :placeholder="t('permissions.rolePlaceholder')"
+            style="width: 200px"
+          />
+          <el-button size="small" type="primary" @click="addRole">
+            {{ t('permissions.addRole') }}
+          </el-button>
         </div>
       </div>
       <div class="panel__body">
@@ -141,20 +161,28 @@ onMounted(() => {
             {{ role }}
           </button>
         </div>
-        <p v-else class="mono-dim">还没有角色。添加一个后即可为每张表配置四项操作开关。</p>
+        <p v-else class="mono-dim">{{ t('permissions.noRoles') }}</p>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">矩阵 · {{ store.currentRole || '未选择角色' }}</span>
+        <span class="panel__title">
+          {{
+            store.currentRole
+              ? t('permissions.matrix', { role: store.currentRole })
+              : t('permissions.matrixNone')
+          }}
+        </span>
         <div class="actions">
           <el-select v-model="selectedDatabase" size="small" style="width: 150px">
             <el-option v-for="name in store.databaseNames" :key="name" :label="name" :value="name" />
           </el-select>
-          <el-button size="small" @click="store.loadCurrentPolicy">重载生效策略</el-button>
+          <el-button size="small" @click="store.loadCurrentPolicy">
+            {{ t('permissions.reloadPolicy') }}
+          </el-button>
           <el-button size="small" type="primary" :loading="store.isBusy" @click="apply">
-            应用到 GraphJin
+            {{ t('permissions.apply') }}
           </el-button>
         </div>
       </div>
@@ -163,9 +191,9 @@ onMounted(() => {
         <table v-if="store.currentRole && rows.length" class="matrix">
           <thead>
             <tr>
-              <th class="col-table">表</th>
+              <th class="col-table">{{ t('permissions.tableColumn') }}</th>
               <th v-for="operation in OPERATIONS" :key="operation" class="col-op">
-                {{ OPERATION_LABELS[operation] }}
+                {{ t(OPERATION_KEYS[operation]) }}
               </th>
             </tr>
           </thead>
@@ -178,92 +206,102 @@ onMounted(() => {
                   :class="`toggle--${stateOf(store.currentRole, table, operation)}`"
                   @click="store.toggleOperation(store.currentRole, table, operation)"
                 >
-                  {{ stateOf(store.currentRole, table, operation) === 'allowed' ? '允许' : '阻止' }}
+                  {{
+                    stateOf(store.currentRole, table, operation) === 'allowed'
+                      ? t('permissions.states.allowed')
+                      : t('permissions.states.blocked')
+                  }}
                 </button>
                 <button class="rule" @click="openEditor(store.currentRole, table, operation)">
-                  {{ ruleBadge(store.currentRole, table, operation) || '规则' }}
+                  {{ ruleBadge(store.currentRole, table, operation) || t('permissions.rule') }}
                 </button>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="mono-dim pad">需要至少一个角色和一张已发现的表。</p>
+        <p v-else class="mono-dim pad">{{ t('permissions.emptyHint') }}</p>
       </div>
     </section>
 
     <section v-if="lastSummary" class="panel">
       <div class="panel__head">
-        <span class="panel__title">最近一次写入</span>
+        <span class="panel__title">{{ t('permissions.lastWrite') }}</span>
         <span class="pill pill--on">
-          <span class="dot" />{{ lastSummary.applied.success ? '成功' : '失败' }}
+          <span class="dot" />
+          {{ lastSummary.applied.success ? t('permissions.success') : t('permissions.failed') }}
         </span>
       </div>
       <div class="panel__body">
-        <div class="sync">补齐的角色：{{ lastSummary.synced.created.join(', ') || '（无）' }}</div>
+        <div class="sync">
+          {{
+            t('permissions.syncedRoles', {
+              names: lastSummary.synced.created.join(', ') || t('permissions.noneSynced'),
+            })
+          }}
+        </div>
         <ul class="changes">
           <li v-for="change in lastSummary.applied.changes ?? []" :key="change">{{ change }}</li>
         </ul>
       </div>
     </section>
 
-    <el-dialog v-model="isEditorOpen" :title="`${editing.role} · ${editing.table} · ${OPERATION_LABELS[editing.operation]}`" width="560">
+    <el-dialog
+      v-model="isEditorOpen"
+      :title="`${editing.role} · ${editing.table} · ${t(OPERATION_KEYS[editing.operation])}`"
+      width="560"
+    >
       <el-form label-position="top" size="small">
-        <el-form-item label="行过滤条件（每行一条，GraphJin DSL）">
+        <el-form-item :label="t('permissions.editor.filters')">
           <el-input
             v-model="editing.filters"
             type="textarea"
             :rows="3"
-            placeholder="{ org_id: { _eq: $user.org_id } }"
+            :placeholder="t('permissions.editor.filtersPlaceholder')"
           />
         </el-form-item>
 
-        <el-form-item label="列管控">
+        <el-form-item :label="t('permissions.editor.columnMode')">
           <el-radio-group v-model="editing.columnMode">
-            <el-radio value="none">不限制</el-radio>
-            <el-radio value="allow">白名单（只允许选中的列）</el-radio>
-            <el-radio value="block">阻止列表（屏蔽选中的列）</el-radio>
+            <el-radio value="none">{{ t('permissions.editor.unlimited') }}</el-radio>
+            <el-radio value="allow">{{ t('permissions.editor.allowList') }}</el-radio>
+            <el-radio value="block">{{ t('permissions.editor.blockList') }}</el-radio>
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item v-if="editing.columnMode !== 'none'" label="列">
+        <el-form-item v-if="editing.columnMode !== 'none'" :label="t('permissions.editor.columns')">
           <el-select v-model="editing.columns" multiple filterable style="width: 100%">
             <el-option v-for="column in columnsOf(editing.table)" :key="column" :label="column" :value="column" />
           </el-select>
-          <span class="hint">
-            GraphJin 的 columns 只接受数组（实测对象形态 {allow}/{block} 会被 schema 拒绝），
-            阻止列表会转成「全部列减去选中列」的补集白名单写入。查询被屏蔽的列会报错
-            <code>db column blocked</code>。
-          </span>
+          <span class="hint">{{ t('permissions.editor.columnsHint') }}</span>
         </el-form-item>
 
-        <el-form-item v-if="editing.operation === 'query'" label="返回行数默认值">
+        <el-form-item v-if="editing.operation === 'query'" :label="t('permissions.editor.limit')">
           <el-input-number v-model="editing.limit" :min="1" controls-position="right" />
-          <span class="hint">仅作为不带 limit 时的默认值，查询显式指定 limit 会覆盖它</span>
+          <span class="hint">{{ t('permissions.editor.limitHint') }}</span>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="isEditorOpen = false">取消</el-button>
-        <el-button type="primary" @click="saveEditor">保存</el-button>
+        <el-button @click="isEditorOpen = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="saveEditor">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="isConfirmOpen" title="确认写入" width="640">
-      <p class="warn">
-        legacy 模式下配置更新<b>立即生效</b>，没有 preview / 回滚。请确认下面
-        {{ changes.length }} 项变更后再写入。
-      </p>
+    <el-dialog v-model="isConfirmOpen" :title="t('permissions.confirm.title')" width="640">
+      <p class="warn">{{ t('permissions.confirm.warning', { count: changes.length }) }}</p>
       <ul class="changes">
         <li v-for="(change, index) in changes" :key="index">
-          <b>{{ change.role }}</b> · {{ change.table }} · {{ OPERATION_LABELS[change.operation] }}
-          <span class="from">{{ change.from.state }}</span>
+          <b>{{ change.role }}</b> · {{ change.table }} · {{ t(OPERATION_KEYS[change.operation]) }}
+          <span class="from">{{ t(STATE_KEYS[change.from.state]) }}</span>
           <span class="arrow">→</span>
-          <span class="to">{{ change.to.state }}</span>
-          <span v-if="change.detail" class="detail">{{ change.detail }}</span>
+          <span class="to">{{ t(STATE_KEYS[change.to.state]) }}</span>
+          <span v-if="change.detail" class="detail">{{ formatDetail(change.detail, t) }}</span>
         </li>
       </ul>
       <template #footer>
-        <el-button @click="isConfirmOpen = false">取消</el-button>
-        <el-button type="primary" :loading="store.isBusy" @click="confirmApply">确认写入</el-button>
+        <el-button @click="isConfirmOpen = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="store.isBusy" @click="confirmApply">
+          {{ t('permissions.confirm.submit') }}
+        </el-button>
       </template>
     </el-dialog>
   </div>

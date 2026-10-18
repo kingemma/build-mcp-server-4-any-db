@@ -1,20 +1,35 @@
 <script setup>
 import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
 import { routes } from './router';
+import { ELEMENT_LOCALES, SUPPORTED_LOCALES } from './locales';
+import i18n, { setLocale } from './i18n';
 
 const store = useAppStore();
 const route = useRoute();
+const { t } = useI18n();
 
-const navItems = computed(() => routes.filter((item) => item.meta?.title));
-const current = computed(() => route.meta ?? {});
+/** i18n.global.locale 是 ref，computed 能跟踪它，切语言后整棵树重渲染 */
+const locale = computed({
+  get: () => i18n.global.locale.value,
+  set: (value) => setLocale(value),
+});
+const elementLocale = computed(() => ELEMENT_LOCALES[locale.value]);
+
+const navItems = computed(() => routes.filter((item) => item.meta?.titleKey));
+const navTitle = (item) => t(item.meta.titleKey);
+const navHint = (item) => t(item.meta.hintKey);
+const pageTitle = computed(() => (route.meta?.titleKey ? t(route.meta.titleKey) : ''));
+const pageHint = computed(() => (route.meta?.hintKey ? t(route.meta.hintKey) : ''));
 
 onMounted(() => store.refreshBackend());
 </script>
 
 <template>
-  <div class="shell">
+  <el-config-provider :locale="elementLocale">
+    <div class="shell">
     <aside class="rail">
       <div class="brand">
         <div class="brand__mark">◈</div>
@@ -32,28 +47,39 @@ onMounted(() => store.refreshBackend());
           class="nav__item"
           active-class="nav__item--active"
         >
-          <span class="nav__title">{{ item.meta.title }}</span>
-          <span class="nav__hint">{{ item.meta.hint }}</span>
+          <span class="nav__title">{{ navTitle(item) }}</span>
+          <span class="nav__hint">{{ navHint(item) }}</span>
         </RouterLink>
       </nav>
 
       <div class="rail__foot">
         <span class="dot" :class="store.isRunning ? 'dot--on' : 'dot--off'" />
-        <span class="mono-dim">{{ store.isRunning ? 'graphjin live' : 'graphjin down' }}</span>
+        <span class="mono-dim">{{ store.isRunning ? t('app.live') : t('app.down') }}</span>
       </div>
     </aside>
 
     <main class="stage">
       <header class="topbar">
         <div>
-          <div class="eyebrow">{{ current.hint }}</div>
-          <h1 class="topbar__title">{{ current.title }}</h1>
+          <div class="eyebrow">{{ pageHint }}</div>
+          <h1 class="topbar__title">{{ pageTitle }}</h1>
         </div>
         <div class="topbar__meta">
+          <el-select v-model="locale" size="small" class="locale" :aria-label="t('app.language')">
+            <el-option
+              v-for="item in SUPPORTED_LOCALES"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
           <span class="pill" :class="store.isBackendUp ? 'pill--on' : 'pill--off'">
-            <span class="dot" />后端 {{ store.port || '未连接' }}
+            <span class="dot" />
+            {{ t('app.backend', { port: store.port || t('app.backendMissing') }) }}
           </span>
-          <span v-if="store.isRunning" class="pill pill--idle">:{{ store.status.port }}</span>
+          <span v-if="store.isRunning" class="pill pill--idle">
+            {{ t('app.port', { port: store.status.port }) }}
+          </span>
         </div>
       </header>
 
@@ -61,7 +87,8 @@ onMounted(() => store.refreshBackend());
         <RouterView />
       </section>
     </main>
-  </div>
+    </div>
+  </el-config-provider>
 </template>
 
 <style scoped>
@@ -184,6 +211,10 @@ onMounted(() => store.refreshBackend());
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.locale {
+  width: 104px;
 }
 
 .content {

@@ -1,9 +1,11 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 import { useAppStore } from '../stores/app';
 
 const store = useAppStore();
+const { t, te } = useI18n();
 
 const form = reactive({
   name: 'app',
@@ -33,6 +35,15 @@ const selected = computed(() => store.dbTypes.find((item) => item.id === form.ty
 const wireType = computed(() => selected.value?.wireType ?? '');
 const isFileBased = computed(() => form.mode === 'path');
 const isDsn = computed(() => form.mode === 'dsn');
+
+/** 类型提示来自后端（中文），内置类型按 id 用前端文案覆盖 */
+const selectedNote = computed(() => {
+  const item = selected.value;
+  if (!item) return '';
+  if (item.custom) return t('connections.customTemplateNote', { wireType: item.wireType });
+  const key = `connections.dbNotes.${item.id}`;
+  return te(key) ? t(key) : (item.note ?? '');
+});
 
 /** 切换类型时带上它的默认端口，省掉一次手填 */
 watch(selected, (item) => {
@@ -67,10 +78,10 @@ function buildConnection() {
 }
 
 function validate() {
-  if (!wireType.value) return '请选择数据库类型';
-  if (isDsn.value && !form.connectionString) return '连接串不能为空';
-  if (isFileBased.value && !form.path) return '文件路径不能为空';
-  if (!isDsn.value && !isFileBased.value && !form.dbname) return '请填写数据库名';
+  if (!wireType.value) return t('connections.validate.typeRequired');
+  if (isDsn.value && !form.connectionString) return t('connections.validate.dsnRequired');
+  if (isFileBased.value && !form.path) return t('connections.validate.pathRequired');
+  if (!isDsn.value && !isFileBased.value && !form.dbname) return t('connections.validate.dbnameRequired');
   return null;
 }
 
@@ -87,7 +98,8 @@ async function test() {
       appName: form.appName,
     });
     ElMessage[result.ok ? 'success' : 'warning'](
-      result.message || (result.ok ? '连接可用' : '连接失败')
+      result.message ||
+        (result.ok ? t('connections.messages.usable') : t('connections.messages.failed'))
     );
     // 后端在测试通过时已落盘，这里只把列表拉回来
     if (result.ok) await store.loadConnections();
@@ -111,7 +123,7 @@ async function connect() {
       appName: form.appName,
       databases: { [form.name]: buildConnection() },
     });
-    ElMessage.success(`已启动，发现 ${store.tables.length} 张表`);
+    ElMessage.success(t('connections.messages.started', { count: store.tables.length }));
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -132,7 +144,7 @@ async function saveTemplate() {
   try {
     await store.addDbTemplate({ ...template, mode: form.mode });
     isTemplateOpen.value = false;
-    ElMessage.success(`模板 ${template.label} 已保存`);
+    ElMessage.success(t('connections.messages.templateSaved', { label: template.label }));
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -141,25 +153,27 @@ async function saveTemplate() {
 async function dropTemplate(id) {
   await store.removeDbTemplate(id);
   if (form.typeId === id) form.typeId = store.dbTypes[0]?.id ?? '';
-  ElMessage.success('模板已删除');
+  ElMessage.success(t('connections.messages.templateRemoved'));
 }
 
 /** 已保存连接的「目标」摘要 */
 function targetOf(row) {
-  if (row.mode === 'dsn') return '连接串';
-  if (row.mode === 'path') return row.path || '—';
-  const host = row.host || '—';
+  if (row.mode === 'dsn') return t('connections.table.targetDsn');
+  if (row.mode === 'path') return row.path || t('common.dash');
+  const host = row.host || t('common.dash');
   const port = row.port ? `:${row.port}` : '';
   return `${host}${port}${row.dbname ? `/${row.dbname}` : ''}`;
 }
 
 function statusLabel(row) {
-  if (!row.readable) return '需重新录入';
-  return row.status === 'connected' ? '已连接' : '已测试';
+  if (!row.readable) return t('connections.status.unreadable');
+  return row.status === 'connected'
+    ? t('connections.status.connected')
+    : t('connections.status.verified');
 }
 
 function formatTime(value) {
-  if (!value) return '—';
+  if (!value) return t('common.dash');
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
@@ -175,7 +189,7 @@ async function fillForm(row) {
   try {
     const detail = await store.fetchConnection(row.id);
     if (!detail) {
-      ElMessage.warning('这条连接不存在');
+      ElMessage.warning(t('connections.messages.missing'));
       return;
     }
     form.typeId = resolveTypeId(detail.wireType);
@@ -199,10 +213,10 @@ async function fillForm(row) {
     if (detail.config) {
       form.password = detail.config.password ?? '';
       form.connectionString = detail.config.connection_string ?? '';
-      ElMessage.success(`已填入 ${detail.name}`);
+      ElMessage.success(t('connections.messages.filled', { name: detail.name }));
       return;
     }
-    ElMessage.warning('这条记录无法解密，已回填非敏感字段，请重新填写密码或连接串');
+    ElMessage.warning(t('connections.messages.secretLost'));
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -210,13 +224,13 @@ async function fillForm(row) {
 
 async function activate(row) {
   if (!row.readable) {
-    ElMessage.warning('这条连接无法解密，请重新填写并测试一次');
+    ElMessage.warning(t('connections.messages.secretLost'));
     return;
   }
   startingId.value = row.id;
   try {
     const connection = await store.startFromSavedConnection(row.id);
-    ElMessage.success(`已用 ${connection.name} 启动，发现 ${store.tables.length} 张表`);
+    ElMessage.success(t('connections.messages.startedFrom', { name: connection.name }));
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -226,13 +240,17 @@ async function activate(row) {
 
 async function dropConnection(row) {
   try {
-    await ElMessageBox.confirm(`删除连接 ${row.name}？`, '确认删除', { type: 'warning' });
+    await ElMessageBox.confirm(
+      t('connections.deleteConfirm.message', { name: row.name }),
+      t('connections.deleteConfirm.title'),
+      { type: 'warning' }
+    );
   } catch {
     return;
   }
   try {
     await store.removeConnection(row.id);
-    ElMessage.success('已删除');
+    ElMessage.success(t('connections.messages.removed'));
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -250,18 +268,18 @@ const summary = computed(() => ({
     <div class="duo">
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">新建连接</span>
-        <span class="eyebrow">{{ wireType || '未选择' }}</span>
+        <span class="panel__title">{{ t('connections.newConnection') }}</span>
+        <span class="eyebrow">{{ wireType || t('common.notSelected') }}</span>
       </div>
       <div class="panel__body">
         <el-form label-position="top" size="small">
           <div class="pair">
-            <el-form-item label="连接名">
-              <el-input v-model="form.name" placeholder="app" />
+            <el-form-item :label="t('connections.form.name')">
+              <el-input v-model="form.name" :placeholder="t('connections.form.namePlaceholder')" />
             </el-form-item>
-            <el-form-item label="类型">
+            <el-form-item :label="t('connections.form.type')">
               <el-select v-model="form.typeId" filterable>
-                <el-option-group label="内置">
+                <el-option-group :label="t('connections.form.groupBuiltIn')">
                   <el-option
                     v-for="item in store.builtInTypes"
                     :key="item.id"
@@ -269,7 +287,10 @@ const summary = computed(() => ({
                     :value="item.id"
                   />
                 </el-option-group>
-                <el-option-group v-if="store.customTemplates.length" label="自定义模板">
+                <el-option-group
+                  v-if="store.customTemplates.length"
+                  :label="t('connections.form.groupCustom')"
+                >
                   <el-option
                     v-for="item in store.customTemplates"
                     :key="item.id"
@@ -281,24 +302,27 @@ const summary = computed(() => ({
             </el-form-item>
           </div>
 
-          <p v-if="selected?.note" class="note">{{ selected.note }}</p>
+          <p v-if="selectedNote" class="note">{{ selectedNote }}</p>
           <p v-if="selected && selected.driverVerified === false" class="note note--warn">
-            该类型在配置白名单内，但连接层实测报 unsupported database type，驱动可能未实现。
+            {{ t('connections.form.driverUnverified') }}
           </p>
 
-          <el-form-item label="录入方式">
+          <el-form-item :label="t('connections.form.inputMode')">
             <el-radio-group v-model="form.mode">
-              <el-radio value="path">文件路径</el-radio>
-              <el-radio value="fields">连接字段</el-radio>
-              <el-radio value="dsn">连接串</el-radio>
+              <el-radio value="path">{{ t('connections.form.modePath') }}</el-radio>
+              <el-radio value="fields">{{ t('connections.form.modeFields') }}</el-radio>
+              <el-radio value="dsn">{{ t('connections.form.modeDsn') }}</el-radio>
             </el-radio-group>
           </el-form-item>
 
-          <el-form-item v-if="isFileBased" label="数据库文件">
-            <el-input v-model="form.path" placeholder="D:/data/app.db 或相对路径 app.db" />
+          <el-form-item v-if="isFileBased" :label="t('connections.form.dbFile')">
+            <el-input
+              v-model="form.path"
+              :placeholder="t('connections.form.dbFilePlaceholder')"
+            />
           </el-form-item>
 
-          <el-form-item v-else-if="isDsn" label="连接串">
+          <el-form-item v-else-if="isDsn" :label="t('connections.form.dsn')">
             <el-input
               v-model="form.connectionString"
               :placeholder="selected?.dsnExample || 'postgres://user:pass@host:5432/db'"
@@ -307,10 +331,10 @@ const summary = computed(() => ({
 
           <template v-else>
             <div class="pair">
-              <el-form-item label="主机">
+              <el-form-item :label="t('connections.form.host')">
                 <el-input v-model="form.host" />
               </el-form-item>
-              <el-form-item label="端口">
+              <el-form-item :label="t('connections.form.port')">
                 <el-input-number
                   v-model="form.port"
                   :min="1"
@@ -319,37 +343,46 @@ const summary = computed(() => ({
                 />
               </el-form-item>
             </div>
-            <el-form-item label="数据库名">
+            <el-form-item :label="t('connections.form.dbname')">
               <el-input v-model="form.dbname" />
             </el-form-item>
             <div class="pair">
-              <el-form-item label="用户">
+              <el-form-item :label="t('connections.form.user')">
                 <el-input v-model="form.user" />
               </el-form-item>
-              <el-form-item label="密码">
+              <el-form-item :label="t('connections.form.password')">
                 <el-input v-model="form.password" type="password" show-password />
               </el-form-item>
             </div>
-            <el-form-item label="Schema（可选）">
+            <el-form-item :label="t('connections.form.schemaOptional')">
               <el-input v-model="form.schema" />
             </el-form-item>
           </template>
 
           <div class="pair">
-            <el-form-item label="项目目录">
-              <el-input v-model="form.projectDir" placeholder="projects/app" />
+            <el-form-item :label="t('connections.form.projectDir')">
+              <el-input
+                v-model="form.projectDir"
+                :placeholder="t('connections.form.projectDirPlaceholder')"
+              />
             </el-form-item>
-            <el-form-item label="应用名">
+            <el-form-item :label="t('connections.form.appName')">
               <el-input v-model="form.appName" />
             </el-form-item>
           </div>
 
-          <el-checkbox v-model="form.isDefault">设为默认库</el-checkbox>
+          <el-checkbox v-model="form.isDefault">{{ t('connections.form.setDefault') }}</el-checkbox>
 
           <div class="row">
-            <el-button :loading="isTesting" @click="test">测试连接</el-button>
-            <el-button type="primary" :loading="isSubmitting" @click="connect">启动</el-button>
-            <el-button text @click="openTemplate">存为模板</el-button>
+            <el-button :loading="isTesting" @click="test">
+              {{ t('connections.actions.test') }}
+            </el-button>
+            <el-button type="primary" :loading="isSubmitting" @click="connect">
+              {{ t('connections.actions.start') }}
+            </el-button>
+            <el-button text @click="openTemplate">
+              {{ t('connections.actions.saveTemplate') }}
+            </el-button>
           </div>
         </el-form>
       </div>
@@ -357,7 +390,7 @@ const summary = computed(() => ({
 
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">已保存的模板</span>
+        <span class="panel__title">{{ t('connections.templates') }}</span>
         <span class="pill pill--idle">{{ store.customTemplates.length }}</span>
       </div>
       <div class="panel__body">
@@ -368,26 +401,25 @@ const summary = computed(() => ({
               <div class="templates__meta mono-dim">{{ item.id }} → {{ item.wireType }}</div>
             </div>
             <el-button size="small" text type="danger" @click="dropTemplate(item.id)">
-              删除
+              {{ t('common.delete') }}
             </el-button>
           </li>
         </ul>
-        <p v-else class="mono-dim note">
-          还没有自定义模板。TiDB / CockroachDB 这类兼容库不能写自己的类型名，
-          只能以 postgres / mysql 协议接入，用模板把这个映射固化下来。
-        </p>
+        <p v-else class="mono-dim note">{{ t('connections.templateEmpty') }}</p>
 
         <div class="facts">
           <div class="fact">
-            <span class="eyebrow">项目目录</span>
+            <span class="eyebrow">{{ t('connections.facts.projectDir') }}</span>
             <span class="fact__value fact__value--path">{{ summary.project }}</span>
           </div>
           <div class="fact">
-            <span class="eyebrow">已连接库</span>
-            <span class="fact__value">{{ summary.databases.join(', ') || '—' }}</span>
+            <span class="eyebrow">{{ t('connections.facts.connectedDatabases') }}</span>
+            <span class="fact__value">
+              {{ summary.databases.join(', ') || t('common.dash') }}
+            </span>
           </div>
           <div class="fact">
-            <span class="eyebrow">已发现表</span>
+            <span class="eyebrow">{{ t('connections.facts.discoveredTables') }}</span>
             <span class="fact__value">{{ summary.tables }}</span>
           </div>
         </div>
@@ -397,23 +429,27 @@ const summary = computed(() => ({
 
     <section class="panel">
       <div class="panel__head">
-        <span class="panel__title">已保存的连接</span>
+        <span class="panel__title">{{ t('connections.saved') }}</span>
         <div class="head-actions">
-          <span class="eyebrow">{{ store.connections.length }} 条</span>
-          <el-button size="small" @click="store.loadConnections">刷新</el-button>
+          <span class="eyebrow">
+            {{ t('connections.savedCount', { count: store.connections.length }) }}
+          </span>
+          <el-button size="small" @click="store.loadConnections">
+            {{ t('common.refresh') }}
+          </el-button>
         </div>
       </div>
       <div class="panel__body panel__body--flush">
         <table v-if="store.connections.length" class="conns">
           <thead>
             <tr>
-              <th>连接名</th>
-              <th>类型</th>
-              <th>目标</th>
-              <th>状态</th>
-              <th>项目目录</th>
-              <th>更新时间</th>
-              <th>操作</th>
+              <th>{{ t('connections.table.name') }}</th>
+              <th>{{ t('connections.table.type') }}</th>
+              <th>{{ t('connections.table.target') }}</th>
+              <th>{{ t('connections.table.status') }}</th>
+              <th>{{ t('connections.table.projectDir') }}</th>
+              <th>{{ t('connections.table.updatedAt') }}</th>
+              <th>{{ t('connections.table.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -432,7 +468,9 @@ const summary = computed(() => ({
               <td class="mono-dim conns__path">{{ row.projectDir }}</td>
               <td class="mono-dim">{{ formatTime(row.updatedAt) }}</td>
               <td class="conns__actions">
-                <el-button size="small" text @click="fillForm(row)">填入表单</el-button>
+                <el-button size="small" text @click="fillForm(row)">
+                  {{ t('connections.actions.fillForm') }}
+                </el-button>
                 <el-button
                   size="small"
                   text
@@ -441,44 +479,48 @@ const summary = computed(() => ({
                   :disabled="!row.readable"
                   @click="activate(row)"
                 >
-                  启动
+                  {{ t('connections.actions.start') }}
                 </el-button>
                 <el-button size="small" text type="danger" @click="dropConnection(row)">
-                  删除
+                  {{ t('common.delete') }}
                 </el-button>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="mono-dim note conns__empty">
-          还没有保存的连接。测试通过或启动成功后会自动记录在这里。
-        </p>
+        <p v-else class="mono-dim note conns__empty">{{ t('connections.table.empty') }}</p>
       </div>
     </section>
 
-    <el-dialog v-model="isTemplateOpen" title="保存为连接模板" width="480">
+    <el-dialog v-model="isTemplateOpen" :title="t('connections.dialog.title')" width="480">
       <el-form label-position="top" size="small">
-        <el-form-item label="标识（英文，作为下拉的 value）">
-          <el-input v-model="template.id" placeholder="tidb" />
+        <el-form-item :label="t('connections.dialog.id')">
+          <el-input v-model="template.id" :placeholder="t('connections.dialog.idPlaceholder')" />
         </el-form-item>
-        <el-form-item label="显示名">
-          <el-input v-model="template.label" placeholder="TiDB" />
+        <el-form-item :label="t('connections.dialog.label')">
+          <el-input
+            v-model="template.label"
+            :placeholder="t('connections.dialog.labelPlaceholder')"
+          />
         </el-form-item>
-        <el-form-item label="实际协议（必须在白名单内）">
+        <el-form-item :label="t('connections.dialog.wireType')">
           <el-select v-model="template.wireType" filterable>
             <el-option v-for="type in store.builtInTypes" :key="type.id" :label="type.wireType" :value="type.wireType" />
           </el-select>
         </el-form-item>
-        <el-form-item label="默认端口">
+        <el-form-item :label="t('connections.dialog.defaultPort')">
           <el-input-number v-model="template.defaultPort" :min="1" :max="65535" controls-position="right" />
         </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="template.note" placeholder="TiDB 走 MySQL 协议" />
+        <el-form-item :label="t('connections.dialog.note')">
+          <el-input
+            v-model="template.note"
+            :placeholder="t('connections.dialog.notePlaceholder')"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="isTemplateOpen = false">取消</el-button>
-        <el-button type="primary" @click="saveTemplate">保存</el-button>
+        <el-button @click="isTemplateOpen = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="saveTemplate">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>

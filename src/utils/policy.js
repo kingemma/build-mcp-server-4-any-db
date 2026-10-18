@@ -9,18 +9,19 @@
 /** 四项操作，与后端 buildRoleTableConfig 一一对应 */
 export const OPERATIONS = ['query', 'insert', 'update', 'delete'];
 
-export const OPERATION_LABELS = {
-  query: 'Query',
-  insert: 'Insert',
-  update: 'Update',
-  delete: 'Delete',
+/** 操作名的 i18n key；文案不落在这里，视图用 t() 渲染 */
+export const OPERATION_KEYS = {
+  query: 'permissions.operations.query',
+  insert: 'permissions.operations.insert',
+  update: 'permissions.operations.update',
+  delete: 'permissions.operations.delete',
 };
 
 /** 操作状态：allowed / blocked / default（配置里没写，走 default_block） */
-export const STATES = {
-  allowed: '允许',
-  blocked: '阻止',
-  default: '未配置',
+export const STATE_KEYS = {
+  allowed: 'permissions.states.allowed',
+  blocked: 'permissions.states.blocked',
+  default: 'permissions.states.default',
 };
 
 /**
@@ -145,11 +146,58 @@ export function resolveColumns(op, allColumns = []) {
   return allColumns.filter((column) => !blocked.has(column));
 }
 
+/**
+ * 把一项操作的附加规则抽成结构化片段，文案由调用方按语言渲染。
+ *
+ * @param {{filters: string[], columns: string[], limit: number|null}} operation
+ * @returns {{filters: number, columns: string[], limit: number|null}}
+ */
 function describeDetails(operation) {
+  return {
+    filters: operation.filters.length,
+    columns: operation.columns,
+    limit: operation.limit,
+  };
+}
+
+/**
+ * 渲染附加规则摘要。
+ *
+ * @param {{filters: number, columns: string[], limit: number|null}} detail
+ * @param {(key: string, params?: Object) => string} t i18n 的 t
+ * @returns {string}
+ */
+export function formatDetail(detail, t) {
+  if (!detail) return '';
   const parts = [];
-  if (operation.filters.length > 0) parts.push(`行过滤 ${operation.filters.length} 条`);
-  if (operation.columns.length > 0) parts.push(`列白名单 ${operation.columns.join(', ')}`);
-  if (operation.limit !== null) parts.push(`默认 limit ${operation.limit}`);
+  if (detail.filters > 0) parts.push(t('permissions.detail.filters', { count: detail.filters }));
+  if (detail.columns.length > 0) {
+    parts.push(t('permissions.detail.allowList', { columns: detail.columns.join(', ') }));
+  }
+  if (detail.limit !== null && detail.limit !== undefined) {
+    parts.push(t('permissions.detail.limit', { count: detail.limit }));
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * 渲染一项操作的规则摘要（把过滤条件与列名原样列出）。
+ *
+ * @param {{filters?: string[], columns?: string[], limit?: number|null}} operation
+ * @param {(key: string, params?: Object) => string} t
+ * @returns {string}
+ */
+export function formatOperationRules(operation, t) {
+  const parts = [];
+  if (operation?.filters?.length > 0) {
+    parts.push(t('permissions.detail.filtersShort', { value: operation.filters.join(' / ') }));
+  }
+  if (operation?.columns?.length > 0) {
+    parts.push(t('permissions.detail.columnsShort', { value: operation.columns.join(', ') }));
+  }
+  if (operation?.limit !== null && operation?.limit !== undefined) {
+    parts.push(t('permissions.detail.limitShort', { count: operation.limit }));
+  }
   return parts.join(' · ');
 }
 
