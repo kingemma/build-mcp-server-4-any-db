@@ -164,6 +164,23 @@ test('connections.test 对驱动未实现的类型直接返回 unsupported，不
   });
 });
 
+test('connections.test 缺必填字段时直接报错，不拉起临时实例', async () => {
+  await withServer(async ({ port }) => {
+    const missingPath = await (await post(port, {
+      jsonrpc: '2.0', id: 15, method: 'connections.test',
+      params: { name: 'app', connection: { type: 'sqlite' } },
+    })).json();
+    assert.strictEqual(missingPath.result.success, false);
+    assert.match(missingPath.result.errors[0], /path 或 connection_string/);
+
+    const missingType = await (await post(port, {
+      jsonrpc: '2.0', id: 16, method: 'connections.test',
+      params: { name: 'app', connection: {} },
+    })).json();
+    assert.match(missingType.result.errors[0], /type 不能为空/);
+  });
+});
+
 test('graphjin.start 对驱动未实现的类型提前报错', async () => {
   await withServer(async ({ port }) => {
     const response = await (await post(port, {

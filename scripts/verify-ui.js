@@ -31,6 +31,7 @@ const PAGE_SHOTS = [
   { route: 'connections', title: { 'zh-CN': '数据库连接', 'en-US': 'Connections' } },
   { route: 'schema', title: { 'zh-CN': 'Schema 浏览器', 'en-US': 'Schema Browser' } },
   { route: 'permissions', title: { 'zh-CN': '权限矩阵', 'en-US': 'Permission Matrix' } },
+  { route: 'users', title: { 'zh-CN': '用户与组织', 'en-US': 'Users & Orgs' } },
   { route: 'policy', title: { 'zh-CN': '策略预览', 'en-US': 'Policy Preview' } },
   { route: 'settings', title: { 'zh-CN': '设置', 'en-US': 'Settings' } },
 ];
@@ -222,6 +223,310 @@ async function seedPermissions(cdp) {
 }
 
 /**
+ * 用户/组织页：用表单建组织与成员，再确认列表与后端存储一致。
+ *
+ * 角色保留表单默认值：角色下拉是 allow-create 的 el-select，
+ * 脚本里往它内部 input 塞值不会稳定触发 v-model。
+ *
+ * @param {CdpSession} cdp
+ * @param {(method: string, params?: Object) => Promise<any>} rpc
+ */
+async function verifyUsers(cdp, rpc) {
+  await cdp.evaluate(`location.hash = '#/users'; 'ok'`);
+  await waitFor('用户页渲染', async () =>
+    (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
+    '用户与组织'
+  );
+
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('.head-actions input');
+    input.value = 'acme';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...document.querySelectorAll('.head-actions button')]
+      .find((button) => button.textContent.trim() === '创建')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('组织写入列表', async () =>
+    (await cdp.evaluate(
+      `[...document.querySelectorAll('.org')].some((item) => item.textContent.includes('acme'))`
+    )) === true
+  );
+  const organizations = await rpc('users.listOrganizations');
+  record('创建组织', organizations.some((org) => org.name === 'acme'), organizations.map((o) => o.name).join(', '));
+
+  await cdp.evaluate(`(() => {
+    const items = [...document.querySelectorAll('.form .el-form-item')];
+    const fill = (index, value) => {
+      const input = items[index]?.querySelector('input');
+      if (!input) return;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    fill(1, 'Ada');
+    fill(2, 'ada@example.com');
+    [...document.querySelectorAll('.form button')]
+      .find((button) => button.textContent.trim() === '添加成员')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('成员写入列表', async () =>
+    (await cdp.evaluate(
+      `document.querySelector('.users')?.textContent.includes('ada@example.com')`
+    )) === true
+  );
+  const users = await rpc('users.list');
+  const created = users.find((user) => user.email === 'ada@example.com');
+  record('创建成员并落库', Boolean(created) && created.role === 'viewer', created ? `role=${created.role}` : 'missing');
+
+  // 编辑成员资料
+  await cdp.evaluate(`(() => {
+    const row = [...document.querySelectorAll('.users tbody tr')]
+      .find((item) => item.textContent.includes('ada@example.com'));
+    [...row.querySelectorAll('button')]
+      .find((button) => button.textContent.trim() === '编辑')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('编辑成员弹窗', async () =>
+    (await cdp.evaluate(
+      `[...document.querySelectorAll('.el-dialog')].some((dialog) => dialog.textContent.includes('编辑成员'))`
+    )) === true
+  );
+  await cdp.evaluate(`(() => {
+    const dialog = [...document.querySelectorAll('.el-dialog')]
+      .find((item) => item.textContent.includes('编辑成员'));
+    const input = dialog.querySelectorAll('input')[0];
+    input.value = 'Ada L.';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent.trim() === '保存')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('成员资料落库', async () => {
+    const rows = await rpc('users.list');
+    return rows.some((user) => user.email === 'ada@example.com' && user.name === 'Ada L.');
+  });
+  record('编辑成员资料', true);
+
+  // 空组织删除（acme 下面有成员，留给后端单测覆盖拒绝路径）
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('.head-actions input');
+    input.value = 'temp';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...document.querySelectorAll('.head-actions button')]
+      .find((button) => button.textContent.trim() === '创建')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('临时组织出现', async () =>
+    (await cdp.evaluate(
+      `[...document.querySelectorAll('.org')].some((item) => item.textContent.includes('temp'))`
+    )) === true
+  );
+  await cdp.evaluate(`(() => {
+    const org = [...document.querySelectorAll('.org')]
+      .find((item) => item.textContent.includes('temp'));
+    org.querySelector('.org__remove')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('删除组织确认框', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.el-message-box').length`)) > 0
+  );
+  await cdp.evaluate(`(() => {
+    const box = [...document.querySelectorAll('.el-message-box')].pop();
+    box.querySelector('.el-button--primary')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('组织已删除', async () => {
+    const organizations = await rpc('users.listOrganizations');
+    return !organizations.some((org) => org.name === 'temp');
+  });
+  record('删除组织', true);
+}
+
+/** 生效配置里的角色名 / 表名 / block 标记大小写不统一（Go 结构体直出） */
+function findRole(config, name) {
+  return (config?.roles ?? []).find((role) => (role.name ?? role.Name) === name) ?? null;
+}
+
+function findRoleTable(role, tableName) {
+  return (role?.tables ?? []).find((table) => (table.Name ?? table.name) === tableName) ?? null;
+}
+
+function isQueryAllowed(role, tableName) {
+  const table = findRoleTable(role, tableName);
+  const query = table?.Query ?? table?.query;
+  return query ? query.Block === false || query.block === false : false;
+}
+
+/**
+ * 权限写入 → 策略归零 → 回滚，全链路在真实界面里点一遍。
+ *
+ * 之前 UI 冒烟只到 Schema；这条链路是产品核心，也是「legacy 模式立即生效」
+ * 最容易出事的地方，必须真机点一次。
+ *
+ * @param {CdpSession} cdp
+ * @param {(method: string, params?: Object) => Promise<any>} rpc
+ * @param {{baseUrl: string, projectDir: string}} status 运行中实例的状态
+ */
+async function verifyPermissions(cdp, rpc, status) {
+  const { baseUrl } = status;
+  await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
+  await waitFor('权限矩阵就绪', async () =>
+    (await cdp.evaluate(`Boolean(document.querySelector('.add input'))`)) === true
+  );
+
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('.add input');
+    input.value = 'readonly';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...document.querySelectorAll('.add button')]
+      .find((button) => button.textContent.trim() === '添加')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('矩阵出现 events 行', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.matrix tbody tr').length`)) > 0
+  );
+
+  const toggled = await cdp.evaluate(`(() => {
+    const row = [...document.querySelectorAll('.matrix tbody tr')]
+      .find((item) => item.querySelector('.col-table')?.textContent.trim() === 'events');
+    const button = row?.querySelector('.toggle');
+    if (!button) return false;
+    if (!button.classList.contains('toggle--allowed')) button.click();
+    return true;
+  })()`);
+  record('矩阵里放行 events.query', toggled === true);
+  await waitFor('开关变为允许', async () =>
+    (await cdp.evaluate(`document.querySelector('.matrix .toggle--allowed')?.textContent.trim()`)) ===
+    '允许'
+  );
+
+  await cdp.evaluate(`(() => {
+    [...document.querySelectorAll('.panel__head button')]
+      .find((button) => button.textContent.trim() === '应用到 GraphJin')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('写入确认框弹出', async () =>
+    (await cdp.evaluate(
+      `[...document.querySelectorAll('.el-dialog')].some((dialog) => dialog.textContent.includes('确认写入'))`
+    )) === true
+  );
+  await cdp.evaluate(`(() => {
+    const dialog = [...document.querySelectorAll('.el-dialog')].pop();
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent.trim() === '确认写入')?.click();
+    return 'ok';
+  })()`);
+
+  await waitFor('策略真的写进 GraphJin', async () => {
+    const config = await rpc('config.current', { baseUrl });
+    return isQueryAllowed(findRole(config, 'readonly'), 'events');
+  });
+  record('界面写入的权限已生效', true);
+
+  // 验证面板：用刚放行的 readonly 真跑一条 query
+  await cdp.evaluate(`(() => {
+    [...document.querySelectorAll('.panel__head button')]
+      .find((button) => button.textContent.trim() === '验证权限')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('验证弹窗打开', async () =>
+    (await cdp.evaluate(
+      `[...document.querySelectorAll('.el-dialog')].some((dialog) => dialog.textContent.includes('以角色执行查询'))`
+    )) === true
+  );
+  await cdp.evaluate(`(() => {
+    const dialog = [...document.querySelectorAll('.el-dialog')]
+      .find((item) => item.textContent.includes('以角色执行查询'));
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent.trim() === '执行')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('验证结果返回', async () =>
+    (await cdp.evaluate(`Boolean(document.querySelector('.verify__result'))`)) === true
+  );
+  const verifyText = await cdp.evaluate(
+    `document.querySelector('.verify__result')?.textContent ?? ''`
+  );
+  record(
+    '验证面板执行查询未被拦',
+    verifyText.includes('"data"') && !verifyText.includes('"errors"'),
+    verifyText.slice(0, 90)
+  );
+  await cdp.evaluate(`(() => {
+    const dialog = [...document.querySelectorAll('.el-dialog')]
+      .find((item) => item.textContent.includes('以角色执行查询'));
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent.trim() === '关闭')?.click();
+    return 'ok';
+  })()`);
+
+  await cdp.evaluate(`location.hash = '#/policy'; 'ok'`);
+  await waitFor('策略页显示无差异', async () =>
+    (await cdp.evaluate(`document.querySelector('.content')?.textContent.includes('与生效策略一致')`)) ===
+    true
+  );
+  record('写入后策略页与生效策略一致', true);
+
+  const snapshotsBefore = await rpc('permissions.snapshots', {
+    baseUrl,
+    projectDir: status.projectDir,
+  });
+  record('写入前自动留快照', snapshotsBefore.length > 0, `${snapshotsBefore.length} 份`);
+
+  await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
+  await waitFor('回到权限矩阵', async () =>
+    (await cdp.evaluate(`Boolean(document.querySelector('.matrix'))`)) === true
+  );
+  await cdp.evaluate(`(() => {
+    [...document.querySelectorAll('.panel__head button')]
+      .find((button) => button.textContent.trim() === '写入历史')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('历史里列出快照', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.snapshots li').length`)) > 0
+  );
+
+  await cdp.evaluate(`(() => {
+    document.querySelector('.snapshots li button')?.click();
+    return 'ok';
+  })()`);
+  await waitFor('回滚确认框弹出', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.el-message-box').length`)) > 0
+  );
+  await cdp.evaluate(`(() => {
+    const box = [...document.querySelectorAll('.el-message-box')].pop();
+    box.querySelector('.el-button--primary')?.click();
+    return 'ok';
+  })()`);
+
+  await waitFor('回滚后 readonly 不再生效', async () => {
+    const config = await rpc('config.current', { baseUrl });
+    return findRole(config, 'readonly') === null;
+  });
+  record('从写入历史回滚成功', true);
+
+  // 回滚后 readonly 已不在生效策略里，正常不该弹确认；但界面重载策略可能慢半拍，
+  // 弹了就把确认点掉，两种时序都接受
+  await cdp.evaluate(`(() => {
+    const chip = [...document.querySelectorAll('.role')]
+      .find((item) => item.textContent.includes('readonly'));
+    chip?.querySelector('.role__remove')?.click();
+    return 'ok';
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  if ((await cdp.evaluate(`document.querySelectorAll('.el-message-box').length`)) > 0) {
+    await cdp.evaluate(`(() => {
+      const box = [...document.querySelectorAll('.el-message-box')].pop();
+      box.querySelector('.el-button--primary')?.click();
+      return 'ok';
+    })()`);
+  }
+  await waitFor('本地角色已移除', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.role').length`)) === 0
+  );
+  record('删除本地角色', true);
+}
+
+/**
  * 逐页截图，中英文各一套。
  *
  * @param {CdpSession} cdp
@@ -260,10 +565,16 @@ async function main() {
   }
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-ui-'));
-  // 固定放在被 gitignore 的 projects/ 下：截图里的项目目录比系统临时路径可读
-  const projectDir = path.join(ROOT, 'projects', 'ui-verify-demo');
-  fs.rmSync(projectDir, { recursive: true, force: true });
-  fs.mkdirSync(projectDir, { recursive: true });
+  // 固定放在被 gitignore 的 projects/ 下：截图里的项目目录比系统临时路径可读。
+  // 编辑器 / 杀软偶尔会拦住删除（安全删除走回收站），这时换一个全新目录，
+  // 而不是复用半旧状态 —— 否则 dev.yml 里的 roles 会污染断言。
+  let projectDir = path.join(ROOT, 'projects', 'ui-verify-demo');
+  try {
+    fs.rmSync(projectDir, { recursive: true, force: true });
+    fs.mkdirSync(projectDir, { recursive: true });
+  } catch {
+    projectDir = fs.mkdtempSync(path.join(ROOT, 'projects', 'ui-verify-'));
+  }
 
   const appDb = new DatabaseSync(path.join(projectDir, 'app.db'));
   appDb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);');
@@ -438,6 +749,9 @@ async function main() {
     const appShot = path.join(workDir, 'schema-app.png');
     await cdp.screenshot(appShot);
 
+    await verifyUsers(cdp, rpc);
+    await verifyPermissions(cdp, rpc, await rpc('graphjin.status'));
+
     if (SHOT_DIR) await capturePages(cdp, SHOT_DIR);
 
     console.log(`\n截图：${connectionsShot}`);
@@ -456,7 +770,12 @@ async function main() {
     killTree(edge);
     await new Promise((resolve) => server.close(resolve));
     await backend.stop();
-    fs.rmSync(projectDir, { recursive: true, force: true });
+    // 清理失败不算验证失败：GraphJin/杀软可能还占着 .db 一瞬
+    try {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    } catch {
+      console.error(`项目目录未清理：${projectDir}`);
+    }
     if (process.env.KEEP_UI_ARTIFACTS) {
       console.log(`产物目录保留：${workDir}`);
     } else {

@@ -321,6 +321,58 @@ function createProject({ dir, ...options }) {
 }
 
 /**
+ * 定位 `databases:` 段的结束行（不含）。
+ *
+ * @param {string[]} lines
+ * @param {number} start `databases:` 所在行
+ * @returns {number}
+ */
+function findDatabasesEnd(lines, start) {
+  const tail = lines[start].slice(lines[start].indexOf(':') + 1).trim();
+  if (tail !== '') return collectFlowMap(lines, start).end;
+
+  let end = start + 1;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i].trim() === '') {
+      end = i + 1;
+      continue;
+    }
+    if (/^ */.exec(lines[i])[0].length === 0) break;
+    end = i + 1;
+  }
+  return end;
+}
+
+/**
+ * 拦截平台解析不了的 YAML 构造。
+ *
+ * anchors / aliases / merge keys 要完整 YAML 解析器才能展开；文本级合并会把
+ * `<<: *defaults` 当成普通字符串写回去，等于悄悄改坏用户配置。宁可拒绝并说清
+ * 原因，也不做半对的事。
+ *
+ * 只检查 `databases:` 段：别处的 anchor 不影响这次合并。
+ *
+ * @param {string[]} lines
+ * @param {number} start
+ */
+function assertMergeableDatabases(lines, start) {
+  const end = findDatabasesEnd(lines, start);
+  for (let i = start; i < end; i += 1) {
+    const line = lines[i];
+    if (/(^|\s)<<\s*:/.test(line)) {
+      throw new Error(
+        `dev.yml 的 databases 段用了 merge key（<<:），平台无法安全合并，请改成显式字段或手工编辑（第 ${i + 1} 行）`
+      );
+    }
+    if (/(^|\s|:)\s*[&*][A-Za-z0-9_-]+/.test(line)) {
+      throw new Error(
+        `dev.yml 的 databases 段用了 YAML anchor / alias（& / *），平台无法安全合并，请手工编辑（第 ${i + 1} 行）`
+      );
+    }
+  }
+}
+
+/**
  * 把一批连接合并进已有的 dev.yml。
  *
  * GraphJin 执行 update_current_config 后会把配置写回 dev.yml（roles 等都在里面），
@@ -335,6 +387,8 @@ function mergeDatabaseBlock(text, databases) {
   const lines = text.split('\n');
   const start = lines.findIndex((line) => /^databases\s*:/.test(line));
   if (start < 0) throw new Error('dev.yml 缺少 databases 段，无法合并连接');
+
+  assertMergeableDatabases(lines, start);
 
   const provided = Object.entries(databases ?? {});
   const providedDefault = provided.find(([, conn]) => conn?.default === true)?.[0] ?? null;

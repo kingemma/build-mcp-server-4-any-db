@@ -184,3 +184,31 @@ test('mergeDatabaseBlock: flow 段未闭合时报错', () => {
     /flow 段未闭合/
   );
 });
+
+test('mergeDatabaseBlock: databases 段含 merge key 时拒绝合并', () => {
+  const yaml = 'databases:\n  app:\n    <<: *defaults\n    path: app.db\nroles:\n';
+  assert.throws(
+    () => mergeDatabaseBlock(yaml, { analytics: { type: 'sqlite', path: 'a.db' } }),
+    /merge key/
+  );
+});
+
+test('mergeDatabaseBlock: databases 段含 anchor / alias 时拒绝合并', () => {
+  const anchored = 'databases:\n  app: &base\n    type: sqlite\n    path: app.db\n';
+  assert.throws(() => mergeDatabaseBlock(anchored, {}), /anchor \/ alias/);
+  assert.throws(() => mergeDatabaseBlock('databases:\n  app: *base\n', {}), /anchor \/ alias/);
+});
+
+test('mergeDatabaseBlock: databases 段之外的 anchor 不影响合并', () => {
+  const yaml = `app_name: Demo
+system: &defaults
+  debug: true
+databases:
+  app:
+    type: sqlite
+    path: app.db
+`;
+  const merged = mergeDatabaseBlock(yaml, { analytics: { type: 'sqlite', path: 'a.db' } });
+  assert.match(merged, /system: &defaults/);
+  assert.match(merged, /analytics:/);
+});

@@ -56,6 +56,10 @@ export const useAppStore = defineStore('app', {
     policyRaw: {},
     /** 当前生效策略，已按 applyDatabase 收敛成纯表名 */
     currentPolicy: {},
+    /** 是否成功读过一次生效策略：空策略与「还没读」要分开提示 */
+    hasLoadedPolicy: false,
+    /** 支持的 MCP 客户端清单（含各平台配置路径） */
+    clients: [],
     /** 内置数据库类型 + 用户自定义别名模板 */
     dbTypes: [],
     /** 本地已保存的连接（测试通过 / 启动成功后才会有） */
@@ -64,6 +68,9 @@ export const useAppStore = defineStore('app', {
     connectedDatabases: [],
     /** 权限写入快照（摘要，不含 roles 全文） */
     snapshots: [],
+    /** 本地组织与成员（SQLite，users.js） */
+    organizations: [],
+    users: [],
     /** Schema 页当前选中的库 */
     activeDatabase: '',
     lastError: '',
@@ -94,6 +101,16 @@ export const useAppStore = defineStore('app', {
       ),
     changes(state) {
       return diffPolicy(state.currentPolicy, this.pendingPolicy);
+    },
+    /** 成员角色候选：矩阵角色 + 生效策略角色 + 已在用的角色 */
+    roleNames(state) {
+      return [
+        ...new Set([
+          ...state.roles,
+          ...Object.keys(state.currentPolicy ?? {}),
+          ...state.users.map((user) => user.role),
+        ]),
+      ].sort();
     },
   },
 
@@ -155,6 +172,7 @@ export const useAppStore = defineStore('app', {
         this.matrix = {};
         this.policyRaw = {};
         this.currentPolicy = {};
+        this.hasLoadedPolicy = false;
         this.applyDatabase = '';
         this.snapshots = [];
       } finally {
@@ -173,6 +191,23 @@ export const useAppStore = defineStore('app', {
       const names = this.databaseNames;
       if (!names.includes(this.applyDatabase)) this.applyDatabase = names[0] ?? '';
       await this.loadCurrentPolicy();
+    },
+
+    /**
+     * 视图挂载时调用。
+     *
+     * 冷启动时视图的 onMounted 先于父组件拉回 status 执行，isRunning 还是 false，
+     * 直接判 running 会让页面停在空态。视图要同时 watch(isRunning) 再调一次，
+     * 这里保证 schema 只拉一次、策略空读不重复触发。
+     */
+    async ensureSchemaLoaded() {
+      if (!this.isRunning) return;
+      if (this.tables.length === 0) {
+        await this.loadSchema();
+        return;
+      }
+      if (!this.applyDatabase) this.applyDatabase = this.databaseNames[0] ?? '';
+      if (!this.hasLoadedPolicy) await this.loadCurrentPolicy();
     },
 
     /**
@@ -250,6 +285,34 @@ export const useAppStore = defineStore('app', {
       this.matrix[trimmed] = {};
       if (!this.currentRole) this.currentRole = trimmed;
       return true;
+    },
+
+    /**
+     * 从本地矩阵删掉一个角色。
+     *
+     * 只影响本地：GraphJin 里已经写入的角色与表规则不会被这次删除回收 ——
+     * 那需要回滚到写入前的快照。视图负责在角色已生效时给出提示。
+     *
+     * @param {string} name
+     * @returns {boolean} 是否真的删掉了本地角色
+     */
+    removeRole(name) {
+      const index = this.roles.indexOf(name);
+      if (index < 0) return false;
+      this.roles.splice(index, 1);
+      delete this.matrix[name];
+      if (this.currentRole === name) this.currentRole = this.roles[0] ?? '';
+      return true;
+    },
+
+    /**
+     * 判断角色是否已写进生效策略（任一库都算），用于删除前的提示。
+     *
+     * @param {string} name
+     * @returns {boolean}
+     */
+    isRoleEffective(name) {
+      return Object.keys(this.policyRaw?.[name] ?? {}).length > 0;
     },
 
     /**
@@ -352,6 +415,7 @@ export const useAppStore = defineStore('app', {
         return;
       }
       this.policyRaw = normalizeCurrentRoles(result.data);
+      this.hasLoadedPolicy = true;
       this.applyPolicyScope();
       // 启动后角色与矩阵都是空的：自动回填一次，已配置的策略才能继续编辑
       this.hydrateMatrixFromPolicy();
@@ -438,6 +502,117 @@ export const useAppStore = defineStore('app', {
       } finally {
         this.isBusy = false;
       }
+    },
+
+    /**
+     * 以指定角色执行一条 GraphQL，验证权限是否真的生效。
+     *
+     * 返回值就是 GraphJin 的 `{ data, errors }`：query 被拦时 data 里的字段是 null
+     * （不报错），写操作被拦才带 errors —— 界面必须把这两种情况分开说。
+     *
+     * @param {string} role
+     * @param {string} query
+     * @returns {Promise<{data?: Object, errors?: Array}>}
+     */
+    async executeGraphql(role, query) {
+      if (!this.isRunning) throw new Error(i18n.global.t('errors.verifyNeedsRunning'));
+      return rpc('graphql.execute', { baseUrl: this.baseUrl, role, query });
+    },
+
+    /** 支持的 MCP 客户端（Claude Desktop / Cursor …）及各平台配置路径 */
+    async loadClients() {
+      const result = await rpcSafe('mcp.clients', { platform: undefined });
+      if (result.ok) this.clients = result.data ?? [];
+      else this.lastError = result.error ?? '';
+    },
+
+    /** 组织与成员都存在本地 SQLite，不依赖 GraphJin 是否在跑 */
+    async loadOrganizations() {
+      const result = await rpcSafe('users.listOrganizations');
+      if (result.ok) this.organizations = result.data ?? [];
+      else this.lastError = result.error ?? '';
+    },
+
+    async loadUsers() {
+      const result = await rpcSafe('users.list');
+      if (result.ok) this.users = result.data ?? [];
+      else this.lastError = result.error ?? '';
+    },
+
+    /**
+     * @param {string} name 组织名
+     * @returns {Promise<Object>} 新建的组织
+     */
+    async createOrganization(name) {
+      const result = await rpc('users.createOrganization', { name });
+      await this.loadOrganizations();
+      return result;
+    },
+
+    /**
+     * 删除组织。后端在组织还有成员时会拒绝，避免级联删掉成员。
+     *
+     * @param {number} organizationId
+     * @returns {Promise<{deleted: boolean, members: number}>}
+     */
+    async deleteOrganization(organizationId) {
+      const result = await rpc('users.deleteOrganization', { organizationId });
+      await this.loadOrganizations();
+      return result;
+    },
+
+    /**
+     * 改成员资料（姓名、邮箱）。角色单独走 setUserRole。
+     *
+     * @param {number} userId
+     * @param {{name: string, email: string}} payload
+     * @returns {Promise<Object>} 更新后的成员
+     */
+    async updateUser(userId, payload) {
+      const result = await rpc('users.update', { userId, ...payload });
+      await this.loadUsers();
+      return result;
+    },
+
+    /**
+     * 成员角色就是 GraphJin 角色名；角色不存在时写入规则会被拒，由 syncUserRoles 补齐。
+     *
+     * @param {{organizationId: number, name: string, email: string, role: string}} payload
+     * @returns {Promise<Object>} 新建的成员
+     */
+    async createUser(payload) {
+      const result = await rpc('users.create', payload);
+      await this.loadUsers();
+      return result;
+    },
+
+    /**
+     * @param {number} userId
+     * @param {string} role
+     * @returns {Promise<{updated: boolean}>}
+     */
+    async setUserRole(userId, role) {
+      const result = await rpc('users.setRole', { userId, role });
+      await this.loadUsers();
+      return result;
+    },
+
+    /**
+     * @param {number} userId
+     */
+    async deleteUser(userId) {
+      await rpc('users.delete', { userId });
+      await this.loadUsers();
+    },
+
+    /**
+     * 把成员用到的角色补齐进 GraphJin：角色不存在时 roles[].tables 会被拒。
+     *
+     * @returns {Promise<{created: string[], existing: string[]}>}
+     */
+    async syncUserRoles() {
+      if (!this.isRunning) throw new Error(i18n.global.t('users.syncNeedsRunning'));
+      return rpc('users.syncRoles', { baseUrl: this.baseUrl });
     },
 
     /**

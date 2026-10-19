@@ -67,6 +67,35 @@ test('用户：改角色与删除', () => {
   store.close();
 });
 
+test('用户：改资料，邮箱重复与缺字段都报错', () => {
+  const store = new UserStore(':memory:');
+  const org = store.createOrganization('Acme');
+  const alice = store.createUser({ organizationId: org.id, name: 'Alice', email: 'a@acme.test', role: 'admin' });
+  store.createUser({ organizationId: org.id, name: 'Bob', email: 'b@acme.test', role: 'analyst' });
+
+  const updated = store.updateUser(alice.id, { name: 'Alice Liddell', email: 'alice@acme.test' });
+  assert.strictEqual(updated.name, 'Alice Liddell');
+  assert.strictEqual(updated.email, 'alice@acme.test');
+  assert.strictEqual(updated.role, 'admin');
+  assert.strictEqual(store.updateUser(9999, { name: 'X', email: 'x@test' }), null);
+  assert.throws(() => store.updateUser(alice.id, { name: '  ', email: 'x@test' }), /用户名 不能为空/);
+  assert.throws(() => store.updateUser(alice.id, { name: 'X', email: 'b@acme.test' }), UserStoreError);
+  store.close();
+});
+
+test('组织：有成员时拒绝删除，清空后可删', () => {
+  const store = new UserStore(':memory:');
+  const org = store.createOrganization('Acme');
+  const user = store.createUser({ organizationId: org.id, name: 'A', email: 'a@test', role: 'admin' });
+
+  assert.throws(() => store.deleteOrganization(org.id), /还有 1 个成员/);
+  store.deleteUser(user.id);
+  assert.deepStrictEqual(store.deleteOrganization(org.id), { deleted: true, members: 0 });
+  assert.strictEqual(store.listOrganizations().length, 0);
+  assert.strictEqual(store.deleteOrganization(org.id).deleted, false);
+  store.close();
+});
+
 test('角色：去重且有序', () => {
   const store = new UserStore(':memory:');
   const org = store.createOrganization('Acme');

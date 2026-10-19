@@ -52,6 +52,32 @@ function unsupportedDriverReason(type) {
   return `数据库类型 ${type} 在配置白名单内，但当前 GraphJin 3.21.14 的连接层实测报 unsupported database type，驱动未实现。请改用 postgres / mysql 协议或自定义别名模板。`;
 }
 
+/**
+ * 连接字段的前置校验。
+ *
+ * `validate_config` 必须由一个活着的 GraphJin 执行（起进程约 1–2 s），
+ * 明显缺字段的配置没必要付这个成本。这里只查「文档明确要求」的字段，
+ * 不做协议层推断 —— 误拦一个其实能连上的配置，代价比多等两秒大得多。
+ *
+ * @param {Object} connection dev.yml 形态的连接配置
+ * @returns {string[]} 问题清单；空数组表示可以继续交给 GraphJin 验证
+ */
+function validateConnectionFields(connection = {}) {
+  const problems = [];
+  if (typeof connection?.type !== 'string' || connection.type.trim() === '') {
+    problems.push('type 不能为空');
+  }
+  // 基线 §12：sqlite 必须给 path 或 connection_string
+  if (connection?.type === 'sqlite' && !connection.path && !connection.connection_string) {
+    problems.push('sqlite 需要 path 或 connection_string');
+  }
+  // 基线 §12：snowflake 必须给 connection_string
+  if (connection?.type === 'snowflake' && !connection.connection_string) {
+    problems.push('snowflake 需要 connection_string');
+  }
+  return problems;
+}
+
 const FIELD_MODE = 'fields';
 const PATH_MODE = 'path';
 const DSN_MODE = 'dsn';
@@ -284,6 +310,7 @@ module.exports = {
   DbTemplateError,
   isDriverVerified,
   unsupportedDriverReason,
+  validateConnectionFields,
   listTypes,
   addTemplate,
   removeTemplate,

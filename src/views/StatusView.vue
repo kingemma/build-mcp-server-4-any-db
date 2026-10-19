@@ -25,7 +25,7 @@ async function loadTools() {
 
 async function refreshAll() {
   await store.refreshStatus();
-  await store.loadClientConfig();
+  await Promise.all([store.loadClientConfig(), store.loadClients()]);
   await loadTools();
 }
 
@@ -134,6 +134,13 @@ onMounted(refreshAll);
           <div v-for="command in store.clientConfig?.cliCommands ?? []" :key="command.label" class="cmd">
             <span class="cmd__label">{{ command.label }}</span>
             <code>{{ command.command }}</code>
+          </div>
+          <div v-if="store.clients.length" class="clients">
+            <span class="eyebrow">{{ t('status.clientsTitle') }}</span>
+            <div v-for="client in store.clients" :key="client.id" class="client">
+              <span class="client__label">{{ client.label }}</span>
+              <code class="client__path">{{ client.configPath }}</code>
+            </div>
           </div>
           <p class="mono-dim note">
             {{ t('status.transportNote') }}
@@ -250,6 +257,29 @@ onMounted(refreshAll);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+.clients {
+  margin-top: 14px;
+}
+
+.client {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.client__label {
+  flex-shrink: 0;
+  width: 120px;
+  color: var(--text-dim);
+}
+
+.client__path {
+  color: var(--text-faint);
+  word-break: break-all;
 }
 
 .cmd code {

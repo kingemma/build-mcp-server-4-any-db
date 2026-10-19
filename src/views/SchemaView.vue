@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { rpcSafe } from '../api/rpc';
@@ -84,11 +84,19 @@ async function reload() {
   ElMessage.success(t('schema.refreshed', { count: tables.value.length }));
 }
 
-onMounted(async () => {
-  if (!store.isRunning) return;
-  await store.loadConnectedDatabases();
-  await load(store.activeDatabase);
-});
+/**
+ * 冷启动时本组件先挂载、status 还没回来：watch 负责状态到位后补第二次，
+ * 否则直接刷新到 #/schema 会停在空态。
+ */
+watch(
+  () => store.isRunning,
+  async (running) => {
+    if (!running) return;
+    await store.loadConnectedDatabases();
+    await load(store.activeDatabase);
+  },
+  { immediate: true }
+);
 </script>
 
 <template>

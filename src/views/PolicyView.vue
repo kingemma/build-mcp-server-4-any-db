@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
@@ -7,6 +7,13 @@ import { formatDetail, formatOperationRules } from '../utils/policy';
 
 const store = useAppStore();
 const { t } = useI18n();
+
+/** 空态要分清三种情况：没运行 / 还没读 / 读了但该库没规则 */
+const emptyText = computed(() => {
+  if (!store.isRunning) return t('policy.emptyStopped');
+  if (!store.hasLoadedPolicy) return t('policy.emptyRunning');
+  return t('policy.emptyNoRules');
+});
 
 const currentRows = computed(() => {
   const rows = [];
@@ -29,11 +36,17 @@ async function refresh() {
   ElMessage.success(t('policy.reloaded'));
 }
 
-onMounted(() => {
-  if (store.isRunning && Object.keys(store.currentPolicy ?? {}).length === 0) {
-    store.loadCurrentPolicy();
-  }
-});
+/**
+ * 本页需要 schema 才能确定「读哪个库」：不加载就只有空策略。
+ * 冷启动时 status 还没回来，watch(isRunning) 负责补第二次。
+ */
+watch(
+  () => store.isRunning,
+  (running) => {
+    if (running) store.ensureSchemaLoaded();
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -42,6 +55,20 @@ onMounted(() => {
       <div class="panel__head">
         <span class="panel__title">{{ t('policy.current') }}</span>
         <div class="actions">
+          <el-select
+            :model-value="store.applyDatabase"
+            size="small"
+            style="width: 150px"
+            :placeholder="t('policy.database')"
+            @change="store.selectDatabase"
+          >
+            <el-option
+              v-for="name in store.databaseNames"
+              :key="name"
+              :label="name"
+              :value="name"
+            />
+          </el-select>
           <span class="pill pill--idle">{{ t('policy.source') }}</span>
           <el-button size="small" :loading="store.isBusy" @click="refresh">
             {{ t('policy.reload') }}
@@ -73,9 +100,7 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
-        <p v-else class="mono-dim pad">
-          {{ store.isRunning ? t('policy.emptyRunning') : t('policy.emptyStopped') }}
-        </p>
+        <p v-else class="mono-dim pad">{{ emptyText }}</p>
       </div>
     </section>
 

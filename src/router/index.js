@@ -6,6 +6,7 @@ const StatusView = () => import('../views/StatusView.vue');
 const ConnectionsView = () => import('../views/ConnectionsView.vue');
 const SchemaView = () => import('../views/SchemaView.vue');
 const PermissionsView = () => import('../views/PermissionsView.vue');
+const UsersView = () => import('../views/UsersView.vue');
 const PolicyView = () => import('../views/PolicyView.vue');
 const SettingsView = () => import('../views/SettingsView.vue');
 
@@ -16,6 +17,7 @@ export const routes = [
   { path: '/connections', name: 'connections', component: ConnectionsView, meta: { titleKey: 'nav.connections.title', hintKey: 'nav.connections.hint' } },
   { path: '/schema', name: 'schema', component: SchemaView, meta: { titleKey: 'nav.schema.title', hintKey: 'nav.schema.hint' } },
   { path: '/permissions', name: 'permissions', component: PermissionsView, meta: { titleKey: 'nav.permissions.title', hintKey: 'nav.permissions.hint' } },
+  { path: '/users', name: 'users', component: UsersView, meta: { titleKey: 'nav.users.title', hintKey: 'nav.users.hint' } },
   { path: '/policy', name: 'policy', component: PolicyView, meta: { titleKey: 'nav.policy.title', hintKey: 'nav.policy.hint' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { titleKey: 'nav.settings.title', hintKey: 'nav.settings.hint' } },
 ];

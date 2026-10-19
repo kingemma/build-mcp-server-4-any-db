@@ -28,9 +28,11 @@ const {
   listTypes,
   removeTemplate,
   unsupportedDriverReason,
+  validateConnectionFields,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
-const { SnapshotStore, buildRollbackPatch } = require('./snapshots');const { dataFile } = require('./paths');
+const { SnapshotStore, buildRollbackPatch } = require('./snapshots');
+const { dataFile } = require('./paths');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
 const serviceCache = new Map();
@@ -171,6 +173,20 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       }
       return { deleted: store.deleteUser(params.userId) };
     })
+    .register('users.update', (params) => {
+      if (!Number.isInteger(params?.userId)) {
+        throw RpcError.invalidParams('userId 必须是整数');
+      }
+      const updated = store.updateUser(params.userId, params);
+      if (!updated) throw RpcError.invalidParams('用户不存在');
+      return updated;
+    })
+    .register('users.deleteOrganization', (params) => {
+      if (!Number.isInteger(params?.organizationId)) {
+        throw RpcError.invalidParams('organizationId 必须是整数');
+      }
+      return store.deleteOrganization(params.organizationId);
+    })
     .register('users.listRoles', () => store.listRoles())
     // 把平台里的角色补齐到 GraphJin，角色不存在时 roles[].tables 会被拒
     .register('users.syncRoles', async (params) => {
@@ -211,6 +227,11 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
           unsupported: true,
           errors: [unsupportedDriverReason(connection.type)],
         };
+      }
+      // 缺必填字段的配置不必起临时实例：一次进程启停约 1–2s，错误也还是同一个字段问题
+      const problems = validateConnectionFields(connection);
+      if (problems.length > 0) {
+        return { success: false, errors: problems };
       }
       const baseUrl =
         typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null;

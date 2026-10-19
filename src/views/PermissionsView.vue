@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
@@ -12,6 +12,10 @@ const newRole = ref('');
 const isEditorOpen = ref(false);
 const isConfirmOpen = ref(false);
 const isHistoryOpen = ref(false);
+const isVerifyOpen = ref(false);
+const isVerifying = ref(false);
+const verifyResult = ref(null);
+const verifyForm = reactive({ role: '', query: '' });
 const restoringId = ref(0);
 const editing = reactive({
   role: '',
@@ -39,6 +43,32 @@ function addRole() {
     return;
   }
   newRole.value = '';
+}
+
+/**
+ * 删除本地角色。
+ *
+ * 角色已写进生效策略时要二次确认：这里只删本地矩阵，GraphJin 里的规则还在，
+ * 想回收得用「写入历史」回滚。
+ */
+async function removeRole(role) {
+  if (store.isRoleEffective(role)) {
+    try {
+      await ElMessageBox.confirm(
+        t('permissions.removeRoleConfirm', { role }),
+        t('permissions.removeRole'),
+        {
+          confirmButtonText: t('permissions.removeRole'),
+          cancelButtonText: t('common.cancel'),
+          type: 'warning',
+        }
+      );
+    } catch {
+      return;
+    }
+  }
+  store.removeRole(role);
+  ElMessage.success(t('permissions.roleRemoved', { role }));
 }
 
 /** 视图只认纯表名，库名前缀由 store 统一补 */
@@ -157,6 +187,46 @@ async function importPolicy() {
   ElMessage.success(t('permissions.imported', imported));
 }
 
+/**
+ * 验证结论：GraphJin 拦截 query 是静默的（返回 null 且不报错），
+ * 拦截写操作才带 errors —— 所以「有错误」和「全 null」都要显式说出来。
+ */
+const verifyVerdict = computed(() => {
+  const result = verifyResult.value;
+  if (!result) return '';
+  if ((result.errors ?? []).length > 0) return t('permissions.verifyErrors');
+  const data = result.data ?? {};
+  return Object.values(data).every((value) => value === null)
+    ? t('permissions.verifyNull')
+    : '';
+});
+
+function openVerify() {
+  if (!store.isRunning) {
+    ElMessage.warning(t('errors.verifyNeedsRunning'));
+    return;
+  }
+  if (!verifyForm.role) verifyForm.role = store.currentRole || store.roleNames[0] || 'admin';
+  if (!verifyForm.query.trim()) {
+    const table = rows.value[0];
+    verifyForm.query = table ? `query { ${table} { id } }` : '';
+  }
+  verifyResult.value = null;
+  isVerifyOpen.value = true;
+}
+
+async function runVerify() {
+  if (!verifyForm.query.trim()) return;
+  isVerifying.value = true;
+  try {
+    verifyResult.value = await store.executeGraphql(verifyForm.role, verifyForm.query.trim());
+  } catch (error) {
+    verifyResult.value = { errors: [{ message: error.message }] };
+  } finally {
+    isVerifying.value = false;
+  }
+}
+
 /** 打开写入历史：每次写入前都有一份快照，可恢复到任意一份 */
 async function openHistory() {
   if (!store.isRunning) {
@@ -203,10 +273,16 @@ async function restoreSnapshot(snapshot) {
   }
 }
 
-onMounted(() => {
-  if (store.isRunning && store.tables.length === 0) store.loadSchema();
-  if (store.isRunning) store.loadSnapshots();
-});
+/** 冷启动时本组件先挂载、status 还没回来：watch 负责状态到位后补加载 */
+watch(
+  () => store.isRunning,
+  (running) => {
+    if (!running) return;
+    store.ensureSchemaLoaded();
+    store.loadSnapshots();
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -228,15 +304,24 @@ onMounted(() => {
       </div>
       <div class="panel__body">
         <div v-if="store.roles.length" class="roles">
-          <button
+          <div
             v-for="role in store.roles"
             :key="role"
             class="role"
             :class="{ 'role--active': store.currentRole === role }"
-            @click="store.currentRole = role"
           >
-            {{ role }}
-          </button>
+            <button type="button" class="role__name" @click="store.currentRole = role">
+              {{ role }}
+            </button>
+            <button
+              type="button"
+              class="role__remove"
+              :title="t('permissions.removeRole')"
+              @click.stop="removeRole(role)"
+            >
+              ×
+            </button>
+          </div>
         </div>
         <p v-else class="mono-dim">{{ t('permissions.noRoles') }}</p>
         <p class="admin-note mono-dim">{{ t('permissions.adminReserved') }}</p>
@@ -269,6 +354,9 @@ onMounted(() => {
           </el-button>
           <el-button size="small" @click="openHistory">
             {{ t('permissions.history') }}
+          </el-button>
+          <el-button size="small" :disabled="!store.isRunning" @click="openVerify">
+            {{ t('permissions.verify') }}
           </el-button>
           <el-button size="small" type="primary" :loading="store.isBusy" @click="apply">
             {{ t('permissions.apply') }}
@@ -409,6 +497,36 @@ onMounted(() => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="isVerifyOpen" :title="t('permissions.verifyTitle')" width="640">
+      <el-form label-position="top" size="small">
+        <el-form-item :label="t('permissions.verifyRole')">
+          <el-select
+            v-model="verifyForm.role"
+            style="width: 200px"
+            filterable
+            allow-create
+            default-first-option
+          >
+            <el-option v-for="role in store.roleNames" :key="role" :label="role" :value="role" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('permissions.verifyQuery')">
+          <el-input v-model="verifyForm.query" type="textarea" :rows="6" spellcheck="false" />
+        </el-form-item>
+      </el-form>
+      <p class="verify-hint">{{ t('permissions.verifyHint') }}</p>
+      <div v-if="verifyResult">
+        <p v-if="verifyVerdict" class="verify__verdict">{{ verifyVerdict }}</p>
+        <pre class="verify__result">{{ JSON.stringify(verifyResult, null, 2) }}</pre>
+      </div>
+      <template #footer>
+        <el-button @click="isVerifyOpen = false">{{ t('common.close') }}</el-button>
+        <el-button type="primary" :loading="isVerifying" @click="runVerify">
+          {{ t('permissions.verifyRun') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="isConfirmOpen" :title="t('permissions.confirm.title')" width="640">
       <p class="warn">{{ t('permissions.confirm.warning', { count: changes.length }) }}</p>
       <ul class="changes">
@@ -439,8 +557,10 @@ onMounted(() => {
 .add,
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .roles {
@@ -479,15 +599,71 @@ onMounted(() => {
 }
 
 .role {
-  padding: 5px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 0;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text-dim);
   background: var(--ink-700);
   border: 1px solid var(--line);
   border-radius: 999px;
-  cursor: pointer;
   transition: all 0.15s ease;
+}
+
+.role__name {
+  padding: 5px 4px 5px 12px;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.role__remove {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.role__remove:hover {
+  color: var(--danger, #e06c6c);
+  background: rgba(224, 108, 108, 0.12);
+}
+
+.verify-hint {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.verify__verdict {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.verify__result {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
 .role:hover {

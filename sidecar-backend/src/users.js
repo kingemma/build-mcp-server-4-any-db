@@ -79,6 +79,26 @@ class UserStore {
   }
 
   /**
+   * 删除组织。
+   *
+   * 组织下有成员时拒绝：外键是 ON DELETE CASCADE，直接删会连带丢掉成员记录，
+   * 这种不可逆的连带删除不该藏在一次点击后面。
+   *
+   * @param {number} organizationId
+   * @returns {{deleted: boolean, members: number}}
+   */
+  deleteOrganization(organizationId) {
+    if (!Number.isInteger(organizationId)) throw new UserStoreError('organizationId 必须是整数');
+    const { count } = this.db
+      .prepare('SELECT COUNT(*) AS count FROM users WHERE organization_id = ?')
+      .get(organizationId);
+    if (count > 0) throw new UserStoreError(`组织下还有 ${count} 个成员，请先删除成员`);
+
+    const result = this.db.prepare('DELETE FROM organizations WHERE id = ?').run(organizationId);
+    return { deleted: result.changes > 0, members: count };
+  }
+
+  /**
    * @param {Object} input
    * @param {number} input.organizationId
    * @param {string} input.name
@@ -130,6 +150,32 @@ class UserStore {
     const cleanRole = this.#requireText(role, '角色');
     const result = this.db.prepare('UPDATE users SET role = ? WHERE id = ?').run(cleanRole, userId);
     return result.changes > 0;
+  }
+
+  /**
+   * 改成员资料。角色单独走 setUserRole，避免一次误操作同时改两件正交的事。
+   *
+   * @param {number} userId
+   * @param {{name?: string, email?: string}} input
+   * @returns {Object|null} 更新后的行；用户不存在时 null
+   */
+  updateUser(userId, { name, email } = {}) {
+    if (!Number.isInteger(userId)) throw new UserStoreError('userId 必须是整数');
+    const cleanName = this.#requireText(name, '用户名');
+    const cleanEmail = this.#requireText(email, '邮箱');
+
+    try {
+      return (
+        this.db
+          .prepare(
+            `UPDATE users SET name = ?, email = ? WHERE id = ?
+             RETURNING id, organization_id, name, email, role, created_at`
+          )
+          .get(cleanName, cleanEmail, userId) ?? null
+      );
+    } catch (error) {
+      throw new UserStoreError(`更新用户失败：${error.message}`);
+    }
   }
 
   /** @returns {boolean} */
