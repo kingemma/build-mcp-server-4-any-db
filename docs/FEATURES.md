@@ -32,11 +32,11 @@
 | admin 角色保障 | 启动与每次写入前自动补齐 `admin`，避免 `roles 'admin' not defined` |
 | block 列管控保护 | 表列清单缺失时拒绝展开补集，避免把全部列静默放行 |
 | 驱动能力校验 | `driverVerified=false` 的类型在测试/启动前直接返回明确错误，不再拉起进程 |
-| 用户 / 组织 | SQLite 存储，角色可同步到 GraphJin |
+| 用户 / 组织 | SQLite 存储；角色可同步到 GraphJin；组织有成员时拒绝删除，成员资料可改 |
 | 连接本地存储 | SQLite + AES-256-GCM；`name + project_dir` 唯一；摘要字段独立明文列 |
-| 连接自检 | 服务未运行时临时起单库实例跑 `validate_config`，用完即停 |
-| dev.yml 增量合并 | 只改 `databases:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进 |
-| 测试 | `node:test` 共 127 项 |
+| 连接自检 | 服务未运行时临时起单库实例跑 `validate_config`，用完即停；缺必填字段的配置前置拦截，不起进程 |
+| dev.yml 增量合并 | 只改 `databases:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 显式拒绝 |
+| 测试 | `node:test` 共 133 项 |
 
 ### 前端
 
@@ -46,10 +46,12 @@
 | 数据库连接 | 内置类型 + 自定义模板；三种录入方式；测试 / 启动 / 存模板；驱动未验证类型自动禁用测试与启动 |
 | 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除 |
 | Schema 浏览器 | 顶部库选择，按库加载表 / 列 / 关系；结构与关系隔离 |
-| 权限矩阵 | 角色 × 表 × 四项操作；行过滤、列白名单 / 黑名单、默认 limit；按库隔离（表身份 `database::table`） |
+| 权限矩阵 | 角色 × 表 × 四项操作；行过滤、列白名单 / 黑名单、默认 limit；按库隔离（表身份 `database::table`）；可移除本地角色 |
 | 策略回填 / 导入 | 加载时用生效策略补空格子（不覆盖本地改动）；「从生效策略导入」二次确认后覆盖 |
 | 写入历史 / 回滚 | 列出每份快照（时间、角色数、库、原因），可恢复到任意一份；回滚前自动再快照 |
-| 策略预览 | 生效策略 vs 待写入矩阵的逐项 diff |
+| 用户与组织 | 组织 / 成员增删改；成员角色即 GraphJin 角色名，一键把成员角色同步进 GraphJin；组织有成员时拒绝删除 |
+| 权限验证 | 以任意角色真跑一条 GraphQL（`graphql.execute`），区分「静默返回 null」与「返回 errors」 |
+| 策略预览 | 生效策略 vs 待写入矩阵的逐项 diff；自带库选择，可直接打开使用 |
 | 设置 | 后端端口、内置 GraphJin 版本、缓存平台、版本信息复制 |
 | 国际化 | `vue-i18n`，中文 / English，跟随系统 + 本地持久化；Element Plus 语言包同步 |
 | 前端拆包 | 六个页面路由懒加载 + `element-plus` / `vue` vendor chunk；首页 JS 从 1.17 MB 降到约 39 kB |
@@ -63,11 +65,11 @@
 | 功能进度（本文件） | `docs/FEATURES.md` |
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
 | 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
-| 后端单测 | `cd sidecar-backend && npm test`（127 项） |
+| 后端单测 | `cd sidecar-backend && npm test`（133 项） |
 | 前端策略单测 | `npm run test:frontend`（8 项） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
 | 二进制冒烟 | `npm run smoke:binaries` |
-| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（10 项，含语言切换） |
+| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（21 项：语言切换、组织/成员与资料编辑、权限写入 / 验证 / 回滚、本地角色删除） |
 
 ## 未完成
 
@@ -84,8 +86,8 @@
 
 | 项 | 影响 | 备注 |
 |:--|:--|:--|
-| 连接测试多一次进程启停 | 未启动服务时约多 1–2s | 服务在跑时复用现成实例；临时实例用完即停 |
-| dev.yml 合并不是通用 YAML 解析器 | 手写 anchors / merge keys 等仍可能无法合并 | 已覆盖项目生成格式、flow map、引号键和 GraphJin 回写格式 |
+| 连接测试多一次进程启停 | 未启动服务时约多 1–2s | 服务在跑时复用现成实例；缺必填字段的配置已前置拦截，真正需要连库的才起临时实例 |
+| dev.yml 合并不是通用 YAML 解析器 | 手写 anchors / merge keys 无法合并 | 已覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式；不支持的构造会明确报错并拒绝合并，不会改坏文件 |
 | 一个后端只托管一个实例 | 切换连接要停旧实例 | 设计取舍；避免多实例端口与 keystore 冲突 |
 
 ## 已知边界（非缺陷）

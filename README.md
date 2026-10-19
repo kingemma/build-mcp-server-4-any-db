@@ -83,15 +83,34 @@ GraphJin 的配置细节。
 启动后自动用生效策略回填矩阵（只补空格子，不覆盖本地改动）；也可以点「从生效策略导入」
 用生效策略覆盖本地未提交的改动。写入前展示逐项 diff 并二次确认。
 
+角色标签上的 `×` 可移除本地角色；角色已写进生效策略时会先确认，并说明 GraphJin 里的
+规则要回收得走「写入历史」回滚。
+
+「验证权限」按所选角色真跑一条 GraphQL（`graphql.execute`）：query 被拦时 GraphJin 是
+静默的（返回 `null`、不报错），写操作被拦才返回 `errors`，面板会把这两种情况分开提示。
+
 每次写入前会自动保存一份策略快照（`mcp-builder.db` 的 `policy_snapshots` 表），
 点「写入历史」可查看并按时间恢复；回滚前会再存一份，所以回滚本身也能撤销。
 `admin` 是平台保留角色，不进入矩阵，平台也不会为它写限制规则；它不会被回滚删除。
 
 ![权限矩阵](./docs/screenshots/zh-CN/permissions.png)
 
+### 用户与组织
+
+本地维护组织与成员（SQLite，不依赖 GraphJin 是否在跑）：
+
+- 成员角色直接就是 GraphJin 角色名，改角色即时写回本地库；
+- 「同步角色到 GraphJin」把成员用到的角色补进 `roles` —— 方案 B 下角色不存在时
+  `roles[].tables` 规则会被拒；
+- 角色下拉支持直接输入新角色名（allow-create），不用先去权限矩阵建角色；
+- 成员可改姓名 / 邮箱；组织标签上的 `×` 可删除组织，组织下还有成员时后端会拒绝删除。
+
+![用户与组织](./docs/screenshots/zh-CN/users.png)
+
 ### 策略预览
 
-从 `get_current_config` 读取当前生效的角色策略，和待写入的矩阵做 diff。
+从 `get_current_config` 读取当前生效的角色策略，和待写入的矩阵做 diff。顶部库选择决定
+看哪个库；直接打开本页会自动加载 Schema，不依赖先逛一遍权限矩阵。
 
 ![策略预览](./docs/screenshots/zh-CN/policy.png)
 
@@ -118,20 +137,76 @@ GraphJin 的配置细节。
 
 ## 本地启动
 
-最短路径（已有 GraphJin 压缩包时）：
+### 0. 完整启动命令（推荐）
+
+先进入 `package.json` 所在的项目根目录，然后按顺序执行：
 
 ```bash
+# Windows PowerShell 示例；macOS / Linux 换成实际路径
+cd D:\Code\GitHubs\build-mcp-server-4-any-db
+
+# 1. 安装依赖（只需第一次）
 npm install
+
+# 2. 准备并验证 GraphJin 二进制（只需第一次；缺压缩包时先 fetch）
 npm run prepare:binaries
 npm run smoke:binaries
 
+# 3. 可选：手头没有数据库时，创建一个演示 SQLite 库
+npm run demo:db
+
+# 4. 一键启动：Vite + Electron + Node 后端
+npm start
+```
+
+`npm start` 实际做了四件事：
+
+1. 启动 Vite 开发服务器（`127.0.0.1:1420`）；
+2. 等 Vite 就绪后启动 Electron；
+3. Electron 主进程在进程内启动 Node 后端，并把动态端口注入页面；
+4. 关闭窗口（Windows / Linux）、按 `Cmd+Q`（macOS）或 `Ctrl+C` 时，把 Electron、
+   Node 后端和 Vite 一起清理。
+
+进程关系：`npm start` → Vite（1420）→ Electron → Node 后端；GraphJin 在界面点「启动」后
+由后端拉起。
+
+启动成功后，还需要在界面里启动 GraphJin。GraphJin 是**按你填写的数据库连接**启动的，
+不能由命令行预先写死：
+
+1. 打开「数据库连接」，填连接信息。
+   - 没有现成数据库时，先跑 `npm run demo:db`，然后选类型 **SQLite**、
+     文件路径 `projects/quickstart/demo.db`、项目目录 `projects/quickstart`；
+   - 已有数据库：SQLite 直接填 `.db` 文件，MySQL / PostgreSQL 等填主机、端口、库名、用户、密码；
+   - 「项目目录」填 `projects/demo` 这类目录；
+2. 点「测试连接」，再点「启动」；
+3. 到「Schema 浏览器」确认表结构，到「权限矩阵」配置权限。
+
+如果不想用一键脚本，等价的**手动分终端**方式是：
+
+```bash
 # 终端 1
 npm run dev
-# 终端 2（等 Vite 打印 Local 后再执行）
+
+# 终端 2（等终端 1 打印 Local 后再执行）
 npm run electron:dev
 ```
 
-下面是每一步的详细说明与常见问题。
+两种方式只需要选一种；`npm start` 只是把这两步串起来。
+
+启动相关命令一览：
+
+| 命令 | 作用 |
+|:--|:--|
+| `npm start` | Vite + Electron + Node 后端（推荐） |
+| `npm run dev` | 只启动 Vite（`127.0.0.1:1420`） |
+| `npm run electron:dev` | 只启动 Electron + 后端；要求 Vite 已在运行 |
+| `npm run backend` | 只启动 Node 后端（供纯浏览器模式使用） |
+| `npm run demo:db` | 创建演示 SQLite 库 |
+| `npm run prepare:binaries` | 解压当前平台的 GraphJin |
+| `npm run smoke:binaries` | 真实执行 GraphJin `version` 做冒烟 |
+| `npm run dist:win` / `dist:mac` / `dist:linux` | 打包对应平台安装包 |
+
+下面是每一步的详细说明、纯浏览器模式和常见问题。
 
 ### 1. 准备环境
 
@@ -181,6 +256,7 @@ npm run prepare:binaries
 ```bash
 # 平台可选：windows-amd64 / windows-arm64 / linux-amd64 /
 #           linux-arm64 / darwin-amd64 / darwin-arm64
+# 其他平台把 windows-amd64 换成自己的 key
 npm run fetch:binaries -- --only windows-amd64
 npm run prepare:binaries
 ```
@@ -195,9 +271,10 @@ npm run smoke:binaries
 解压后的文件位于 `src-tauri/binaries/graphjin-<target-triple>[.exe]`。
 如需使用自定义路径，可设置环境变量 `GRAPHJIN_BIN`。
 
-### 4. 启动桌面端（推荐）
+### 4. 启动桌面端（手动分终端）
 
-需要两个终端，**先起 Vite，再起 Electron**。
+需要两个终端，**先起 Vite，再起 Electron**。也可以直接用第 0 步的 `npm start`
+一次拉起两者。
 
 终端 1：
 
@@ -254,6 +331,8 @@ npm run dev
 ### 6. 首次配置流程
 
 1. **数据库连接页**：填写连接名、类型和连接信息。
+   - 没有数据库时先执行 `npm run demo:db`，然后选 SQLite、文件路径
+     `projects/quickstart/demo.db`、项目目录 `projects/quickstart`；
    - SQLite：录入方式选「文件路径」，填已有的 `.db` 文件；
    - MySQL / PostgreSQL 等：填主机、端口、库名、用户、密码；
    - 「项目目录」填 `projects/demo` 之类的目录（开发时相对仓库根目录，
@@ -294,7 +373,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（10 项）
+npm run verify:ui        # 真实后端 + Edge headless（21 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -394,7 +473,7 @@ npm run smoke:binaries
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（127 项）
+npm test                 # 后端单测（133 项）
 
 npm run verify:e2e       # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 
@@ -402,7 +481,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless，含中英文切换（10 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、建组织/成员、权限写入/验证/回滚（21 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 
@@ -420,7 +499,7 @@ sidecar-backend/       Node 后端
   src/                 JSON-RPC、GraphJin 客户端、权限编排、快照、连接存储
   test/                node:test 单测
   scripts/             真机验证脚本
-scripts/               二进制准备 / 冒烟、UI 冒烟
+scripts/               本地启动、演示库、二进制准备 / 冒烟、UI 冒烟
 .github/workflows/     四平台打包 CI
 docs/                  基线文档、功能矩阵、UI 截图
 src-tauri/binaries/    GraphJin 二进制（构建期解压）
@@ -431,7 +510,8 @@ src-tauri/binaries/    GraphJin 二进制（构建期解压）
 - 安装包签名 / 公证未接入：CI 产出未签名包，macOS 首次打开需手动放行；
 - `gj_security` 需要 admin JWT，策略真相来源是 MCP 的 `get_current_config`；
 - `dev.yml` 合并覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式，
-  但不是通用 YAML 解析器（anchors / merge keys 等不支持）；
+  但不是通用 YAML 解析器：`databases:` 段一旦出现 anchors / aliases / merge keys
+  会明确报错并拒绝合并，不会悄悄改坏文件；
 - 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
 
 完整的「已完成 / 未完成」清单见 [docs/FEATURES.md](./docs/FEATURES.md)。

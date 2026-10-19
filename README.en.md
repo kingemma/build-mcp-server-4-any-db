@@ -94,6 +94,14 @@ On load the matrix is filled from the effective policy (empty cells only, local 
 **Import effective policy** overwrites uncommitted edits on purpose. Every write shows a
 per-item diff and asks for confirmation.
 
+The `×` on a role chip removes the local role. If the role is already in the effective
+policy you get a confirmation explaining that GraphJin keeps its rules — reclaim them from
+the write history.
+
+**Verify access** runs one real GraphQL request as the selected role (`graphql.execute`).
+GraphJin blocks queries silently (`null`, no errors) and mutations with `errors`; the panel
+calls out both cases.
+
 Every write also snapshots the current policy first (`policy_snapshots` in
 `mcp-builder.db`). Open **Write history** to inspect snapshots and restore any of them;
 the state is snapshotted again before restoring, so a rollback can itself be rolled back.
@@ -102,10 +110,26 @@ writes restrictive rules for it, and a rollback never removes it.
 
 ![Permission matrix](./docs/screenshots/en-US/permissions.png)
 
+### Users & orgs
+
+Organizations and members live in local SQLite, so this page works even when GraphJin is
+stopped:
+
+- a member's role *is* the GraphJin role name; changing it writes straight back to SQLite;
+- **Sync roles to GraphJin** adds the roles used by members to `roles` — in plan B,
+  `roles[].tables` rules are rejected when the role does not exist yet;
+- the role selector accepts new names (allow-create), so you need not create the role in
+  the permission matrix first;
+- members can be edited (name / email); the `×` on an org chip deletes it, and the backend
+  refuses while the org still has members.
+
+![Users & orgs](./docs/screenshots/en-US/users.png)
+
 ### Policy preview
 
 Reads the effective role policy from `get_current_config` and diffs it against the
-pending matrix.
+pending matrix. The database selector at the top decides which database you compare, and
+opening this page directly loads the schema for you.
 
 ![Policy preview](./docs/screenshots/en-US/policy.png)
 
@@ -128,20 +152,77 @@ UI switches between **中文 / English** (top right) and remembers the choice.
 
 ## Local startup
 
-Shortest path (when the GraphJin tarball is already present):
+### 0. Complete startup commands (recommended)
+
+From the project root (the directory containing `package.json`), run:
 
 ```bash
+# Windows PowerShell example; use your real path on macOS / Linux
+cd D:\Code\GitHubs\build-mcp-server-4-any-db
+
+# 1. install dependencies (first time only)
 npm install
+
+# 2. prepare and verify the GraphJin binary (first time only; fetch first if the tarball is missing)
 npm run prepare:binaries
 npm run smoke:binaries
 
+# 3. optional: create a demo SQLite database when you have none
+npm run demo:db
+
+# 4. one command: Vite + Electron + Node backend
+npm start
+```
+
+`npm start` does four things:
+
+1. starts the Vite dev server (`127.0.0.1:1420`);
+2. waits for Vite, then starts Electron;
+3. Electron starts the Node backend in-process and injects its dynamic port into the page;
+4. on window close (Windows / Linux), `Cmd+Q` (macOS) or `Ctrl+C`, shuts down Electron,
+   the backend and Vite together.
+
+Process chain: `npm start` → Vite (1420) → Electron → Node backend; GraphJin is started by
+the backend when you click **Start** in the UI.
+
+Once the window is open, GraphJin still has to be started from the UI, because it needs the
+database connection you enter:
+
+1. open **Connections**, fill in the connection.
+   - no database yet: run `npm run demo:db`, then choose **SQLite**, file path
+     `projects/quickstart/demo.db`, project directory `projects/quickstart`;
+   - existing database: SQLite points at a `.db` file; MySQL / PostgreSQL etc. need host,
+     port, database, user and password;
+   - **Project directory**: something like `projects/demo`;
+2. click **Test connection**, then **Start**;
+3. check **Schema browser**, then configure permissions in **Permission matrix**.
+
+The equivalent **two-terminal** way (use either this or `npm start`):
+
+```bash
 # terminal 1
 npm run dev
-# terminal 2 (wait until Vite prints Local)
+
+# terminal 2 (wait until terminal 1 prints Local)
 npm run electron:dev
 ```
 
-The sections below explain each step and the common problems.
+Use either way; `npm start` simply chains the two steps.
+
+Startup-related commands:
+
+| Command | Purpose |
+|:--|:--|
+| `npm start` | Vite + Electron + Node backend (recommended) |
+| `npm run dev` | Vite only (`127.0.0.1:1420`) |
+| `npm run electron:dev` | Electron + backend only; Vite must already be running |
+| `npm run backend` | Node backend only (browser-only mode) |
+| `npm run demo:db` | create a demo SQLite database |
+| `npm run prepare:binaries` | extract GraphJin for the current platform |
+| `npm run smoke:binaries` | execute GraphJin `version` as a smoke test |
+| `npm run dist:win` / `dist:mac` / `dist:linux` | build the matching installer |
+
+The sections below explain each step, browser-only mode and common problems.
 
 ### 1. Requirements
 
@@ -193,6 +274,7 @@ If the tarball is missing, download it first and then extract:
 ```bash
 # platform: windows-amd64 / windows-arm64 / linux-amd64 /
 #           linux-arm64 / darwin-amd64 / darwin-arm64
+# replace windows-amd64 with your own platform key
 npm run fetch:binaries -- --only windows-amd64
 npm run prepare:binaries
 ```
@@ -207,9 +289,10 @@ npm run smoke:binaries
 The extracted file lands in `src-tauri/binaries/graphjin-<target-triple>[.exe]`.
 Set `GRAPHJIN_BIN` to use a custom executable.
 
-### 4. Start the desktop app (recommended)
+### 4. Start the desktop app (two terminals)
 
-Use two terminals: **start Vite first, then Electron**.
+Use two terminals: **start Vite first, then Electron**. You can also run the single
+`npm start` command from step 0 instead.
 
 Terminal 1:
 
@@ -267,6 +350,8 @@ running; the UI reports the backend as offline after it stops.
 ### 6. First-run flow
 
 1. **Connections**: enter a name, type and connection details.
+   - no database: run `npm run demo:db` first, then pick SQLite, file path
+     `projects/quickstart/demo.db` and project directory `projects/quickstart`;
    - SQLite: choose **File path** and point at an existing `.db` file;
    - MySQL / PostgreSQL etc.: fill host, port, database, user, password;
    - **Project directory**: e.g. `projects/demo` (relative to the repository root in
@@ -310,7 +395,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (10 checks)
+npm run verify:ui        # real backend + headless Edge (21 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -421,7 +506,7 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (127)
+npm test                 # backend unit tests (133)
 
 npm run verify:e2e       # real end-to-end: start → discover → write → rollback (24)
 
@@ -429,7 +514,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge, includes locale switching (10)
+npm run verify:ui        # real backend + headless Edge: locales, orgs/members, write/verify/rollback (21)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 
@@ -448,7 +533,7 @@ sidecar-backend/       Node backend
   src/                 JSON-RPC, GraphJin client, permission planner, snapshots, connections
   test/                node:test suites
   scripts/             real-machine verification scripts
-scripts/               binary prep / smoke, UI smoke test
+scripts/               local startup, demo DB, binary prep / smoke, UI smoke test
 .github/workflows/     four-platform packaging CI
 docs/                  baseline notes, feature matrix, UI screenshots
 src-tauri/binaries/    GraphJin binaries (extracted at build time)
@@ -461,7 +546,9 @@ src-tauri/binaries/    GraphJin binaries (extracted at build time)
 - `gj_security` needs an admin JWT, so the source of truth for policy is the MCP tool
   `get_current_config`;
 - `dev.yml` merging understands this project's output, flow maps, quoted keys and
-  GraphJin's rewritten file, but is not a general YAML parser (no anchors / merge keys);
+  GraphJin's rewritten file, but is not a general YAML parser: anchors / aliases / merge
+  keys inside `databases:` are rejected with an explicit error instead of silently
+  corrupting the file;
 - non-Windows coverage is currently the CI binary `version` smoke; the full UI smoke
   script still requires Windows + Edge.
 

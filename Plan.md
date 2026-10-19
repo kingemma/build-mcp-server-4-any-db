@@ -466,6 +466,8 @@ src/
 | 2.8 | MCP 监控面板：运行状态、端点地址、工具列表、一键复制客户端配置（已实现：`views/StatusView.vue`） |
 | 2.9 | 设置页面：显示内置 GraphJin 版本（解析 `graphjin version`）、「复制版本信息」；**不做在线更新**（已实现：`views/SettingsView.vue`，版本读 `graphjin-binaries/version.json`） |
 | 2.10 | 数据库连接类型扩展（新增需求，已实现：`sidecar-backend/src/db-types.js` + `keystore.js`，RPC `db.types` / `db.templates.*` / `connections.test`）。内置 13 种白名单类型 + 用户自定义**别名模板**（TiDB 等兼容库只能以 postgres/mysql 协议接入）；录入支持**字段 / 连接串 / 文件路径**三种形态；后端自动生成并注入 `GJ_SECRETS_KEYSTORE_KEY`（base64、解码后 32 字节，见基线 §12.4），否则带密码的库配不进去 |
+| 2.11 | 用户 / 组织管理界面（新增需求，已实现：`views/UsersView.vue` + `users.*` store actions）：组织与成员增删改、成员角色即 GraphJin 角色名、一键把成员角色同步进 GraphJin。后端 RPC（任务 1.6）早已就绪，此前前端没有入口 |
+| 2.12 | 权限验证与本地角色管理（新增需求，已实现）：`graphql.execute` 验证面板（区分静默 null 与 errors）；矩阵角色可移除；策略页自带库选择并可独立打开；`users.update` / `users.deleteOrganization` 补齐组织与成员维护；Schema / 权限 / 策略页统一 `watch(isRunning)`，修掉冷启动直接进入时的空态 |
 
 > **写入前二次确认**：legacy 模式更新立即生效（基线 §6.4），
 > 权限矩阵点「应用到 GraphJin」时先弹 diff 对话框（`from → to` + 附加规则）再写入。
@@ -534,7 +536,7 @@ src/
 | R8 | 前端包体积 | **已完成**：路由懒加载 + `element-plus` / `vue` vendor chunk；首页 chunk 从 1.17 MB 降到约 39 kB，Element Plus 单独缓存 | 如需进一步压缩可改为按需引入组件 |
 | R9 | 端到端测试缺失 | **已完成**：`verify:e2e` 24 项（含快照回滚）、后端单测 127 项、前端策略单测 8 项、UI 冒烟 10 项 | — |
 | R10 | 安装包签名 / 公证 | CI 产物未签名，macOS 首次打开需手动放行 | 配置 Apple Developer 证书与 Windows 签名证书后接入 |
-| R11 | `dev.yml` 合并非通用 YAML | 已覆盖项目生成格式、flow map、引号键、GraphJin 4 空格回写；anchors / merge keys 仍不支持 | 需要时引入完整的 YAML 解析库 |
+| R11 | `dev.yml` 合并非通用 YAML | 已覆盖项目生成格式、flow map、引号键、GraphJin 4 空格回写；`databases:` 段出现 anchors / aliases / merge keys 时**显式报错并拒绝合并**，不再有静默改坏文件的可能 | 需要时引入完整的 YAML 解析库 |
 
 
 ## 七、DeepSeek Harness 使用建议
