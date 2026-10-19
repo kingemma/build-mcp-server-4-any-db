@@ -1,10 +1,10 @@
-# MCP Builder
+# MCP Server Build
 
 **可视化配置 GraphJin，把任意数据库变成 MCP Server。**
 
 [English](./README.en.md) · [功能进度](./docs/FEATURES.md)
 
-MCP Builder 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
+MCP Server Build 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
 「角色 × 表 × 操作」的权限写成 GraphJin 配置。最终产出的是一个可直接接入 Claude、
 Cursor 等 MCP 客户端的 HTTP 端点（`/api/v1/mcp`），不需要手写 YAML，也不需要理解
 GraphJin 的配置细节。

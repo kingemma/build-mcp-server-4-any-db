@@ -570,8 +570,8 @@ watch(
 }
 
 .admin-note {
-  margin: 12px 0 0;
-  font-size: 11px;
+  margin: 14px 0 0;
+  font-size: 12px;
   line-height: 1.7;
 }
 
@@ -586,7 +586,7 @@ watch(
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 0;
+  padding: 11px 0;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -594,7 +594,7 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text);
 }
 
@@ -602,9 +602,9 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 0 6px 0 0;
+  padding: 0 7px 0 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   background: var(--ink-700);
   border: 1px solid var(--line);
@@ -613,7 +613,7 @@ watch(
 }
 
 .role__name {
-  padding: 5px 4px 5px 12px;
+  padding: 6px 4px 6px 13px;
   font: inherit;
   color: inherit;
   background: none;
@@ -635,35 +635,35 @@ watch(
 }
 
 .role__remove:hover {
-  color: var(--danger, #e06c6c);
-  background: rgba(224, 108, 108, 0.12);
+  color: var(--danger, #b42318);
+  background: rgba(180, 35, 24, 0.1);
 }
 
 .verify-hint {
   margin: 0 0 10px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 
 .verify__verdict {
   margin: 0 0 8px;
-  font-size: 12px;
-  color: var(--amber);
+  font-size: 13px;
+  color: var(--accent);
 }
 
 .verify__result {
   max-height: 260px;
   margin: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--text);
   background: var(--ink-700);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .role:hover {
@@ -672,9 +672,9 @@ watch(
 }
 
 .role--active {
-  color: var(--amber);
-  background: var(--amber-soft);
-  border-color: rgba(217, 162, 75, 0.45);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(29, 78, 216, 0.3);
 }
 
 .panel__body--flush {
@@ -687,10 +687,10 @@ watch(
 }
 
 .matrix th {
-  padding: 9px 14px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-align: left;
@@ -699,17 +699,18 @@ watch(
 }
 
 .matrix td {
-  padding: 7px 14px;
+  padding: 9px 16px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .matrix tr:hover td {
-  background: rgba(217, 162, 75, 0.05);
+  background: #f2f7ff;
 }
 
 .col-table {
   width: 30%;
   color: var(--text);
+  font-weight: 500;
 }
 
 .col-op {
@@ -718,11 +719,12 @@ watch(
 
 .toggle {
   display: block;
-  width: 62px;
-  padding: 3px 0;
+  width: 68px;
+  padding: 4px 0;
   font-family: var(--mono);
-  font-size: 11px;
-  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -731,26 +733,26 @@ watch(
 .toggle--allowed {
   color: var(--mint);
   background: var(--mint-soft);
-  border-color: rgba(85, 214, 168, 0.35);
+  border-color: rgba(4, 120, 87, 0.22);
 }
 
 .toggle--blocked {
   color: var(--coral);
   background: var(--coral-soft);
-  border-color: rgba(226, 115, 94, 0.32);
+  border-color: rgba(180, 35, 24, 0.2);
 }
 
 .toggle--none {
-  color: var(--text-faint);
-  background: transparent;
+  color: var(--text-dim);
+  background: #ffffff;
   border-color: var(--line);
 }
 
 .rule {
-  margin-top: 4px;
+  margin-top: 5px;
   padding: 0;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--text-faint);
   background: none;
   border: none;
@@ -758,28 +760,29 @@ watch(
 }
 
 .rule:hover {
-  color: var(--amber);
+  color: var(--accent);
 }
 
 .pad {
-  padding: 16px;
+  padding: 18px;
 }
 
 .sync {
-  margin-bottom: 8px;
-  font-size: 12px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
   color: var(--text-dim);
 }
 
 .changes {
   margin: 0;
   padding-left: 18px;
-  font-size: 11.5px;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--text-dim);
 }
 
 .changes li {
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .from {
@@ -798,15 +801,15 @@ watch(
 
 .warn {
   margin: 0 0 12px;
-  font-size: 12px;
-  color: var(--amber);
+  font-size: 13px;
+  color: var(--accent-strong);
 }
 
 .hint {
   display: block;
   margin-top: 6px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 </style>

@@ -156,10 +156,10 @@ watch(
 }
 
 .policy th {
-  padding: 9px 14px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-align: left;
@@ -168,23 +168,24 @@ watch(
 }
 
 .policy td {
-  padding: 7px 14px;
-  font-size: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .policy tr:hover td {
-  background: rgba(217, 162, 75, 0.05);
+  background: #f2f7ff;
 }
 
 .mono {
   font-family: var(--mono);
   color: var(--text);
+  font-weight: 500;
 }
 
 .state {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .state--allowed {
@@ -200,19 +201,20 @@ watch(
 }
 
 .detail {
-  font-size: 11px;
-  color: var(--text-faint);
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 .changes {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   padding-left: 18px;
-  font-size: 11.5px;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--text-dim);
 }
 
 .changes li {
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .from {
@@ -230,18 +232,18 @@ watch(
 
 .pill--tiny {
   margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 10px;
+  padding: 2px 7px;
+  font-size: 11px;
 }
 
 .note {
-  margin: 10px 0 0;
-  font-size: 11px;
+  margin: 12px 0 0;
+  font-size: 12px;
   line-height: 1.7;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 
 .pad {
-  padding: 16px;
+  padding: 18px;
 }
 </style>

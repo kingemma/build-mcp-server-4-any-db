@@ -59,7 +59,7 @@ function createWindow(port) {
     height: 860,
     minWidth: 1100,
     minHeight: 720,
-    title: 'MCP Builder',
+    title: 'MCP Server Build',
     backgroundColor: '#0a0d10',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

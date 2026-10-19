@@ -2,7 +2,7 @@
   "name": "mcp-builder",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP Server 可视化构建平台：Electron 外壳 + Vue 3 前端 + Node.js 后端 + GraphJin 内核",
+  "description": "MCP Server Build：为任意数据库可视化构建 MCP Server（Electron + Vue 3 + Node.js + GraphJin）",
   "main": "electron/main.js",
   "scripts": {
     "start": "node scripts/dev-all.js",
@@ -26,7 +26,7 @@
   },
   "build": {
     "appId": "com.mcpbuilder.desktop",
-    "productName": "MCP Builder",
+    "productName": "MCP Server Build",
     "directories": {
       "output": "release-final"
     },
@@ -57,7 +57,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "MCP Builder"
+      "shortcutName": "MCP Server Build"
     },
     "mac": {
       "target": [
@@ -72,7 +72,7 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "MCP Builder"
+      "maintainer": "MCP Server Build"
     }
   },
   "dependencies": {

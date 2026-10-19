@@ -213,9 +213,9 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 14px;
+  padding: 6px 15px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   background: var(--ink-700);
   border: 1px solid var(--line);
@@ -226,13 +226,14 @@ watch(
 
 .database:hover {
   color: var(--text);
-  border-color: var(--slate);
+  border-color: #b9c5d3;
+  background: #ffffff;
 }
 
 .database--active {
-  color: var(--amber);
-  background: var(--amber-soft);
-  border-color: rgba(217, 162, 75, 0.45);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(29, 78, 216, 0.3);
 }
 
 .database__mark {
@@ -257,7 +258,7 @@ watch(
 }
 
 .node--database {
-  color: var(--amber);
+  color: var(--accent);
   letter-spacing: 0.08em;
 }
 
@@ -267,16 +268,16 @@ watch(
 
 .node--column {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .rel {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 7px 0;
+  padding: 9px 0;
   border-bottom: 1px solid var(--line-soft);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .rel__from,
@@ -285,12 +286,12 @@ watch(
 }
 
 .rel__arrow {
-  color: var(--amber);
+  color: var(--accent);
 }
 
 .rel__type {
   margin-left: auto;
-  font-size: 10.5px;
-  color: var(--slate);
+  font-size: 11.5px;
+  color: var(--text-dim);
 }
 </style>

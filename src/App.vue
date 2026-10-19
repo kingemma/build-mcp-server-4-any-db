@@ -34,7 +34,7 @@ onMounted(() => store.refreshBackend());
       <div class="brand">
         <div class="brand__mark">◈</div>
         <div>
-          <div class="brand__name">MCP BUILDER</div>
+          <div class="brand__name">MCP Server Build</div>
           <div class="brand__tag serif">any database, one console</div>
         </div>
       </div>
@@ -96,94 +96,114 @@ onMounted(() => store.refreshBackend());
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: 248px minmax(0, 1fr);
   height: 100%;
 }
 
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  padding: 22px 16px;
-  background: var(--ink-800);
-  border-right: 1px solid var(--line);
+  gap: 30px;
+  padding: 24px 14px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--rail-bg) 56%, #f1f7ff 100%);
+  border-right: 1px solid var(--rail-line);
+  color: var(--rail-text);
 }
 
 .brand {
   display: flex;
-  gap: 10px;
+  gap: 11px;
   align-items: center;
+  padding: 0 8px;
 }
 
 .brand__mark {
-  font-size: 22px;
-  color: var(--amber);
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  font-size: 19px;
+  color: #ffffff;
+  background: linear-gradient(145deg, #3b82f6, var(--accent-strong));
+  border-radius: 10px;
+  box-shadow: 0 6px 16px -8px rgba(29, 78, 216, 0.75);
   line-height: 1;
 }
 
 .brand__name {
-  font-size: 12px;
-  letter-spacing: 0.2em;
-  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--rail-text);
 }
 
 .brand__tag {
-  font-size: 11px;
-  color: var(--text-faint);
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--rail-faint);
 }
 
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .nav__item {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 9px 12px;
-  border-left: 2px solid transparent;
-  color: var(--text-dim);
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--rail-dim);
   text-decoration: none;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .nav__item:hover {
-  background: rgba(217, 162, 75, 0.06);
-  color: var(--text);
+  background: var(--rail-bg-soft);
+  color: var(--rail-text);
 }
 
 .nav__item--active {
-  border-left-color: var(--amber);
-  background: var(--amber-soft);
-  color: var(--amber);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+  color: var(--accent-strong);
 }
 
 .nav__title {
-  font-size: 12.5px;
+  font-size: 13.5px;
+  font-weight: 500;
 }
 
 .nav__hint {
-  font-size: 10px;
-  color: var(--text-faint);
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  color: var(--rail-faint);
+  letter-spacing: 0.01em;
+}
+
+.nav__item--active .nav__hint {
+  color: rgba(29, 78, 216, 0.72);
 }
 
 .rail__foot {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin-top: auto;
-  font-size: 11px;
+  padding: 16px 10px 4px;
+  border-top: 1px solid var(--rail-line);
+  font-size: 11.5px;
+  color: var(--rail-dim);
 }
 
 .dot--on {
-  background: var(--mint);
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.14);
 }
 
 .dot--off {
-  background: var(--text-faint);
+  background: var(--rail-faint);
 }
 
 .stage {
@@ -197,14 +217,18 @@ onMounted(() => store.refreshBackend());
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 26px;
+  padding: 20px 32px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(217, 162, 75, 0.05), transparent);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(10px);
 }
 
 .topbar__title {
-  font-size: 21px;
-  letter-spacing: -0.01em;
+  margin-top: 3px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
 
 .topbar__meta {
@@ -214,13 +238,32 @@ onMounted(() => store.refreshBackend());
 }
 
 .locale {
-  width: 104px;
+  width: 112px;
 }
 
 .content {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--gutter) 26px 40px;
+  padding: 24px 32px 48px;
+}
+
+.content > * {
+  width: 100%;
+  max-width: 1480px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+@media (max-width: 1100px) {
+  .shell {
+    grid-template-columns: 216px minmax(0, 1fr);
+  }
+
+  .topbar,
+  .content {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
 }
 </style>

@@ -1,10 +1,10 @@
-# MCP Builder
+# MCP Server Build
 
 **Configure GraphJin visually and turn any database into an MCP server.**
 
 [中文](./README.md) · [Feature status](./docs/FEATURES.md)
 
-MCP Builder is a desktop tool: enter a database connection, and it starts GraphJin,
+MCP Server Build is a desktop tool: enter a database connection, and it starts GraphJin,
 discovers the schema, and writes your "role × table × operation" permissions into
 GraphJin's config. The result is an HTTP endpoint (`/api/v1/mcp`) that Claude, Cursor
 and other MCP clients can connect to directly — no hand-written YAML, no need to learn

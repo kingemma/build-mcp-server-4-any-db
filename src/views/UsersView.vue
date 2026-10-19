@@ -374,9 +374,9 @@ async function syncRoles() {
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  padding: 4px 6px 4px 12px;
+  padding: 5px 7px 5px 13px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   background: var(--ink-700);
   border: 1px solid var(--line);
@@ -397,12 +397,12 @@ async function syncRoles() {
 }
 
 .org__remove:hover {
-  color: var(--danger, #e06c6c);
-  background: rgba(224, 108, 108, 0.12);
+  color: var(--danger, #b42318);
+  background: rgba(180, 35, 24, 0.1);
 }
 
 .org__count {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-faint);
 }
 
@@ -411,10 +411,10 @@ async function syncRoles() {
 }
 
 .hint {
-  margin: 0 0 12px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--text-faint);
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
 }
 
 .users {
@@ -423,10 +423,10 @@ async function syncRoles() {
 }
 
 .users th {
-  padding: 9px 14px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-align: left;
@@ -435,13 +435,13 @@ async function syncRoles() {
 }
 
 .users td {
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .users tbody tr:hover td {
-  background: rgba(217, 162, 75, 0.05);
+  background: #f2f7ff;
 }
 
 .mono {

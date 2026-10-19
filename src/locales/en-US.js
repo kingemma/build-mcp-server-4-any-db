@@ -6,7 +6,7 @@
  */
 export default {
   app: {
-    brand: 'MCP BUILDER',
+    brand: 'MCP Server Build',
     tagline: 'any database, one console',
     backend: 'Backend {port}',
     backendMissing: 'not connected',

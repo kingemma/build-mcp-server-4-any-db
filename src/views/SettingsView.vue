@@ -114,43 +114,49 @@ onMounted(loadInfo);
 <style scoped>
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: var(--gutter);
+  align-items: start;
 }
 
 .row {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .note {
-  margin: 0 0 14px;
-  font-size: 11.5px;
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
 }
 
 .facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
 .fact {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 12px 14px;
   background: var(--ink-700);
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
 }
 
 .fact__value {
   font-size: 14px;
-  color: var(--amber);
+  font-weight: 500;
+  color: var(--accent);
+  word-break: break-word;
 }
 
 code {
-  color: var(--amber);
+  color: var(--accent);
 }
 </style>

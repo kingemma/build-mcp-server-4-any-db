@@ -21,7 +21,7 @@ const form = reactive({
   connectionString: '',
   isDefault: true,
   projectDir: 'projects/app',
-  appName: 'MCP Builder',
+  appName: 'MCP Server Build',
 });
 
 const isTesting = ref(false);
@@ -558,19 +558,19 @@ const summary = computed(() => ({
 
 .row {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .note {
-  margin: 0 0 10px;
-  font-size: 11px;
+  margin: 0 0 12px;
+  font-size: 12px;
   line-height: 1.7;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 
 .note--warn {
-  color: var(--amber);
+  color: var(--accent-strong);
 }
 
 .templates {
@@ -584,32 +584,33 @@ const summary = computed(() => ({
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .templates__label {
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text);
 }
 
 .templates__meta {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .facts {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .fact {
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .fact__value {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 
@@ -629,10 +630,10 @@ const summary = computed(() => ({
 }
 
 .conns th {
-  padding: 9px 14px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-align: left;
@@ -641,18 +642,19 @@ const summary = computed(() => ({
 }
 
 .conns td {
-  padding: 8px 14px;
-  font-size: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .conns tbody tr:hover td {
-  background: rgba(217, 162, 75, 0.05);
+  background: #f2f7ff;
 }
 
 .conns__name {
   font-family: var(--mono);
   color: var(--text);
+  font-weight: 500;
 }
 
 .conns__target,
@@ -664,7 +666,7 @@ const summary = computed(() => ({
 }
 
 .conns__path {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .conns__actions {
@@ -674,6 +676,6 @@ const summary = computed(() => ({
 
 .conns__empty {
   margin: 0;
-  padding: 16px;
+  padding: 18px;
 }
 </style>

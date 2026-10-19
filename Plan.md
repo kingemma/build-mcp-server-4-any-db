@@ -456,7 +456,7 @@ src/
 
 | 任务 | 内容 |
 |:---|:---|
-| 2.1 | 搭建 Vue 3 项目骨架：路由、Pinia 状态管理、Element Plus / Naive UI 组件库（已实现：`src/main.js` + `router/` + `stores/app.js`，Element Plus 深色覆盖见 `styles/main.css`） |
+| 2.1 | 搭建 Vue 3 项目骨架：路由、Pinia 状态管理、Element Plus / Naive UI 组件库（已实现：`src/main.js` + `router/` + `stores/app.js`，浅色工作台主题与 Element Plus 覆盖见 `styles/main.css`） |
 | 2.2 | 数据库连接管理界面：表单（类型/主机/端口/认证）、连接测试、连接列表（已实现：`views/ConnectionsView.vue`，只输出 `databases` map） |
 | 2.3 | Schema 浏览器：树形展示数据库 → 表 → 列，展示列类型和关系（已实现：`views/SchemaView.vue`） |
 | 2.4 | **权限矩阵界面**（核心）：角色选择器 + 表格布局，每行一个表，列为 Query/Insert/Update/Delete 开关（已实现：`views/PermissionsView.vue`） |
