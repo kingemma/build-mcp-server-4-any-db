@@ -627,6 +627,7 @@ The full done / not-done matrix is in [docs/FEATURES.md](./docs/FEATURES.md) (Ch
 
 **Zhen (Evan) Wang**
 
+- Email: 18901599114@163.com
 - Tel: +86 18901599114
 - WeChat: +86 18901599114
 

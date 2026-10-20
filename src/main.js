@@ -1,7 +1,7 @@
 /**
  * MCP Server Build 渲染进程入口。
  *
- * @author Zhen (Evan) Wang — Tel / WeChat: +86 18901599114
+ * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */
 
 import { createApp } from 'vue';
