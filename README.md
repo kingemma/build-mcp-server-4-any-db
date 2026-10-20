@@ -5,9 +5,12 @@
 [English](./README.en.md) · [功能进度](./docs/FEATURES.md)
 
 MCP Server Build 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
-「角色 × 表 × 操作」的权限写成 GraphJin 配置。最终产出的是一个可直接接入 Claude、
-Cursor 等 MCP 客户端的 HTTP 端点（`/api/v1/mcp`），不需要手写 YAML，也不需要理解
-GraphJin 的配置细节。
+权限写成 GraphJin 的 `sources` 配置（数据源级读 / 写 / 删档位 + 角色读规则）。最终产出的
+是一个可直接接入 Claude、Cursor 等 MCP 客户端的 HTTP 端点（`/api/v1/mcp`），不需要手写
+YAML，也不需要理解 GraphJin 的配置细节。
+
+旧项目（`databases:` + `roles[].tables`）在启动时自动迁移成 `sources:`，原文件留
+`.bak` 备份，迁移失败自动回滚。
 
 ![数据库连接页](./docs/screenshots/zh-CN/connections.png)
 
@@ -34,7 +37,8 @@ GraphJin 的配置细节。
 │    ├── GraphJinSupervisor  进程编排、崩溃重启                        │
 │    ├── McpClient           MCP Streamable HTTP 客户端                │
 │    ├── UserStore           用户 / 组织 / 连接记录（SQLite）           │
-│    └── 权限编排            角色 → 表 → 操作，写 update_current_config │
+│    ├── 权限编排            sources[].access + 角色 grants             │
+│    └── 配置迁移            legacy databases → sources（启动前）        │
 │         │ MCP tools                       │ 子进程                    │
 └─────────┼─────────────────────────────────┼─────────────────────────┘
           ▼                                 ▼
@@ -45,6 +49,10 @@ GraphJin 的配置细节。
 
 - **为什么走 MCP**：基线实测发现 v3.21.14 的内置 stdio proxy 有缺陷，因此客户端配置
   直接写 HTTP 传输，指向 `/api/v1/mcp`。
+- **配置模型是 source 模式**：连接写在 `sources:` 数组里，权限写在 `sources[].access`
+  （读 / 写 / 删档位、owner 列、表分类）与 `access.grants`（角色读规则）里。
+  `databases:` 与 `roles[].tables` 是 legacy 形态，与 `sources:` 共存会让进程启动即
+  FATAL，旧项目由后端在启动前迁移（见「旧项目迁移」）。
 - **权限方案**：本地角色名即 GraphJin 角色名，不需要额外的映射表；写入后立刻生效。
 
 ## 功能
@@ -74,13 +82,25 @@ GraphJin 的配置细节。
 
 ### 权限矩阵
 
-角色 × 表 × 四项操作（Query / Insert / Update / Delete）开关，额外支持：
+分成两块，对应 GraphJin source 模式的两层结构：
 
-- 行过滤条件（GraphJin DSL）；
-- 列管控：白名单，或「阻止列表」自动转成补集白名单（GraphJin 的 `columns` 只接受数组）；
-- 查询默认 `limit`。
+**数据源访问**（`sources[].access`，对整个库生效）：
 
-启动后自动用生效策略回填矩阵（只补空格子，不覆盖本地改动）；也可以点「从生效策略导入」
+- 读 / 写 / 删三档：读档位可选 `public` / `authenticated` / `owner` / `account` / `blocked`，
+  写与删只有 `authenticated` / `owner` / `account` / `blocked`；
+- `owner` 档位需要填 owner 列（行归属过滤，insert 时未填归属会自动补当前身份）；
+- 「仅管理员可读」与「全局屏蔽」两组表：前者只有 admin 能读，后者对所有人（含 admin）不可读。
+
+**读规则矩阵**（`sources[].access.grants[]`，角色 × 表）：
+
+- 角色 × 表的读开关；未列入任何规则的表对已认证角色完全可读，所以「拦」要用上面两组表；
+- 行过滤条件（GraphJin DSL，可用 `$user_code` 等身份变量）；
+- 列管控：白名单，或「阻止列表」自动转成补集白名单（GraphJin 的 `columns` 只接受数组、
+  且必填，空数组会被拒）。
+
+写与删没有表级开关，也没有写列白名单——这是 source 模式的边界，不是遗漏（见「已知限制」）。
+
+启动后自动用生效策略回填（只补空格子，不覆盖本地改动）；也可以点「从生效策略导入」
 用生效策略覆盖本地未提交的改动。写入前展示逐项 diff 并二次确认。
 
 角色标签上的 `×` 可移除本地角色；角色已写进生效策略时会先确认，并说明 GraphJin 里的
@@ -89,20 +109,41 @@ GraphJin 的配置细节。
 「验证权限」按所选角色真跑一条 GraphQL（`graphql.execute`）：query 被拦时 GraphJin 是
 静默的（返回 `null`、不报错），写操作被拦才返回 `errors`，面板会把这两种情况分开提示。
 
-每次写入前会自动保存一份策略快照（`mcp-builder.db` 的 `policy_snapshots` 表），
-点「写入历史」可查看并按时间恢复；回滚前会再存一份，所以回滚本身也能撤销。
-`admin` 是平台保留角色，不进入矩阵，平台也不会为它写限制规则；它不会被回滚删除。
+每次写入前会自动保存一份策略快照（`mcp-builder.db` 的 `policy_snapshots` 表，含
+`sources[].access`），点「写入历史」可查看并按时间恢复；回滚前会再存一份，所以回滚本身
+也能撤销。`admin` 是平台保留角色，不进入矩阵，平台也不会为它写限制规则；它不会被回滚删除。
 
 ![权限矩阵](./docs/screenshots/zh-CN/permissions.png)
+
+### 旧项目迁移（databases → sources）
+
+检测到项目目录下的 `dev.yml` 还是 legacy 形态（`databases:` + `roles[].tables`）时，
+「启动」会先自动迁移再按新配置启动：
+
+1. 起一个临时实例，用只读的配置 API（`get_current_config` / `query_catalog`）读回角色与列清单；
+2. 把 `databases:` 的连接信息（配置 API 返回 `[REDACTED]`，真实凭据从文件读）搬进
+   `sources:`，`roles[].tables` 的 filter / columns 折算成 `access.grants`；
+3. 停掉临时实例，由 supervisor 按新配置重启。
+
+迁移全程只读配置、直接改写文件，不走 `update_current_config`：该接口每次写入都会 reload
+并重连所有库，只要有一个库连不上，整次更新就被拒（详见
+[`docs/graphjin-source-migration.md`](./docs/graphjin-source-migration.md) §2.4c）。
+
+- 原文件备份为 `dev.yml.legacy-<时间戳>.bak`，迁移抛错会自动还原并报出明确原因；
+- 表级写开关没有对应结构，写 / 删降级为数据源级（默认 `blocked`），并在写入前提示；
+- 库连不上时 catalog 为空、拿不到列清单，会记 `missing-columns` 冲突且**不生成** grants
+  ——宁可少授权，也不会退化成全列可读；库恢复后重跑一次迁移即可补齐；
+- 迁移结果（成功 / 失败原因 / 备份路径）出现在运行状态接口的 `migration` 字段里。
 
 ### 用户与组织
 
 本地维护组织与成员（SQLite，不依赖 GraphJin 是否在跑）：
 
 - 成员角色直接就是 GraphJin 角色名，改角色即时写回本地库；
-- 「同步角色到 GraphJin」把成员用到的角色补进 `roles` —— 方案 B 下角色不存在时
-  `roles[].tables` 规则会被拒；
+- 「同步角色到 GraphJin」把成员用到的角色补进 `roles` —— grants 引用不存在的角色会被拒
+  （`role "x" is not defined in roles`）；
 - 角色下拉支持直接输入新角色名（allow-create），不用先去权限矩阵建角色；
+- 可为成员签发 MCP 访问令牌（默认 12 小时），外部客户端用 `Authorization: Bearer` 连平台网关；
 - 成员可改姓名 / 邮箱；组织标签上的 `×` 可删除组织，组织下还有成员时后端会拒绝删除。
 
 ![用户与组织](./docs/screenshots/zh-CN/users.png)
@@ -196,9 +237,9 @@ npm run demo:orders -- --db <路径>      # 指定 Electron 用的 mcp-builder.d
 | `user-a@demo.local` | `customer` | `owner_code = $user_code` | 白名单 6 列，看不到 `internal_note` | 全阻止 |
 | `user-b@demo.local` | `ops` | 无（看全部） | 不限 | 允许更新、删除 |
 
-**多用户身份走「平台网关 + JWT」**，不用 GraphJin 原生 JWT——实测 v3.21.14 的 legacy
-`roles[].tables` 模式不解析 token 里的 `roles`/`role`，`roles_query` 也查不到表
-（见 `sidecar-backend/scripts/verify-identity.js`）。链路是：
+**多用户身份走「平台网关 + JWT」**：外部客户端只认平台签发的令牌，网关验签后把身份降级成
+回环连接上的 `X-User-Role` / `X-User-Code`，不让 GraphJin 直接验 JWT——这样外部客户端拿不到
+能冒充 admin 的身份头（GraphJin 仍以 `auth.type: none` 只监听回环）。链路是：
 
 ```
 外部客户端 → http://127.0.0.1:<后端端口>/api/v1/mcp
@@ -375,8 +416,8 @@ npm run dev
 2. 点「测试连接」。测试通过后连接会自动保存到本地列表。
 3. 点「启动」。后端会创建/合并 `dev.yml` 并拉起 GraphJin。
 4. 到 **Schema 浏览器** 确认表、列和关系已经发现。
-5. 到 **权限矩阵** 添加角色、配置四项操作、行过滤和列管控；
-   点「应用到 GraphJin」后按 diff 确认，写入前会自动保存快照。
+5. 到 **权限矩阵** 先配数据源访问（读 / 写 / 删档位、owner 列、表分类），再添加角色配读规则
+   （行过滤、列管控）；点「应用到 GraphJin」后按 diff 确认，写入前会自动保存快照。
 6. 到 **运行状态** 页查看端点、探活、复制 MCP 客户端配置。
 
 > `admin` 是平台保留角色：不进入矩阵，平台不会为它写限制规则，也不会在回滚时删除它。
@@ -415,7 +456,8 @@ npm run verify:ui        # 真实后端 + Edge headless（21 项）
 
 ```bash
 cd sidecar-backend
-npm run verify:e2e       # 24 项
+npm run verify:e2e         # 24 项
+npm run verify:migration   # 12 项：legacy 项目迁移，含一个数据库不可达的项目
 ```
 
 ### 构建安装包
@@ -501,16 +543,17 @@ npm run smoke:binaries
 - 连接记录里的 `payload` 整段用 AES-256-GCM 加密（密钥复用 GraphJin keystore key），
   密码与连接串不落明文；列表只返回 host / port / dbname / user / path 等摘要。
 - `keystore.key` 丢失后旧记录无法解密，界面会标记「需重新录入」，可回填非敏感字段后重测。
-- 策略快照明文保存角色与表规则（不含数据库凭据），每个项目保留最近 30 份；
+- 策略快照明文保存角色读规则与数据源访问档位（不含数据库凭据），每个项目保留最近 30 份；
   写入前自动保存，可在权限矩阵的「写入历史」里回滚。
 
 ## 验证
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（133 项）
+npm test                 # 后端单测（175 项）
 
-npm run verify:e2e       # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
+npm run verify:e2e         # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
+npm run verify:migration   # legacy 项目迁移：角色/列折算、写删降级、库不可达（12 项）
 
 cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
@@ -531,22 +574,28 @@ src/                   Vue 3 前端
   locales/             zh-CN / en-US 文案
   stores/app.js        Pinia：服务状态、Schema、权限矩阵、写入快照
 sidecar-backend/       Node 后端
-  src/                 JSON-RPC、GraphJin 客户端、权限编排、快照、连接存储
+  src/                 JSON-RPC、GraphJin 客户端、权限编排、legacy 迁移、快照、连接存储
   test/                node:test 单测
   scripts/             真机验证脚本
 scripts/               本地启动、演示库、二进制准备 / 冒烟、UI 冒烟
 .github/workflows/     四平台打包 CI
-docs/                  基线文档、功能矩阵、UI 截图
+docs/                  基线、迁移设计、功能矩阵、UI 截图
 binaries/              GraphJin 二进制（构建期解压）
 ```
 
 ## 已知限制
 
 - 安装包签名 / 公证未接入：CI 产出未签名包，macOS 首次打开需手动放行；
+- source 模式没有表级写开关：写 / 删只到数据源级，`grants[].columns` 只约束读，
+  写列白名单实测不生效（`docs/graphjin-source-migration.md` §2.2）；
+- 角色之间没有「表可见性」：未列入 grants 的表对已认证角色完全可读，只能靠
+  「仅管理员可读」/「全局屏蔽」两组表来收敛；
 - `gj_security` 需要 admin JWT，策略真相来源是 MCP 的 `get_current_config`；
 - `dev.yml` 合并覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式，
-  但不是通用 YAML 解析器：`databases:` 段一旦出现 anchors / aliases / merge keys
+  但不是通用 YAML 解析器：`sources:` 段一旦出现 anchors / aliases / merge keys
   会明确报错并拒绝合并，不会悄悄改坏文件；
+- 库连不上时迁移拿不到列清单，不会生成 grants（记 `missing-columns` 冲突），
+  库恢复后需要再跑一次迁移才能补上读授权；
 - 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
 
 完整的「已完成 / 未完成」清单见 [docs/FEATURES.md](./docs/FEATURES.md)。

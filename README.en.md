@@ -5,10 +5,14 @@
 [中文](./README.md) · [Feature status](./docs/FEATURES.md)
 
 MCP Server Build is a desktop tool: enter a database connection, and it starts GraphJin,
-discovers the schema, and writes your "role × table × operation" permissions into
-GraphJin's config. The result is an HTTP endpoint (`/api/v1/mcp`) that Claude, Cursor
-and other MCP clients can connect to directly — no hand-written YAML, no need to learn
-GraphJin's config format.
+discovers the schema, and writes your permissions into GraphJin's `sources` config
+(database-level read / write / delete modes plus per-role read grants). The result is an
+HTTP endpoint (`/api/v1/mcp`) that Claude, Cursor and other MCP clients can connect to
+directly — no hand-written YAML, no need to learn GraphJin's config format.
+
+Legacy projects (`databases:` + `roles[].tables`) are migrated to `sources:` before the
+service starts; the original file is kept as a `.bak` and restored automatically if the
+migration fails.
 
 ![Connections page](./docs/screenshots/en-US/connections.png)
 
@@ -35,7 +39,8 @@ GraphJin's config format.
 │    ├── GraphJinSupervisor  process lifecycle, crash restarts        │
 │    ├── McpClient           MCP Streamable HTTP client               │
 │    ├── UserStore           users / orgs / connections (SQLite)      │
-│    └── permission planner  role → table → op, applied via config    │
+│    ├── permission planner  sources[].access + per-role grants       │
+│    └── config migrator     legacy databases → sources (pre-start)   │
 │         │ MCP tools                       │ child process           │
 └─────────┼─────────────────────────────────┼─────────────────────────┘
           ▼                                 ▼
@@ -46,6 +51,11 @@ GraphJin's config format.
 
 - **Why HTTP transport**: the bundled stdio proxy in v3.21.14 is broken (see the
   baseline doc), so the generated client config points straight at `/api/v1/mcp`.
+- **The config model is source mode**: connections live in a `sources:` array, permissions
+  in `sources[].access` (read / write / delete modes, owner column, table classes) and
+  `access.grants` (per-role read rules). `databases:` and `roles[].tables` are the legacy
+  shape — shipping them next to `sources:` makes the process die at startup, so the
+  backend migrates old projects before starting GraphJin (see "Legacy migration").
 - **Permission model**: the local role name *is* the GraphJin role name — no mapping
   layer. Writes take effect immediately.
 
@@ -83,14 +93,30 @@ its tables, columns and foreign keys only (`query_catalog` is filtered by
 
 ### Permission matrix
 
-Role × table × four operations (Query / Insert / Update / Delete), plus:
+Two panels that mirror the two layers of GraphJin's source mode:
 
-- row filters (GraphJin DSL);
-- column control: an allowlist, or a blocklist that is converted into its complement
-  allowlist (GraphJin's `columns` only accepts an array);
-- a default row `limit` for queries.
+**Source access** (`sources[].access`, applies to the whole database):
 
-On load the matrix is filled from the effective policy (empty cells only, local edits are kept);
+- read / write / delete modes: read supports `public` / `authenticated` / `owner` /
+  `account` / `blocked`, while write and delete offer `authenticated` / `owner` /
+  `account` / `blocked`;
+- the `owner` mode needs an owner column (row ownership filter; inserts filled with the
+  current identity when the owner is omitted);
+- two table classes: "admin only" (nobody but admin can read) and "blocked" (nobody,
+  including admin, can read).
+
+**Read matrix** (`sources[].access.grants[]`, role × table):
+
+- the read toggle per role and table; tables not listed in any grant stay fully readable
+  for authenticated roles, so blocking has to use the two table classes above;
+- row filters (GraphJin DSL, `$user_code` and friends still work);
+- column control: an allowlist, or a blocklist converted into its complement allowlist
+  (GraphJin's `columns` only accepts an array and rejects an empty one).
+
+Writes and deletes have no per-table switch and no write column allowlist — that is the
+source-mode boundary, not an oversight (see "Known limitations").
+
+On load everything is filled from the effective policy (empty cells only, local edits are kept);
 **Import effective policy** overwrites uncommitted edits on purpose. Every write shows a
 per-item diff and asks for confirmation.
 
@@ -103,12 +129,39 @@ GraphJin blocks queries silently (`null`, no errors) and mutations with `errors`
 calls out both cases.
 
 Every write also snapshots the current policy first (`policy_snapshots` in
-`mcp-builder.db`). Open **Write history** to inspect snapshots and restore any of them;
-the state is snapshotted again before restoring, so a rollback can itself be rolled back.
-`admin` is a reserved platform role: it is not part of the matrix, the platform never
-writes restrictive rules for it, and a rollback never removes it.
+`mcp-builder.db`, including `sources[].access`). Open **Write history** to inspect snapshots
+and restore any of them; the state is snapshotted again before restoring, so a rollback can
+itself be rolled back. `admin` is a reserved platform role: it is not part of the matrix,
+the platform never writes restrictive rules for it, and a rollback never removes it.
 
 ![Permission matrix](./docs/screenshots/en-US/permissions.png)
+
+### Legacy migration (databases → sources)
+
+When the project's `dev.yml` is still in the legacy shape (`databases:` + `roles[].tables`),
+**Start** migrates it first and then boots GraphJin with the new config:
+
+1. start a throwaway instance and read roles and columns through the read-only config API
+   (`get_current_config` / `query_catalog`);
+2. move the `databases:` connections (the config API returns `[REDACTED]`, so real
+   credentials come from the file) into `sources:`, folding `roles[].tables` filters and
+   columns into `access.grants`;
+3. stop the throwaway instance and let the supervisor restart with the new config.
+
+The migration only reads config and rewrites the file — it never calls
+`update_current_config`: every config write triggers a reload that reconnects all
+databases, so a single unreachable database rejects the whole update (see
+[`docs/graphjin-source-migration.md`](./docs/graphjin-source-migration.md) §2.4c, Chinese).
+
+- the original file is backed up as `dev.yml.legacy-<timestamp>.bak` and restored
+  automatically when the migration throws, with the real cause in the error;
+- per-table write switches have no counterpart: write / delete degrade to the database
+  level (default `blocked`) and the UI says so before writing;
+- when databases are unreachable the catalog is empty, so no columns are known: the
+  migration records a `missing-columns` conflict and **writes no grants** — under-granting
+  beats silently allowing every column. Re-run the migration once the databases are back;
+- the outcome (ok / reason / backup path) shows up in the `migration` field of the runtime
+  status call.
 
 ### Users & orgs
 
@@ -116,10 +169,12 @@ Organizations and members live in local SQLite, so this page works even when Gra
 stopped:
 
 - a member's role *is* the GraphJin role name; changing it writes straight back to SQLite;
-- **Sync roles to GraphJin** adds the roles used by members to `roles` — in plan B,
-  `roles[].tables` rules are rejected when the role does not exist yet;
+- **Sync roles to GraphJin** adds the roles used by members to `roles` — grants that
+  reference an unknown role are rejected (`role "x" is not defined in roles`);
 - the role selector accepts new names (allow-create), so you need not create the role in
   the permission matrix first;
+- MCP access tokens can be issued per member (12 hours by default); external clients then
+  authenticate to the platform gateway with `Authorization: Bearer`;
 - members can be edited (name / email); the `×` on an org chip deletes it, and the backend
   refuses while the org still has members.
 
@@ -360,8 +415,9 @@ running; the UI reports the backend as offline after it stops.
 2. Click **Test connection**. A successful test saves the connection locally.
 3. Click **Start**. The backend creates/merges `dev.yml` and starts GraphJin.
 4. Open **Schema browser** and confirm tables, columns and relationships were discovered.
-5. Open **Permission matrix**, add roles, configure the four operations, row filters and
-   column control. **Apply to GraphJin** shows a diff first and snapshots the policy before
+5. Open **Permission matrix**, configure source access first (read / write / delete modes,
+   owner column, table classes), then add roles and their read rules (row filters, column
+   control). **Apply to GraphJin** shows a diff first and snapshots the policy before
    writing.
 6. Open **Runtime** to see the endpoint, probe health and copy the MCP client config.
 
@@ -403,7 +459,8 @@ permissions and rolls back):
 
 ```bash
 cd sidecar-backend
-npm run verify:e2e       # 24 checks
+npm run verify:e2e         # 24 checks
+npm run verify:migration   # 12 checks: legacy migration, including an unreachable database
 ```
 
 ### Build installers
@@ -498,7 +555,8 @@ behaviour is documented in
   endpoint only returns host / port / dbname / user / path summaries.
 - If `keystore.key` is lost, old records cannot be decrypted: the UI marks them
   "re-enter required" and still restores the non-sensitive fields.
-- Policy snapshots store roles and table rules as plain JSON (no database credentials);
+- Policy snapshots store role read rules and source access modes as plain JSON (no database
+  credentials);
   the 30 most recent snapshots per project are kept and can be restored from the
   permission matrix's **Write history** dialog.
 
@@ -506,9 +564,10 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (133)
+npm test                 # backend unit tests (175)
 
-npm run verify:e2e       # real end-to-end: start → discover → write → rollback (24)
+npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
+npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
 
 cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
@@ -530,12 +589,13 @@ src/                   Vue 3 renderer
   locales/             zh-CN / en-US copy
   stores/app.js        Pinia: service state, schema, permission matrix, snapshots
 sidecar-backend/       Node backend
-  src/                 JSON-RPC, GraphJin client, permission planner, snapshots, connections
+  src/                 JSON-RPC, GraphJin client, permission planner, legacy migration,
+                       snapshots, connections
   test/                node:test suites
   scripts/             real-machine verification scripts
 scripts/               local startup, demo DB, binary prep / smoke, UI smoke test
 .github/workflows/     four-platform packaging CI
-docs/                  baseline notes, feature matrix, UI screenshots
+docs/                  baseline notes, migration design, feature matrix, UI screenshots
 binaries/              GraphJin binaries (extracted at build time)
 ```
 
@@ -543,12 +603,19 @@ binaries/              GraphJin binaries (extracted at build time)
 
 - Installer signing / notarization is not wired up: CI produces unsigned artifacts, and
   macOS needs a manual first-launch approval;
+- source mode has no per-table write switch: write / delete are database-level, and
+  `grants[].columns` only constrains reads — write column allowlists are not enforced
+  (`docs/graphjin-source-migration.md` §2.2);
+- roles have no table visibility: tables absent from grants stay fully readable for
+  authenticated roles, so you have to use the "admin only" / "blocked" table classes;
 - `gj_security` needs an admin JWT, so the source of truth for policy is the MCP tool
   `get_current_config`;
 - `dev.yml` merging understands this project's output, flow maps, quoted keys and
   GraphJin's rewritten file, but is not a general YAML parser: anchors / aliases / merge
-  keys inside `databases:` are rejected with an explicit error instead of silently
+  keys inside `sources:` are rejected with an explicit error instead of silently
   corrupting the file;
+- when databases are unreachable the migration cannot read columns and writes no grants
+  (a `missing-columns` conflict); re-run the migration after the databases come back;
 - non-Windows coverage is currently the CI binary `version` smoke; the full UI smoke
   script still requires Windows + Edge.
 

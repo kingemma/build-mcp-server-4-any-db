@@ -1,7 +1,7 @@
 # 功能进度
 
-> 更新于 2026-10-18。新增/完成功能时同步本表；实现细节见 `Plan.md` 与
-> `docs/graphjin-3.21.14-baseline.md`。
+> 更新于 2026-10-20。新增/完成功能时同步本表；实现细节见 `Plan.md`、
+> `docs/graphjin-3.21.14-baseline.md` 与 `docs/graphjin-source-migration.md`。
 
 ## 已完成
 
@@ -32,11 +32,12 @@
 | admin 角色保障 | 启动与每次写入前自动补齐 `admin`，避免 `roles 'admin' not defined` |
 | block 列管控保护 | 表列清单缺失时拒绝展开补集，避免把全部列静默放行 |
 | 驱动能力校验 | `driverVerified=false` 的类型在测试/启动前直接返回明确错误，不再拉起进程 |
-| 用户 / 组织 | SQLite 存储；角色可同步到 GraphJin；组织有成员时拒绝删除，成员资料可改 |
+| legacy 配置迁移 | 启动前发现 `databases:` + `roles[].tables` 就先起临时实例，用只读配置 API 读角色与 catalog，改写 `dev.yml` 为 `sources` + `access.grants`，再按新配置重启；失败用 `.bak` 回滚，catalog 为空记 `missing-columns` 且不生成 grants |
+| 用户 / 组织 | SQLite 存储；角色可同步到 GraphJin；组织有成员时拒绝删除，成员资料可改；成员可签发 MCP 令牌 |
 | 连接本地存储 | SQLite + AES-256-GCM；`name + project_dir` 唯一；摘要字段独立明文列 |
 | 连接自检 | 服务未运行时临时起单库实例跑 `validate_config`，用完即停；缺必填字段的配置前置拦截，不起进程 |
-| dev.yml 增量合并 | 只改 `databases:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 显式拒绝 |
-| 测试 | `node:test` 共 133 项 |
+| dev.yml 增量合并 | 只改 `sources:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 显式拒绝 |
+| 测试 | `node:test` 共 175 项 |
 
 ### 前端
 
@@ -65,10 +66,12 @@
 | 中英文 README（介绍、截图、部署运行） | `README.md` / `README.en.md` |
 | 功能进度（本文件） | `docs/FEATURES.md` |
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
+| source 迁移设计与踩坑 | `docs/graphjin-source-migration.md` |
 | 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
-| 后端单测 | `cd sidecar-backend && npm test`（133 项） |
+| 后端单测 | `cd sidecar-backend && npm test`（175 项） |
 | 前端策略单测 | `npm run test:frontend`（8 项） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
+| legacy 迁移验证 | `cd sidecar-backend && npm run verify:migration`（12 项，含数据库不可达的项目） |
 | 二进制冒烟 | `npm run smoke:binaries` |
 | UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（21 项：语言切换、组织/成员与资料编辑、权限写入 / 验证 / 回滚、本地角色删除） |
 
@@ -90,6 +93,8 @@
 | 连接测试多一次进程启停 | 未启动服务时约多 1–2s | 服务在跑时复用现成实例；缺必填字段的配置已前置拦截，真正需要连库的才起临时实例 |
 | dev.yml 合并不是通用 YAML 解析器 | 手写 anchors / merge keys 无法合并 | 已覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式；不支持的构造会明确报错并拒绝合并，不会改坏文件 |
 | 一个后端只托管一个实例 | 切换连接要停旧实例 | 设计取舍；避免多实例端口与 keystore 冲突 |
+| 库不可达时迁移不生成 grants | 该库的角色读不到数据 | catalog 为空拿不到列清单，记 `missing-columns` 冲突；宁可少授权也不退化成全列可读，库恢复后重跑迁移即可 |
+| 迁移结果只在 `graphjin.status` 的 `migration` 字段 | 界面上没有专门的迁移结果面板 | 成功 / 失败原因 / `.bak` 路径都在该字段里，失败时启动会直接报错 |
 
 ## 已知边界（非缺陷）
 
@@ -97,6 +102,11 @@
 - source 模式下 `source_patches` 会忽略 `access.grants`，平台改为整份替换 `sources`；
   替换前先从 dev.yml 读回真实连接串（配置 API 返回 `[REDACTED]`）。
 - 删除角色必须在清空引用它的 grants 之后，否则 `update_current_config` 会 reload 失败。
+- `grants[].columns` 只约束读：写列白名单实测不生效；写 / 删没有表级开关，只有
+  source 级 `access.write` / `access.delete`（`docs/graphjin-source-migration.md` §2.2）。
+- 未列入任何 grants 的表对已认证角色完全可读，收敛只能靠 `admin_tables` / `blocked_tables`。
+- 迁移只读配置、不改配置：任何 `update_current_config` 都会触发 reload 并重连所有库，
+  任一库连不上就整次失败（§2.4c）。
 - 连接凭据依赖 `keystore.key`；该文件丢失后旧记录只能重新录入密码。
 - 权限快照存在同一个 `mcp-builder.db`，只保留每个项目最近 30 份。
 - `admin` 是保留角色：平台不为它写限制规则、默认不进入矩阵，任何回滚都不会删除它。
