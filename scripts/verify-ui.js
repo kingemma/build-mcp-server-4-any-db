@@ -387,6 +387,14 @@ async function verifyPermissions(cdp, rpc, status) {
     (await cdp.evaluate(`Boolean(document.querySelector('.add input'))`)) === true
   );
 
+  // 每个数据源一个标签页，数量必须和 schema 里的库数一致
+  const schemaTables = await rpc('schema.tables', { baseUrl });
+  const databases = [...new Set(schemaTables.map((table) => table.database))];
+  await waitFor('权限页按库分标签', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.db-tab').length`)) === databases.length
+  );
+  record('每个库一个独立标签页', databases.length > 1);
+
   await cdp.evaluate(`(() => {
     const input = document.querySelector('.add input');
     input.value = 'readonly';
@@ -412,6 +420,37 @@ async function verifyPermissions(cdp, rpc, status) {
     (await cdp.evaluate(`document.querySelector('.matrix .toggle--allowed')?.textContent.trim()`)) ===
     '允许'
   );
+
+  // 切到另一个库再切回来：这套未提交改动必须还在（每库一套矩阵）
+  const currentTab = await cdp.evaluate(
+    `document.querySelector('.db-tab--active')?.textContent.trim() ?? ''`
+  );
+  const switched = await cdp.evaluate(`(() => {
+    const other = [...document.querySelectorAll('.db-tab')]
+      .find((tab) => !tab.classList.contains('db-tab--active'));
+    if (!other) return false;
+    other.click();
+    return true;
+  })()`);
+  if (switched) {
+    await waitFor('切到另一个库', async () =>
+      (await cdp.evaluate(
+        `document.querySelector('.db-tab--active')?.textContent.trim() ?? ''`
+      )) !== currentTab
+    );
+    await cdp.evaluate(`(() => {
+      const target = [...document.querySelectorAll('.db-tab')]
+        .find((tab) => tab.textContent.trim() === ${JSON.stringify(currentTab)});
+      target?.click();
+      return 'ok';
+    })()`);
+    await waitFor('切回原库后规则仍在', async () =>
+      (await cdp.evaluate(
+        `document.querySelector('.matrix .toggle--allowed')?.textContent.trim()`
+      )) === '允许'
+    );
+    record('切换标签后各库未提交改动互不影响', true);
+  }
 
   await cdp.evaluate(`(() => {
     [...document.querySelectorAll('.panel__head button')]

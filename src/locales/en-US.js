@@ -206,6 +206,8 @@ export default {
     noRoles: 'No roles yet. Add one to configure read rules per table.',
     matrix: 'Matrix · {role}',
     matrixNone: 'Matrix · no role selected',
+    noDatabase: 'No database to configure yet: start GraphJin and make sure at least one source is reachable',
+    pendingChanges: '{count} uncommitted changes',
     reloadPolicy: 'Reload effective policy',
     apply: 'Apply to GraphJin',
     sourceAccess: {
@@ -306,6 +308,7 @@ export default {
     },
     confirm: {
       title: 'Confirm write',
+      database: 'Target database: {database} (rules in other databases stay untouched)',
       warning:
         'In source mode a config write takes effect immediately. The platform snapshots the current policy before writing so it can be rolled back, but please confirm the {count} changes below.',
       submit: 'Write',

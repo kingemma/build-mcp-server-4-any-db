@@ -291,6 +291,30 @@ watch(
 
 <template>
   <div class="stack">
+    <!-- 每个库一个标签页：角色清单、矩阵、未提交改动都按库独立 -->
+    <section class="panel panel--tabs">
+      <div v-if="store.databaseNames.length" class="db-tabs" role="tablist">
+        <button
+          v-for="name in store.databaseNames"
+          :key="name"
+          type="button"
+          role="tab"
+          class="db-tab"
+          :class="{ 'db-tab--active': store.applyDatabase === name }"
+          :aria-selected="store.applyDatabase === name"
+          @click="store.selectDatabase(name)"
+        >
+          <span class="db-tab__name">{{ name }}</span>
+          <span
+            v-if="store.pendingByDatabase[name]"
+            class="db-tab__dot"
+            :title="t('permissions.pendingChanges', { count: store.pendingByDatabase[name] })"
+          />
+        </button>
+      </div>
+      <p v-else class="mono-dim">{{ t('permissions.noDatabase') }}</p>
+    </section>
+
     <section class="panel">
       <div class="panel__head">
         <span class="panel__title">{{ t('permissions.roles') }}</span>
@@ -435,14 +459,6 @@ watch(
           }}
         </span>
         <div class="actions">
-          <el-select
-            :model-value="store.applyDatabase"
-            size="small"
-            style="width: 150px"
-            @change="store.selectDatabase"
-          >
-            <el-option v-for="name in store.databaseNames" :key="name" :label="name" :value="name" />
-          </el-select>
           <el-button size="small" @click="store.loadCurrentPolicy">
             {{ t('permissions.reloadPolicy') }}
           </el-button>
@@ -622,6 +638,7 @@ watch(
     </el-dialog>
 
     <el-dialog v-model="isConfirmOpen" :title="t('permissions.confirm.title')" width="640">
+      <p class="mono-dim">{{ t('permissions.confirm.database', { database: store.applyDatabase }) }}</p>
       <p class="warn">{{ t('permissions.confirm.warning', { count: totalChanges }) }}</p>
       <ul class="changes">
         <li v-if="accessDirty">
@@ -782,6 +799,51 @@ watch(
 
 .panel__body--flush {
   padding: 0;
+}
+
+/* 每库一个标签：切换标签 = 切换整套角色清单、矩阵与未提交改动 */
+.panel--tabs {
+  padding: 10px 14px;
+}
+
+.db-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.db-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: var(--fs-note);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.db-tab:hover {
+  color: var(--text);
+  background: var(--ink-700);
+}
+
+.db-tab--active {
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(29, 78, 216, 0.25);
+}
+
+.db-tab__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--coral);
+  border-radius: 50%;
 }
 
 .access-grid {

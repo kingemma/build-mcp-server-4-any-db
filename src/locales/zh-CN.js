@@ -204,6 +204,8 @@ export default {
     noRoles: '还没有角色。添加一个后即可为每张表配置读规则。',
     matrix: '矩阵 · {role}',
     matrixNone: '矩阵 · 未选择角色',
+    noDatabase: '还没有可配置的数据库：先启动 GraphJin，并确认至少有一个数据源可达',
+    pendingChanges: '{count} 项未提交改动',
     reloadPolicy: '重载生效策略',
     apply: '应用到 GraphJin',
     tableColumn: '表',
@@ -297,6 +299,7 @@ export default {
     },
     confirm: {
       title: '确认写入',
+      database: '目标库：{database}（其余库的规则不会变）',
       warning:
         'source 模式下配置写入立即生效；平台会在写入前自动保存快照，可回滚，但仍请确认下面 {count} 项变更。',
       submit: '确认写入',

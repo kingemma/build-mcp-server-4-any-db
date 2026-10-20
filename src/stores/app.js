@@ -48,12 +48,13 @@ export const useAppStore = defineStore('app', {
     status: null,
     tables: [],
     schema: null,
-    roles: [],
     currentRole: '',
-    /** 权限矩阵写入目标库；矩阵键是 `database::table` */
+    /** 权限页当前激活的库；每个库一个标签页，矩阵与角色清单互不影响 */
     applyDatabase: '',
-    /** { [role]: { ['database::table']: { query, insert, update, delete } } } */
-    matrix: {},
+    /** { [database]: { [role]: { [table]: { query: {...} } } } } */
+    matrices: {},
+    /** { [database]: string[] } 每库独立的角色清单 */
+    rolesByDb: {},
     clientConfig: null,
     /** 当前生效策略，按库分隔的原始归一化结果（键为 `database::table`） */
     policyRaw: {},
@@ -93,31 +94,47 @@ export const useAppStore = defineStore('app', {
     isRunning: (state) => Boolean(state.status?.running),
     baseUrl: (state) => state.status?.baseUrl ?? '',
     databaseNames: (state) => [...new Set(state.tables.map((t) => t.database))],
+    /** 当前标签页的矩阵：{ role: { table: {ops} } } */
+    matrix: (state) => state.matrices[state.applyDatabase] ?? {},
+    /** 当前标签页自己的角色清单 */
+    roles: (state) => state.rolesByDb[state.applyDatabase] ?? [],
     /** 写入目标库下的表名；矩阵只展示、只提交这个库的表 */
     applyTables: (state) =>
       state.tables
         .filter((table) => table.database === state.applyDatabase)
         .map((table) => table.name),
-    tablesForCurrentRole: (state) =>
-      scopeToDatabase(
-        { [state.currentRole]: state.matrix[state.currentRole] ?? {} },
-        state.applyDatabase
-      )[state.currentRole] ?? {},
+    tablesForCurrentRole() {
+      return this.matrix[this.currentRole] ?? {};
+    },
     /** { tableName: string[] } 供 block 模式求补集，只含当前目标库 */
     columnsByTable: (state) => columnsByTableOf(state, state.applyDatabase),
-    pendingPolicy: (state) =>
-      normalizePendingMatrix(
-        scopeToDatabase(state.matrix, state.applyDatabase),
-        columnsByTableOf(state, state.applyDatabase)
-      ),
-    changes(state) {
-      return diffPolicy(state.currentPolicy, this.pendingPolicy);
+    pendingPolicy() {
+      return normalizePendingMatrix(this.matrix, this.columnsByTable);
     },
-    /** 成员角色候选：矩阵角色 + 生效策略角色 + 已在用的角色 */
+    changes() {
+      return diffPolicy(this.currentPolicy, this.pendingPolicy);
+    },
+    /**
+     * 每个库有多少项未提交改动：标签页上的小圆点靠它判断。
+     *
+     * @returns {Object} { database: number }
+     */
+    pendingByDatabase(state) {
+      const result = {};
+      for (const database of this.databaseNames) {
+        const pending = normalizePendingMatrix(
+          state.matrices[database] ?? {},
+          columnsByTableOf(state, database)
+        );
+        result[database] = diffPolicy(scopeToDatabase(state.policyRaw, database), pending).length;
+      }
+      return result;
+    },
+    /** 成员角色候选：当前库角色 + 生效策略角色 + 已在用的角色 */
     roleNames(state) {
       return [
         ...new Set([
-          ...state.roles,
+          ...(state.rolesByDb[state.applyDatabase] ?? []),
           ...Object.keys(state.currentPolicy ?? {}),
           ...state.users.map((user) => user.role),
         ]),
@@ -177,10 +194,10 @@ export const useAppStore = defineStore('app', {
         this.schema = null;
         this.connectedDatabases = [];
         this.activeDatabase = '';
-        // 换项目/换实例时矩阵不能跨项目残留：键里只有库名和表名，同名表会串
-        this.roles = [];
+        // 换项目/换实例时矩阵不能跨项目残留：同名库、同名表会串
         this.currentRole = '';
-        this.matrix = {};
+        this.matrices = {};
+        this.rolesByDb = {};
         this.policyRaw = {};
         this.currentPolicy = {};
         this.configRoles = [];
@@ -205,6 +222,7 @@ export const useAppStore = defineStore('app', {
       if (schema.ok) this.schema = schema.data;
       const names = this.databaseNames;
       if (!names.includes(this.applyDatabase)) this.applyDatabase = names[0] ?? '';
+      this.ensureDatabase();
       await this.loadCurrentPolicy();
     },
 
@@ -222,7 +240,22 @@ export const useAppStore = defineStore('app', {
         return;
       }
       if (!this.applyDatabase) this.applyDatabase = this.databaseNames[0] ?? '';
+      this.ensureDatabase();
       if (!this.hasLoadedPolicy) await this.loadCurrentPolicy();
+    },
+
+    /**
+     * 确保某个库有自己的矩阵与角色清单容器。
+     *
+     * 标签页按库懒初始化：切到哪个库才建哪个库的空矩阵，
+     * 各库的未提交改动因此天然互不可见。
+     *
+     * @param {string} [database] 默认当前库
+     */
+    ensureDatabase(database = this.applyDatabase) {
+      if (!database) return;
+      this.matrices[database] ??= {};
+      this.rolesByDb[database] ??= [];
     },
 
     /**
@@ -237,24 +270,29 @@ export const useAppStore = defineStore('app', {
      * @returns {{roles: number, tables: number}} 实际回填的角色数 / 表数（按库表去重）
      */
     hydrateMatrixFromPolicy({ overwrite = false } = {}) {
-      const policy = scopeToDatabase(this.policyRaw, this.applyDatabase);
+      const database = this.applyDatabase;
+      if (!database) return { roles: 0, tables: 0 };
+      this.ensureDatabase(database);
+
+      const matrix = this.matrices[database];
+      const roleList = this.rolesByDb[database];
+      const policy = scopeToDatabase(this.policyRaw, database);
       const tableNames = new Set(this.applyTables);
-      const roles = new Set();
-      const tables = new Set();
+      const filledRoles = new Set();
+      const filledTables = new Set();
 
       for (const [role, roleTables] of Object.entries(policy)) {
         // admin 由平台保证存在且全权限，不放进矩阵，避免被误改成受限角色
         if (RESERVED_ROLES.has(role)) continue;
-        if (!this.roles.includes(role)) this.roles.push(role);
-        const byTable = this.matrix[role] ?? {};
+        if (!roleList.includes(role)) roleList.push(role);
+        const byTable = (matrix[role] ??= {});
         for (const [table, operations] of Object.entries(roleTables)) {
           if (!tableNames.has(table)) continue;
-          const key = this.tableKey(table);
-          if (byTable[key] && !overwrite) continue;
-          byTable[key] = {};
+          if (byTable[table] && !overwrite) continue;
+          byTable[table] = {};
           for (const operation of OPERATIONS) {
             const op = operations[operation] ?? {};
-            byTable[key][operation] = {
+            byTable[table][operation] = {
               // 'default' 表示配置里没写，等同 default_block
               enabled: op.state === 'allowed',
               filters: [...(op.filters ?? [])],
@@ -262,20 +300,19 @@ export const useAppStore = defineStore('app', {
               columns: [...(op.columns ?? [])],
             };
           }
-          roles.add(role);
-          tables.add(key);
+          filledRoles.add(role);
+          filledTables.add(table);
         }
-        this.matrix[role] = byTable;
       }
 
       // 覆盖导入：生效策略里没有的格子一并重置为「全拦」，否则本地残留的规则会留下来
       if (overwrite) {
-        for (const [role, byTable] of Object.entries(this.matrix)) {
+        for (const [role, byTable] of Object.entries(matrix)) {
           for (const table of tableNames) {
+            if (!byTable[table]) continue;
+            // 策略里有的格子上面的循环已经按策略写过，这里只处理本地多出来的
             if (policy[role]?.[table]) continue;
-            const key = this.tableKey(table);
-            if (!byTable[key]) continue;
-            byTable[key] = {
+            byTable[table] = {
               query: emptyOperation(),
               insert: emptyOperation(),
               update: emptyOperation(),
@@ -288,22 +325,28 @@ export const useAppStore = defineStore('app', {
       // 配置里已存在但还没有 grants 的角色也要出现在编辑器里，
       // 否则「先建角色、后配规则」的流程会看不到角色
       for (const role of this.configRoles) {
-        if (RESERVED_ROLES.has(role) || this.roles.includes(role)) continue;
-        this.roles.push(role);
+        if (RESERVED_ROLES.has(role) || roleList.includes(role)) continue;
+        roleList.push(role);
       }
 
-      if (!this.currentRole && this.roles.length) this.currentRole = this.roles[0];
-      return { roles: roles.size, tables: tables.size };
+      if (!this.currentRole || !roleList.includes(this.currentRole)) {
+        this.currentRole = roleList[0] ?? '';
+      }
+      return { roles: filledRoles.size, tables: filledTables.size };
     },
 
     /**
      * @param {string} name 角色名
      */
     addRole(name) {
+      const database = this.applyDatabase;
+      if (!database) return false;
       const trimmed = (name ?? '').trim();
-      if (!trimmed || RESERVED_ROLES.has(trimmed) || this.roles.includes(trimmed)) return false;
-      this.roles.push(trimmed);
-      this.matrix[trimmed] = {};
+      this.ensureDatabase(database);
+      const roleList = this.rolesByDb[database];
+      if (!trimmed || RESERVED_ROLES.has(trimmed) || roleList.includes(trimmed)) return false;
+      roleList.push(trimmed);
+      this.matrices[database][trimmed] = {};
       if (!this.currentRole) this.currentRole = trimmed;
       return true;
     },
@@ -318,11 +361,14 @@ export const useAppStore = defineStore('app', {
      * @returns {boolean} 是否真的删掉了本地角色
      */
     removeRole(name) {
-      const index = this.roles.indexOf(name);
+      const database = this.applyDatabase;
+      if (!database) return false;
+      const roleList = this.rolesByDb[database] ?? [];
+      const index = roleList.indexOf(name);
       if (index < 0) return false;
-      this.roles.splice(index, 1);
-      delete this.matrix[name];
-      if (this.currentRole === name) this.currentRole = this.roles[0] ?? '';
+      roleList.splice(index, 1);
+      delete this.matrices[database][name];
+      if (this.currentRole === name) this.currentRole = roleList[0] ?? '';
       return true;
     },
 
@@ -333,7 +379,10 @@ export const useAppStore = defineStore('app', {
      * @returns {boolean}
      */
     isRoleEffective(name) {
-      return Object.keys(this.policyRaw?.[name] ?? {}).length > 0;
+      const database = this.applyDatabase;
+      const keys = Object.keys(this.policyRaw?.[name] ?? {});
+      if (!database) return keys.length > 0;
+      return keys.some((key) => key.startsWith(`${database}::`));
     },
 
     /**
@@ -347,24 +396,16 @@ export const useAppStore = defineStore('app', {
      * @returns {Object} { query, insert, update, delete }
      */
     ensureOperations(role, table) {
-      const key = this.tableKey(table);
-      this.matrix[role] ??= {};
-      this.matrix[role][key] ??= {};
-      const entry = this.matrix[role][key];
+      const database = this.applyDatabase;
+      if (!database) throw new Error(i18n.global.t('permissions.selectDatabase'));
+      this.ensureDatabase(database);
+      const byRole = (this.matrices[database][role] ??= {});
+      byRole[table] ??= {};
+      const entry = byRole[table];
       for (const operation of OPERATIONS) {
         entry[operation] ??= emptyOperation();
       }
       return entry;
-    },
-
-    /**
-     * 矩阵键：`database::table`。视图只拿纯表名，这里统一加库名前缀。
-     *
-     * @param {string} table
-     * @returns {string}
-     */
-    tableKey(table) {
-      return this.applyDatabase ? `${this.applyDatabase}::${table}` : table;
     },
 
     /**
@@ -374,7 +415,7 @@ export const useAppStore = defineStore('app', {
      * @returns {Object|undefined}
      */
     operationOf(role, table, operation) {
-      return this.matrix[role]?.[this.tableKey(table)]?.[operation];
+      return this.matrix[role]?.[table]?.[operation];
     },
 
     /**
@@ -394,8 +435,9 @@ export const useAppStore = defineStore('app', {
      * @returns {Object} { role: { table: { query, insert, update, delete } } }
      */
     resolveMatrix() {
+      if (!this.applyDatabase) throw new Error(i18n.global.t('permissions.selectDatabase'));
       const columnsByTable = columnsByTableOf(this, this.applyDatabase);
-      const scoped = scopeToDatabase(this.matrix, this.applyDatabase);
+      const scoped = this.matrix;
       // block 模式要展开成补集白名单；没有列清单就不能写，否则会静默放行全部列
       const unresolved = unresolvedBlockTables(scoped, columnsByTable);
       if (unresolved.length > 0) {
@@ -477,11 +519,16 @@ export const useAppStore = defineStore('app', {
      * @param {string} database
      */
     selectDatabase(database) {
-      if (this.applyDatabase === database) return;
+      if (!database || this.applyDatabase === database) return;
       this.applyDatabase = database;
+      this.ensureDatabase(database);
       this.applyPolicyScope();
       // 新库可能已经有生效策略：切过去时把空格子回填一次
       this.hydrateMatrixFromPolicy();
+      // 角色清单按库独立，切库后原来的选中角色可能不存在
+      if (this.currentRole && !this.roles.includes(this.currentRole)) {
+        this.currentRole = this.roles[0] ?? '';
+      }
     },
 
     /**
