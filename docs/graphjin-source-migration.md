@@ -12,7 +12,7 @@
 | 2 | 权限模型映射：`permissions.js` 由 `roles[].tables` 改为 `sources[].access` + `grants` | 已完成（决策 A） |
 | 3 | 写侧兜底：表级写开关在 source 模式下无对应结构 | 决策 A：不做兜底，写/删降级为 source 级 |
 | 4 | 前端适配：权限矩阵改版、源级访问面板、降级提示 | 已完成 |
-| 5 | 端到端回归：`verify:e2e` / `verify:migration` / `npm run build` | 已完成（24 + 9 项） |
+| 5 | 端到端回归：`verify:e2e` / `verify:migration` / `npm run build` | 已完成（24 + 12 项） |
 
 ## 2. 实测结论
 
@@ -119,9 +119,30 @@ preview 未落盘 = FAIL（1 条 source 已生效）
    删角色时会报 `role "xxx" is not defined in roles`。
 3. 回滚顺序必须是「先写 sources（清 grants）→ 再 remove_roles」。
 4. 写 `sources` 时 GraphJin 会把 `databases` 从文件里删掉，但内存里仍保留旧库，
-   此时 `remove_databases` 会 reload 失败（`database app not found`）。
+   此时 `remove_databases` 会 reload 失败（`database app not found`）。平台已不再走这条路。
 5. source 模式下 `get_current_config` 会派生出一个 `databases` 字段，不能用它判断
    「文件里还有 legacy databases」——否则正常项目会被误判。
+6. 迁移现在只读配置、不改配置：任何 `update_current_config` 都会触发 reload，
+   见 §2.4c。
+
+### 2.4c 任何一个库连不上，配置写入就会整次失败
+
+```
+update_current_config → reload error: database 'app' connection failed:
+unable to open database file: out of memory (14)
+```
+
+GraphJin 启动时容忍连接失败（服务照常起、catalog 为空），但**每次配置写入触发的 reload
+都会重连所有库**，任意一个打不开就让整次更新被拒。实测场景：sqlite 的 `path` 指向一个
+不存在的目录（`projects/quickstart/demo.db`），加上一条连不上的 postgres。
+
+因此迁移**不能**用 `update_current_config` 三步走，只能：
+读配置（`get_current_config` / `query_catalog`，只读，安全）→ 直接改写 `dev.yml`
+→ supervisor 停掉临时实例后重启生效。写文件用 `replaceRolesBlock` + `upsertSourcesBlock`，
+不再触发 reload。
+
+顺带：这类项目的 catalog 为空，迁移时列清单取不到，会记 `missing-columns` 冲突并且不生成
+grants（宁可少授权，也不退化成全列可读）。
 
 ### 2.5 官方 recipe 的迁移口径
 
@@ -164,13 +185,13 @@ preview 未落盘 = FAIL（1 条 source 已生效）
 | 文件 | 改动 |
 |:---|:---|
 | `src/project.js` | 模板改 `sources:`；`renderSource` / `mergeSourceBlock`（按条目原地改连接字段、保留 access）；`readSourceConnections` 读回真实密码；删除 `databases:` 相关的 flow-map 解析器 |
-| `src/migrate.js`（新增） | `isLegacyConfig` / `readLegacyDatabases` / `normalizeRole` / `migrateLegacyProject`：三次配置 API 调用完成迁移，失败时用 `.bak` 回滚 |
+| `src/migrate.js`（新增） | `isLegacyConfig` / `readLegacyDatabases` / `normalizeRole` / `migrateLegacyProject`：读配置 API + 改写 dev.yml 完成迁移，失败时用 `.bak` 回滚 |
 | `src/permissions.js` | 新增 `buildSourceAccessConfig` / `summarizeSourceAccess` / `migrateLegacyRoleTables`；legacy 生成器仅保留给迁移读取 |
 | `src/graphjin.js` | `assertLegacyMode` → `assertSourceMode`；`updateConfig` 按模式自动走 preview/apply；`readCatalogRevision` 走 GraphQL |
 | `src/snapshots.js` | 快照增加 `source_access_json` / `source_count`（旧库自动加列）；回滚补丁支持 `source_patches` |
 | `src/index.js` | `permissions.*` 改 source 形态；`graphjin.databases` 读 sources；`permissions.apply` 整份替换 sources（`source_patches` 会丢 grants） |
 | `src/supervisor.js` | legacy 项目先起临时实例迁移，再按新配置重启；失败回滚 `.bak` |
-| `scripts/verify-source-migration.js`（新增） | 迁移全链路验证（9 项） |
+| `scripts/verify-source-migration.js`（新增） | 迁移全链路验证（12 项，含数据库不可达的项目） |
 | `scripts/verify-e2e.js` | 断言改为 source 语义（24 项） |
 
 已删除：`scripts/verify-plan-b.js`、`scripts/verify-columns.js`（被 e2e 覆盖）。

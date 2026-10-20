@@ -24,7 +24,7 @@ function record(name, pass, detail) {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
 }
 
-function legacyYaml(port) {
+function legacyYaml(port, dbPath = 'app.db') {
   return `app_name: Migration Verify
 mode: dev
 host_port: 127.0.0.1:${port}
@@ -60,7 +60,7 @@ roles:
 databases:
   app:
     type: sqlite
-    path: app.db
+    path: ${dbPath}
     default: true
 `;
 }
@@ -126,6 +126,27 @@ async function main() {
   } finally {
     await supervisor.stop();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // 场景 B：数据源连不上时迁移也必须成功。
+  // 回归 https://github.com/kingemma/build-mcp-server-4-any-db —— 走配置 API 写会触发
+  // reload，重连失败会整次拒绝（unable to open database file）。
+  const brokenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-builder-migration-broken-'));
+  const brokenYaml = path.join(brokenDir, 'dev.yml');
+  const brokenSupervisor = new GraphJinSupervisor({ binPath: resolveGraphJinBinary() });
+  try {
+    const { pickFreePort } = require('../src/graphjin-process');
+    fs.writeFileSync(brokenYaml, legacyYaml(await pickFreePort(), 'missing-dir/app.db'), 'utf8');
+    const status = await brokenSupervisor.start({ projectDir: brokenDir });
+    record('数据库不可达时迁移仍成功', status.migration?.ok === true, JSON.stringify(status.migration ?? null));
+    const text = fs.readFileSync(brokenYaml, 'utf8');
+    record('不可达项目也已转为 sources', /^sources\s*:/m.test(text) && !/^databases\s*:/m.test(text));
+    record('不可达数据源保留在 sources 里', /missing-dir[\\/]app\.db/.test(text));
+  } catch (error) {
+    record('数据库不可达时迁移仍成功', false, error.message);
+  } finally {
+    await brokenSupervisor.stop();
+    fs.rmSync(brokenDir, { recursive: true, force: true });
   }
 
   const failed = checks.filter((pass) => !pass).length;

@@ -6,19 +6,16 @@ const path = require('node:path');
 const { McpClient } = require('./mcp-client');
 const { discoverSchema } = require('./schema');
 const { migrateLegacyRoleTables } = require('./permissions');
+const { replaceRolesBlock, upsertSourcesBlock } = require('./project');
 
 /**
  * legacy 项目（`databases:` + `roles[].tables`）到 source 模式的迁移。
  *
- * 为什么必须走配置 API 而不是直接改文本：
- * - `roles[].tables` 是嵌套结构，文本级删除极易改坏；
- * - GraphJin 自己会在写配置时把整份文件格式化回写，文本改动会被覆盖。
- *
- * 实测顺序（.probe/verify-source-migration-flow.js，9 项全过）：
- * 1. remove_roles 删掉带 tables 的角色（一步里「更新再删除」会被校验拒绝）；
- * 2. 单独重建角色（grants 里的角色必须已存在）；
- * 3. 写 sources（GraphJin 同时会把 databases 从文件里清掉）；
- * 4. 兜底删除残留的 databases 顶层块。
+ * 读走配置 API，写只改文件：
+ * - 角色与 schema 只能从运行中的实例读（`get_current_config` / `query_catalog`），这是只读操作；
+ * - 写不能用 `update_current_config`：写入会触发 reload，只要有一个库连不上
+ *   （实测 `unable to open database file`），整次更新就被拒，项目会卡在中间态；
+ * - 因此迁移只生成新文本，由 supervisor 停掉临时实例后重启生效。
  */
 
 /** 从 dev.yml 里移除 `databases:` 顶层块（含其缩进内容）。 */
@@ -256,51 +253,21 @@ async function migrateLegacyProject({ projectDir, baseUrl, role = 'admin' }) {
       sources.push({ name, kind: 'database', ...conn, access });
     }
 
-    const roleNames = roles.map((roleConfig) => roleConfig.name).filter(Boolean);
-    const removable = roleNames.filter((name) => {
-      const roleConfig = roles.find((candidate) => candidate.name === name);
-      return name !== 'admin' && (roleConfig?.tables ?? []).length > 0;
-    });
+    const roleNames = [...new Set(['admin', ...roles.map((roleConfig) => roleConfig.name)])].filter(Boolean);
 
-    if (removable.length > 0) {
-      await client.callTool('update_current_config', { remove_roles: removable });
-    }
-    await rebuildRoles(client, roleNames);
-
-    const written = await client.callTool('update_current_config', { sources });
-    if (written?.success === false) {
-      const reason = (written.errors ?? [written.message]).filter(Boolean).join('; ');
-      throw new Error(`写入 sources 失败：${reason}`);
-    }
-
-    const remaining = fs.readFileSync(devYaml, 'utf8');
-    if (isLegacyConfig(remaining)) {
-      fs.writeFileSync(devYaml, removeLegacyDatabasesBlock(remaining), 'utf8');
-    }
+    // 配置 API 写入会触发 reload，重连任何一个连不上的库都会让整次更新失败
+    // （实测：unable to open database file）。迁移直接改写 dev.yml，
+    // 由 supervisor 重启实例生效，全程不触发 reload。
+    const withoutDatabases = removeLegacyDatabasesBlock(text);
+    const withRoles = replaceRolesBlock(withoutDatabases, roleNames);
+    const next = upsertSourcesBlock(withRoles, sources);
+    fs.writeFileSync(devYaml, next, 'utf8');
 
     return { migrated: true, backup, conflicts, sources: sources.map((source) => source.name) };
   } catch (error) {
     // 让 supervisor 能拿到备份路径并在失败时回滚
     error.backup = backup;
     throw error;
-  }
-}
-
-/**
- * 重建角色（不带 tables）。
- *
- * @param {McpClient} client
- * @param {string[]} roleNames
- * @returns {Promise<void>}
- */
-async function rebuildRoles(client, roleNames) {
-  const names = [...new Set(['admin', ...roleNames])].filter(Boolean);
-  const result = await client.callTool('update_current_config', {
-    roles: names.map((name) => ({ name })),
-  });
-  if (result?.success === false) {
-    const reason = (result.errors ?? [result.message]).filter(Boolean).join('; ');
-    throw new Error(`重建角色失败：${reason}`);
   }
 }
 

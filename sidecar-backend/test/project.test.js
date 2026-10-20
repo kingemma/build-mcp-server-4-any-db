@@ -3,7 +3,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { renderDevYaml, renderSource, mergeSourceBlock } = require('../src/project');
+const {
+  renderDevYaml,
+  renderSource,
+  mergeSourceBlock,
+  upsertSourcesBlock,
+  replaceRolesBlock,
+} = require('../src/project');
 
 const BASE = { appName: 'Demo', port: 8080, sources: [] };
 
@@ -221,4 +227,47 @@ sources:
   const merged = mergeSourceBlock(yaml, { analytics: { type: 'sqlite', path: 'a.db' } });
   assert.match(merged, /system: &defaults/);
   assert.match(merged, /- name: "analytics"/);
+});
+
+test('renderSource: 渲染 grants 与表分类', () => {
+  const yaml = renderSource('app', {
+    type: 'sqlite',
+    path: 'app.db',
+    access: {
+      read: 'owner',
+      write: 'blocked',
+      delete: 'blocked',
+      owner_column: 'owner_code',
+      admin_tables: ['secrets'],
+      blocked_tables: ['audit_log'],
+      grants: [
+        {
+          role: 'analyst',
+          tables: [{ name: 'orders', columns: ['id', 'name'], filter: '{ id: { _gt: 0 } }' }],
+        },
+      ],
+    },
+  });
+
+  assert.match(yaml, /owner_column: "owner_code"/);
+  assert.match(yaml, /admin_tables: \["secrets"\]/);
+  assert.match(yaml, /blocked_tables: \["audit_log"\]/);
+  assert.match(yaml, /grants:\n\s+- role: "analyst"/);
+  assert.match(yaml, /columns: \["id", "name"\]/);
+  assert.match(yaml, /filter: "\{ id: \{ _gt: 0 \} \}"/);
+});
+
+test('upsertSourcesBlock: 没有 sources 段时追加到文件末尾', () => {
+  const legacy = 'app_name: Demo\nroles:\n  - name: admin\n\ndatabases:\n  app:\n    type: sqlite\n';
+  const next = upsertSourcesBlock(legacy, [{ name: 'app', type: 'sqlite', path: 'app.db' }]);
+  assert.match(next, /^sources:$/m);
+  assert.match(next, /- name: "app"/);
+  assert.match(next, /databases:/);
+});
+
+test('replaceRolesBlock: 整块重写，后面的兄弟段不受影响', () => {
+  const text = 'roles:\n  - name: admin\n  - name: analyst\n    tables:\n      - name: orders\nsystem:\n  x: 1\n';
+  const next = replaceRolesBlock(text, ['admin', 'analyst']);
+  assert.doesNotMatch(next, /tables:/);
+  assert.match(next, /roles:\n  - name: "admin"\n  - name: "analyst"\nsystem:/);
 });

@@ -172,6 +172,28 @@ function renderSource(name, conn, indent = 2) {
     lines.push(`${field}  namespace_column: ${renderScalar(access.namespace_column)}`);
   }
 
+  if (Array.isArray(access.admin_tables) && access.admin_tables.length > 0) {
+    lines.push(`${field}  admin_tables: [${access.admin_tables.map(renderScalar).join(', ')}]`);
+  }
+  if (Array.isArray(access.blocked_tables) && access.blocked_tables.length > 0) {
+    lines.push(`${field}  blocked_tables: [${access.blocked_tables.map(renderScalar).join(', ')}]`);
+  }
+
+  if (Array.isArray(access.grants) && access.grants.length > 0) {
+    lines.push(`${field}  grants:`);
+    for (const grant of access.grants) {
+      lines.push(`${field}    - role: ${renderScalar(grant.role)}`);
+      lines.push(`${field}      tables:`);
+      for (const table of grant.tables ?? []) {
+        lines.push(`${field}        - name: ${renderScalar(table.name)}`);
+        lines.push(
+          `${field}          columns: [${(table.columns ?? []).map(renderScalar).join(', ')}]`
+        );
+        if (table.filter) lines.push(`${field}          filter: ${renderScalar(table.filter)}`);
+      }
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -404,6 +426,47 @@ function mergeSourceBlock(text, sources) {
 }
 
 /**
+ * 写入 sources 段：已存在则逐项合并，不存在则追加到文件末尾。
+ *
+ * @param {string} text dev.yml 内容
+ * @param {Array<Object>} sources [{ name, ...conn }]
+ * @returns {string}
+ */
+function upsertSourcesBlock(text, sources) {
+  if (!Array.isArray(sources) || sources.length === 0) {
+    throw new Error('sources 不能为空：source 模式要求至少配置一个数据源');
+  }
+  const lines = text.split('\n');
+  if (lines.some((line) => /^sources\s*:/.test(line))) {
+    return mergeSourceBlock(text, sources);
+  }
+
+  const block = ['sources:', ...sources.map(({ name, ...conn }) => renderSource(name, conn))].join('\n');
+  return `${text.replace(/\s*$/, '')}\n\n${block}\n`;
+}
+
+/**
+ * 把 roles 段整体替换成「只有名字」的形态。
+ *
+ * source 模式禁止 `roles[].tables`，而 legacy 文件里每张表都展开成了几十行；
+ * 逐段编辑不可靠，直接整块重写。
+ *
+ * @param {string} text dev.yml 内容
+ * @param {string[]} names 角色名
+ * @returns {string}
+ */
+function replaceRolesBlock(text, names) {
+  const lines = text.split('\n');
+  const rendered = ['roles:', ...names.map((name) => `  - name: ${renderScalar(name)}`)];
+  const start = lines.findIndex((line) => /^roles\s*:/.test(line));
+  if (start < 0) return `${text.replace(/\s*$/, '')}\n\n${rendered.join('\n')}\n`;
+
+  let end = start + 1;
+  while (end < lines.length && !/^[A-Za-z_][\w-]*\s*:/.test(lines[end])) end += 1;
+  return [...lines.slice(0, start), ...rendered, ...lines.slice(end)].join('\n');
+}
+
+/**
  * 就地合并 dev.yml 里的 sources 段。
  *
  * @param {string} file dev.yml 路径
@@ -525,6 +588,8 @@ module.exports = {
   createProject,
   mergeSourceBlock,
   mergeProjectSources,
+  upsertSourcesBlock,
+  replaceRolesBlock,
   readSourceConnections,
   parseScalar,
 };
