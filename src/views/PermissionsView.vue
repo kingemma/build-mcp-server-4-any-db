@@ -94,9 +94,6 @@ function ruleBadge(role, table, operation) {
         : t('permissions.badge.allowList')
     );
   }
-  if (operation === 'query' && entry.limit) {
-    parts.push(t('permissions.badge.limit', { count: entry.limit }));
-  }
   return parts.join(' · ');
 }
 
@@ -125,8 +122,6 @@ function saveEditor() {
   entry.filters = filters;
   entry.columnMode = editing.columnMode === UNRESTRICTED ? 'allow' : editing.columnMode;
   entry.columns = editing.columnMode === UNRESTRICTED ? [] : [...editing.columns];
-  // grants 没有 limit 字段：source 模式的读规则只支持列白名单与行过滤
-  entry.limit = null;
   isEditorOpen.value = false;
 }
 

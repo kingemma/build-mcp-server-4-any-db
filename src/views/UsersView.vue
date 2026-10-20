@@ -206,7 +206,7 @@ async function remove(user) {
   }
 }
 
-/** 角色名不会自动进 GraphJin 配置，缺角色时 roles[].tables 会被拒 */
+/** 角色名不会自动进 GraphJin 配置，缺角色时 grants 会被拒 */
 async function syncRoles() {
   isSyncing.value = true;
   try {

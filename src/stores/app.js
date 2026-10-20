@@ -23,7 +23,7 @@ const RESERVED_ROLES = new Set(['admin']);
 
 function emptyOperation() {
   // columnMode: allow = 白名单；block = 阻止列表（写库时转成补集白名单）
-  return { enabled: false, filters: [], columnMode: 'allow', columns: [], limit: null };
+  return { enabled: false, filters: [], columnMode: 'allow', columns: [] };
 }
 
 /**
@@ -260,7 +260,6 @@ export const useAppStore = defineStore('app', {
               filters: [...(op.filters ?? [])],
               columnMode: 'allow',
               columns: [...(op.columns ?? [])],
-              limit: op.limit ?? null,
             };
           }
           roles.add(role);
@@ -406,7 +405,7 @@ export const useAppStore = defineStore('app', {
       }
       const payload = {};
       for (const [role, tables] of Object.entries(scoped)) {
-        // 保留角色不写 roles[].tables；后端会单独确保它存在
+        // 保留角色不写 grants；后端会单独确保它存在
         if (RESERVED_ROLES.has(role)) continue;
         const entries = {};
         for (const [table, operations] of Object.entries(tables)) {
@@ -417,7 +416,6 @@ export const useAppStore = defineStore('app', {
               enabled: op.enabled,
               filters: [...(op.filters ?? [])],
               columns: resolveColumns(op, columnsByTable[table] ?? []),
-              limit: op.limit ?? null,
             };
           }
         }
@@ -487,8 +485,8 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
-     * 把当前矩阵写入 GraphJin（方案 B：roles[].tables）。
-     * legacy 模式立即生效，所以调用方必须先展示 diff 并二次确认。
+     * 把当前矩阵与数据源档位写入 GraphJin（source 模式：sources[].access + grants）。
+     * 写入立即生效，所以调用方必须先展示 diff 并二次确认。
      *
      * @param {string} [database] 目标库，默认取 applyDatabase；库名缺失会让规则落到内部库
      * @returns {Promise<Object>} 后端返回的写入结果
@@ -666,7 +664,7 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
-     * 把成员用到的角色补齐进 GraphJin：角色不存在时 roles[].tables 会被拒。
+     * 把成员用到的角色补齐进 GraphJin：角色不存在时 grants 引用会被拒。
      *
      * @returns {Promise<{created: string[], existing: string[]}>}
      */

@@ -10,33 +10,31 @@ import {
   unresolvedBlockTables,
 } from './policy.js';
 
+/** get_current_config 的 source 形态：连接与角色规则都在 sources[] 里 */
 const RAW_CONFIG = {
-  roles: [
+  sources: [
     {
-      name: 'admin',
-      tables: [
-        {
-          Name: 'accounts',
-          database: 'app',
-          Query: { Block: false, Limit: 0, Filters: null, Columns: null },
-          Insert: { Block: false },
-          Update: { Block: false },
-          Delete: { Block: false },
-        },
-      ],
+      name: 'app',
+      access: {
+        read: 'authenticated',
+        write: 'blocked',
+        delete: 'blocked',
+        grants: [{ role: 'admin', tables: [{ name: 'accounts' }] }],
+      },
     },
     {
-      name: 'bi',
-      tables: [
-        {
-          Name: 'accounts',
-          database: 'analytics',
-          Query: { Block: false, Limit: 10, Filters: ['{ id: { _gt: 1 } }'], Columns: ['id'] },
-          Insert: { Block: true },
-          Update: { Block: true },
-          Delete: { Block: true },
-        },
-      ],
+      name: 'analytics',
+      access: {
+        read: 'authenticated',
+        write: 'blocked',
+        delete: 'blocked',
+        grants: [
+          {
+            role: 'bi',
+            tables: [{ name: 'accounts', filter: '{ id: { _gt: 1 } }', columns: ['id'] }],
+          },
+        ],
+      },
     },
   ],
 };
@@ -50,22 +48,28 @@ test('normalizeCurrentRoles：表键带库名，避免多库同名表互相覆�
   assert.deepStrictEqual(roles.bi['analytics::accounts'].query.filters, [
     '{ id: { _gt: 1 } }',
   ]);
-  assert.strictEqual(roles.bi['analytics::accounts'].insert.state, 'blocked');
+  assert.deepStrictEqual(roles.bi['analytics::accounts'].query.columns, ['id']);
+  // source 模式下角色只约束读，grants 里没有写/删状态
+  assert.deepStrictEqual(Object.keys(roles.bi['analytics::accounts']), ['query']);
 });
 
-test('normalizeCurrentRoles：大小写键都能读，缺操作时记为 default', () => {
+test('normalizeCurrentRoles：Go 字段名大小写都能读', () => {
   const roles = normalizeCurrentRoles({
-    roles: [
+    Sources: [
       {
-        Name: 'r',
-        tables: [{ name: 't', database: 'db', query: { block: false }, Insert: { block: true } }],
+        Name: 'db',
+        Access: {
+          Grants: [
+            { Role: 'r', Tables: [{ Name: 't', Filter: '{ a: 1 }', Columns: ['a'] }] },
+          ],
+        },
       },
     ],
   });
 
   assert.strictEqual(roles.r['db::t'].query.state, 'allowed');
-  assert.strictEqual(roles.r['db::t'].insert.state, 'blocked');
-  assert.strictEqual(roles.r['db::t'].update.state, 'default');
+  assert.deepStrictEqual(roles.r['db::t'].query.filters, ['{ a: 1 }']);
+  assert.deepStrictEqual(roles.r['db::t'].query.columns, ['a']);
 });
 
 test('scopeToDatabase：只取目标库并还原纯表名', () => {
@@ -93,7 +97,17 @@ test('resolveColumns：白名单原样返回，黑名单转补集', () => {
   assert.deepStrictEqual(resolveColumns({ columnMode: 'block', columns: ['x'] }, ['id', 'x']), [
     'id',
   ]);
-  assert.deepStrictEqual(resolveColumns({ columnMode: 'block', columns: [] }, ['id', 'x']), []);
+  // 一个列都没选 = 不限制列：展开成全部列，才能和写入后读回的策略对上
+  assert.deepStrictEqual(resolveColumns({ columnMode: 'allow', columns: [] }, ['id', 'x']), [
+    'id',
+    'x',
+  ]);
+  assert.deepStrictEqual(resolveColumns({ columnMode: 'block', columns: [] }, ['id', 'x']), [
+    'id',
+    'x',
+  ]);
+  // 列清单未知时留空，由后端从 schema 补
+  assert.deepStrictEqual(resolveColumns({ columnMode: 'allow', columns: [] }, []), []);
 });
 
 test('unresolvedBlockTables：block 模式但缺列清单时列出表名', () => {
@@ -121,17 +135,19 @@ test('normalizePendingMatrix + diffPolicy：写入前状态与生效策略可比
   const pending = normalizePendingMatrix({
     admin: {
       accounts: {
-        query: { enabled: true },
-        insert: { enabled: true },
-        update: { enabled: true },
-        delete: { enabled: true },
+        query: { enabled: true, filters: [], columns: [] },
       },
     },
   });
 
-  // 传入的矩阵键是纯表名（已被 scopeToDatabase 收敛）
+  // 矩阵键是纯表名（已被 scopeToDatabase 收敛）
   const changes = diffPolicy(scopeToDatabase(current, 'app'), pending);
   assert.deepStrictEqual(changes, []);
+
+  // 生效策略里没有这个角色：from 记为 default，diff 里是一条 added
+  const added = diffPolicy({}, pending);
+  assert.strictEqual(added[0].kind, 'added');
+  assert.strictEqual(added[0].from.state, 'default');
 });
 
 test('diffPolicy：开关与附加规则变化都会产出 diff', () => {
@@ -139,15 +155,21 @@ test('diffPolicy：开关与附加规则变化都会产出 diff', () => {
   const pending = normalizePendingMatrix({
     bi: {
       accounts: {
-        query: { enabled: true, limit: 99, columns: ['id', 'name'] },
-        insert: { enabled: false },
-        update: { enabled: false },
-        delete: { enabled: false },
+        query: { enabled: true, columns: ['id', 'name'] },
       },
     },
   });
 
   const changes = diffPolicy(current, pending);
-  assert.ok(changes.length >= 1);
-  assert.ok(changes.some((change) => change.operation === 'query' && change.to.limit === 99));
+  const addedColumns = changes.find((change) => change.operation === 'query');
+  assert.ok(addedColumns, '列白名单变化应产出 diff');
+  assert.deepStrictEqual(addedColumns.to.columns, ['id', 'name']);
+  assert.deepStrictEqual(addedColumns.detail.columns, ['id', 'name']);
+
+  const blocked = diffPolicy(
+    current,
+    normalizePendingMatrix({ bi: { accounts: { query: { enabled: false } } } })
+  );
+  assert.strictEqual(blocked[0].stateChanged, true);
+  assert.strictEqual(blocked[0].to.state, 'blocked');
 });

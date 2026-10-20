@@ -235,15 +235,11 @@ export default {
     },
     operations: {
       query: '读取',
-      insert: 'Insert',
-      update: 'Update',
-      delete: 'Delete',
     },
     badge: {
       filters: '{count} 过滤',
       allowList: '列白名单',
       blockList: '列黑名单',
-      limit: 'limit {count}',
     },
     emptyHint: '需要至少一个角色和一张已发现的表。',
     selectDatabase: '请选择目标库',
@@ -262,7 +258,7 @@ export default {
     imported: '已导入 {roles} 个角色、{tables} 张表',
     removeRole: '删除角色',
     removeRoleConfirm:
-      '从本地矩阵移除角色 {role}？已写入 GraphJin 的角色与表规则不会被回收，需要回收请用「写入历史」回滚。',
+      '从本地矩阵移除角色 {role}？已写入 GraphJin 的读规则不会被回收，需要回收请用「写入历史」回滚。',
     roleRemoved: '已从本地矩阵移除角色 {role}',
     verify: '验证权限',
     verifyTitle: '以角色执行查询',
@@ -282,7 +278,7 @@ export default {
     snapshotMeta: '{roles} 个角色',
     snapshotDatabase: '库 {database}',
     restore: '恢复到此处',
-    restoreConfirm: '将把 GraphJin 的 roles 恢复为这份快照（{time}，{roles} 个角色）。恢复前会再保存一次当前状态，可再次回滚。继续？',
+    restoreConfirm: '将把 GraphJin 的数据源访问与角色读规则恢复为这份快照（{time}，{roles} 个角色）。恢复前会再保存一次当前状态，可再次回滚。继续？',
     restored: '已回滚到快照 #{id}',
     snapshotBeforeApply: '写入前自动快照',
     snapshotBeforeRollback: '回滚前自动快照',
@@ -295,25 +291,21 @@ export default {
       blockList: '阻止列表（屏蔽选中的列）',
       columns: '列',
       columnsHint:
-        'GraphJin 的 columns 只接受数组（实测对象形态 {allow}/{block} 会被 schema 拒绝），阻止列表会转成「全部列减去选中列」的补集白名单写入。查询被屏蔽的列会报错 db column blocked。',
-      limit: '返回行数默认值',
-      limitHint: '仅作为不带 limit 时的默认值，查询显式指定 limit 会覆盖它',
+        'GraphJin 的 columns 只接受数组（实测对象形态 allow / block 会被 schema 拒绝），阻止列表会转成「全部列减去选中列」的补集白名单写入。查询被屏蔽的列会报错 db column blocked。',
       grantHint:
         'source 模式下规则只作用于读取：列白名单留空表示不限制列，行过滤按 GraphJin filter 语法填写（可用 $user_code 等身份变量）。',
     },
     confirm: {
       title: '确认写入',
       warning:
-        'legacy 模式下配置更新立即生效；平台会在写入前自动保存快照，可回滚，但仍请确认下面 {count} 项变更。',
+        'source 模式下配置写入立即生效；平台会在写入前自动保存快照，可回滚，但仍请确认下面 {count} 项变更。',
       submit: '确认写入',
     },
     detail: {
       filters: '行过滤 {count} 条',
       allowList: '列白名单 {columns}',
-      limit: '默认 limit {count}',
       filtersShort: '过滤 {value}',
       columnsShort: '列 {value}',
-      limitShort: '默认 limit {count}',
     },
   },
 

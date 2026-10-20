@@ -82,7 +82,6 @@ export function normalizeCurrentRoles(config = {}) {
             state: 'allowed',
             filters: filter ? [filter] : [],
             columns: toArray(pick(table, 'columns')),
-            limit: null,
           },
         };
       }
@@ -214,7 +213,7 @@ export function unresolvedBlockTables(matrix = {}, columnsByTable = {}) {
  * block 模式在 GraphJin 侧没有原生支持（实测对象形态被拒），只能表达成
  * 「全部列减去阻止列」的补集白名单，这里按同样的规则展开，保证 diff 与实际写入一致。
  *
- * @param {Object} matrix { role: { table: { query: {enabled, filters, columnMode, columns, limit} } } }
+ * @param {Object} matrix { role: { table: { query: {enabled, filters, columnMode, columns} } } }
  * @param {Object} [columnsByTable] { tableName: string[] } block 模式求补集用
  * @returns {Object} 与 normalizeCurrentRoles 同构
  */
@@ -230,7 +229,6 @@ export function normalizePendingMatrix(matrix = {}, columnsByTable = {}) {
           state: op.enabled ? 'allowed' : 'blocked',
           filters: toArray(op.filters),
           columns: resolveColumns(op, columnsByTable[table] ?? []),
-          limit: typeof op.limit === 'number' ? op.limit : null,
         };
       }
     }
@@ -242,13 +240,17 @@ export function normalizePendingMatrix(matrix = {}, columnsByTable = {}) {
 /**
  * 把列管控配置折算成 GraphJin 只认的白名单数组。
  *
+ * 一个列都没选 = 不限制列，展开成全部列：GraphJin 的 `grants[].columns` 必填，
+ * 后端拿不到列清单时也会从 schema 补成全部列。这里同样展开，才能和写入后读回的
+ * 策略对上，否则每次写完都留一条永远消不掉的「列白名单」假 diff。
+ *
  * @param {{columnMode?: string, columns?: string[]}} op
- * @param {string[]} allColumns 该表的全部列
- * @returns {string[]} 白名单；空数组表示不限制
+ * @param {string[]} allColumns 该表的全部列；缺 schema 时为空数组
+ * @returns {string[]} 白名单；空数组表示列清单未知
  */
 export function resolveColumns(op, allColumns = []) {
   const selected = toArray(op?.columns);
-  if (selected.length === 0) return [];
+  if (selected.length === 0) return [...allColumns];
   if (op?.columnMode !== 'block') return selected;
   const blocked = new Set(selected);
   return allColumns.filter((column) => !blocked.has(column));
@@ -257,21 +259,20 @@ export function resolveColumns(op, allColumns = []) {
 /**
  * 把一项操作的附加规则抽成结构化片段，文案由调用方按语言渲染。
  *
- * @param {{filters: string[], columns: string[], limit: number|null}} operation
- * @returns {{filters: number, columns: string[], limit: number|null}}
+ * @param {{filters: string[], columns: string[]}} operation
+ * @returns {{filters: number, columns: string[]}}
  */
 function describeDetails(operation) {
   return {
     filters: operation.filters.length,
     columns: operation.columns,
-    limit: operation.limit,
   };
 }
 
 /**
  * 渲染附加规则摘要。
  *
- * @param {{filters: number, columns: string[], limit: number|null}} detail
+ * @param {{filters: number, columns: string[]}} detail
  * @param {(key: string, params?: Object) => string} t i18n 的 t
  * @returns {string}
  */
@@ -282,16 +283,13 @@ export function formatDetail(detail, t) {
   if (detail.columns.length > 0) {
     parts.push(t('permissions.detail.allowList', { columns: detail.columns.join(', ') }));
   }
-  if (detail.limit !== null && detail.limit !== undefined) {
-    parts.push(t('permissions.detail.limit', { count: detail.limit }));
-  }
   return parts.join(' · ');
 }
 
 /**
  * 渲染一项操作的规则摘要（把过滤条件与列名原样列出）。
  *
- * @param {{filters?: string[], columns?: string[], limit?: number|null}} operation
+ * @param {{filters?: string[], columns?: string[]}} operation
  * @param {(key: string, params?: Object) => string} t
  * @returns {string}
  */
@@ -302,9 +300,6 @@ export function formatOperationRules(operation, t) {
   }
   if (operation?.columns?.length > 0) {
     parts.push(t('permissions.detail.columnsShort', { value: operation.columns.join(', ') }));
-  }
-  if (operation?.limit !== null && operation?.limit !== undefined) {
-    parts.push(t('permissions.detail.limitShort', { count: operation.limit }));
   }
   return parts.join(' · ');
 }
@@ -326,13 +321,11 @@ export function diffPolicy(current = {}, pending = {}) {
           state: 'default',
           filters: [],
           columns: [],
-          limit: null,
         };
         const stateChanged = from.state !== to.state;
         const detailChanged =
           from.filters.join('|') !== to.filters.join('|') ||
-          from.columns.join('|') !== to.columns.join('|') ||
-          from.limit !== to.limit;
+          from.columns.join('|') !== to.columns.join('|');
         if (!stateChanged && !detailChanged) continue;
 
         changes.push({

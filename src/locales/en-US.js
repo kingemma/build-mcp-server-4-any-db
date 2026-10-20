@@ -237,15 +237,11 @@ export default {
     },
     operations: {
       query: 'Read',
-      insert: 'Insert',
-      update: 'Update',
-      delete: 'Delete',
     },
     badge: {
       filters: '{count} filters',
       allowList: 'column allowlist',
       blockList: 'column blocklist',
-      limit: 'limit {count}',
     },
     emptyHint: 'At least one role and one discovered table are required.',
     selectDatabase: 'Select a target database',
@@ -266,7 +262,7 @@ export default {
     imported: 'Imported {roles} role(s), {tables} table(s)',
     removeRole: 'Remove role',
     removeRoleConfirm:
-      'Remove role {role} from the local matrix? Roles and table rules already written to GraphJin are not reclaimed — roll back from the write history if you need that.',
+      'Remove role {role} from the local matrix? Read grants already written to GraphJin are not reclaimed — roll back from the write history if you need that.',
     roleRemoved: 'Role {role} removed from the local matrix',
     verify: 'Verify access',
     verifyTitle: 'Run a query as a role',
@@ -291,7 +287,7 @@ export default {
     snapshotDatabase: 'database {database}',
     restore: 'Restore this snapshot',
     restoreConfirm:
-      'Restore GraphJin roles to this snapshot ({time}, {roles} roles)? The current state is snapshotted first, so the restore itself can be rolled back.',
+      'Restore GraphJin source access and role grants to this snapshot ({time}, {roles} roles)? The current state is snapshotted first, so the restore itself can be rolled back.',
     restored: 'Rolled back to snapshot #{id}',
     snapshotBeforeApply: 'auto snapshot before write',
     snapshotBeforeRollback: 'auto snapshot before rollback',
@@ -304,25 +300,21 @@ export default {
       blockList: 'Blocklist (hide the selected columns)',
       columns: 'Columns',
       columnsHint:
-        'GraphJin only accepts an array for columns (the object form {allow}/{block} is rejected by its schema). A blocklist is written as the complement allowlist: all columns minus the selected ones. Querying a blocked column fails with "db column blocked".',
-      limit: 'Default row limit',
-      limitHint: 'Only a default — an explicit limit in the query overrides it',
+        'GraphJin only accepts an array for columns (the object form allow / block is rejected by its schema). A blocklist is written as the complement allowlist: all columns minus the selected ones. Querying a blocked column fails with "db column blocked".',
       grantHint:
         'In source mode these rules only affect reads: an empty column allowlist means no restriction, and filters use GraphJin filter syntax (identity variables such as $user_code are available).',
     },
     confirm: {
       title: 'Confirm write',
       warning:
-        'In legacy mode a config update takes effect immediately. The platform snapshots the current policy before writing so it can be rolled back, but please confirm the {count} changes below.',
+        'In source mode a config write takes effect immediately. The platform snapshots the current policy before writing so it can be rolled back, but please confirm the {count} changes below.',
       submit: 'Write',
     },
     detail: {
       filters: '{count} row filters',
       allowList: 'column allowlist {columns}',
-      limit: 'default limit {count}',
       filtersShort: 'filter {value}',
       columnsShort: 'columns {value}',
-      limitShort: 'default limit {count}',
     },
   },
 
