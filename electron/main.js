@@ -13,7 +13,7 @@ let isQuitting = false;
 /**
  * 定位 GraphJin 二进制。
  *
- * 打包后随 extraResources 落到 `resources/binaries/`，开发态留在 `src-tauri/binaries/`。
+ * 打包后随 extraResources 落到 `resources/binaries/`，开发态留在仓库根 `binaries/`。
  * 文件名统一按 Rust 三元组规则，直接复用 scripts/platforms.js，避免两处映射漂移。
  *
  * @returns {string} 可执行文件路径
@@ -23,7 +23,7 @@ function resolveGraphJinBinary() {
   const name = sidecarFileName(currentPlatformKey());
   const candidates = [
     path.join(process.resourcesPath ?? '', 'binaries', name),
-    path.join(ROOT, 'src-tauri', 'binaries', name),
+    path.join(ROOT, 'binaries', name),
   ];
   const found = candidates.find((file) => fs.existsSync(file));
   if (!found) throw new Error(`找不到 GraphJin 二进制，已尝试：${candidates.join(', ')}`);

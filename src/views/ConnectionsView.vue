@@ -564,7 +564,7 @@ const summary = computed(() => ({
 
 .note {
   margin: 0 0 12px;
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.7;
   color: var(--text-dim);
 }
@@ -595,7 +595,7 @@ const summary = computed(() => ({
 }
 
 .templates__meta {
-  font-size: 12px;
+  font-size: var(--fs-note);
 }
 
 .facts {
@@ -666,7 +666,7 @@ const summary = computed(() => ({
 }
 
 .conns__path {
-  font-size: 12px;
+  font-size: var(--fs-micro);
 }
 
 .conns__actions {

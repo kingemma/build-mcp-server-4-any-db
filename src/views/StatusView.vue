@@ -217,7 +217,7 @@ onMounted(refreshAll);
 .chip {
   padding: 4px 10px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-micro);
   color: var(--text-dim);
   background: var(--accent-soft);
   border: 1px solid rgba(29, 78, 216, 0.16);
@@ -293,7 +293,7 @@ onMounted(refreshAll);
 
 .note {
   margin: 14px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-note);
   color: var(--text-dim);
 }
 

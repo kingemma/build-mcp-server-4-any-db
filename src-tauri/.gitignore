@@ -1,2 +1,0 @@
-# sidecar 二进制由 scripts/prepare-binaries.js 在构建期生成，单个约 158.6 MiB
-binaries/

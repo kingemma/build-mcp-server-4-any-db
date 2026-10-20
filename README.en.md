@@ -286,7 +286,7 @@ npm run smoke:binaries
 # expected: PASS  windows-amd64  ...  GraphJin 3.21.14
 ```
 
-The extracted file lands in `src-tauri/binaries/graphjin-<target-triple>[.exe]`.
+The extracted file lands in `binaries/graphjin-<target-triple>[.exe]`.
 Set `GRAPHJIN_BIN` to use a custom executable.
 
 ### 4. Start the desktop app (two terminals)
@@ -465,7 +465,7 @@ password, edit the yml and recreate the container. To use Oracle, uncomment the 
 ## The GraphJin binary
 
 At build time the tarball in `graphjin-binaries/<version>/` is extracted and renamed to
-`graphjin-<target-triple>` inside `src-tauri/binaries/` (packaged into
+`graphjin-<target-triple>` inside `binaries/` (packaged into
 `resources/binaries/` via `extraResources`).
 
 ```bash
@@ -536,7 +536,7 @@ sidecar-backend/       Node backend
 scripts/               local startup, demo DB, binary prep / smoke, UI smoke test
 .github/workflows/     four-platform packaging CI
 docs/                  baseline notes, feature matrix, UI screenshots
-src-tauri/binaries/    GraphJin binaries (extracted at build time)
+binaries/              GraphJin binaries (extracted at build time)
 ```
 
 ## Known limitations
@@ -553,3 +553,12 @@ src-tauri/binaries/    GraphJin binaries (extracted at build time)
   script still requires Windows + Edge.
 
 The full done / not-done matrix is in [docs/FEATURES.md](./docs/FEATURES.md) (Chinese).
+
+
+# Common Errors
+## GraphJin didn't start
+Based on win11：Enter into build-mcp-server-4-any-db\binaries folder and run cmd.exe
+``` bash
+npm run prepare:binaries
+graphjin-x86_64-pc-windows-msvc.exe serve
+```

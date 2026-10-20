@@ -571,7 +571,7 @@ watch(
 
 .admin-note {
   margin: 14px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.7;
 }
 
@@ -641,7 +641,7 @@ watch(
 
 .verify-hint {
   margin: 0 0 10px;
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.6;
   color: var(--text-dim);
 }
@@ -658,7 +658,7 @@ watch(
   padding: 12px 14px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.6;
   color: var(--text);
   background: var(--ink-700);
@@ -688,7 +688,7 @@ watch(
 
 .matrix th {
   padding: 10px 16px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -722,7 +722,7 @@ watch(
   width: 68px;
   padding: 4px 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-micro);
   font-weight: 500;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -752,8 +752,8 @@ watch(
   margin-top: 5px;
   padding: 0;
   font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
   background: none;
   border: none;
   cursor: pointer;
@@ -808,7 +808,7 @@ watch(
 .hint {
   display: block;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.6;
   color: var(--text-dim);
 }

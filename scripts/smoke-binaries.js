@@ -21,7 +21,7 @@ const { PLATFORMS, sidecarFileName, currentPlatformKey } = require('./platforms'
 
 const ROOT = path.join(__dirname, '..');
 const MANIFEST = path.join(ROOT, 'graphjin-binaries', 'version.json');
-const BINARIES_DIR = path.join(ROOT, 'src-tauri', 'binaries');
+const BINARIES_DIR = path.join(ROOT, 'binaries');
 
 function parseArgs(argv) {
   const args = { platform: null };

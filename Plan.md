@@ -52,7 +52,7 @@ const os = require('os');
 
 const VERSION = 'v3.21.14';
 const SOURCE_DIR = path.join(__dirname, '..', 'graphjin-binaries', VERSION);
-const TARGET_DIR = path.join(__dirname, '..', 'src-tauri', 'binaries');
+const TARGET_DIR = path.join(__dirname, '..', 'binaries');
 
 // 目标三元组映射
 const TRIPLE_MAP = {
@@ -73,7 +73,7 @@ fs.copyFileSync(srcFile, dstFile);
 console.log(`Copied ${srcFile} → ${dstFile}`);
 ```
 
-Tauri 要求 sidecar 二进制文件以 `-$TARGET_TRIPLE` 后缀命名，例如 `graphjin-x86_64-unknown-linux-gnu`。此脚本确保构建时自动将对应平台的 GraphJin 二进制复制到 `src-tauri/binaries/` 目录并重命名。
+二进制文件以 `-$TARGET_TRIPLE` 后缀命名，例如 `graphjin-x86_64-unknown-linux-gnu`（沿用自 Tauri sidecar 约定：三平台产物同名会互相覆盖）。此脚本确保构建时自动将对应平台的 GraphJin 二进制复制到仓库根 `binaries/` 目录并重命名。
 
 > **实测修正（v3.21.14）**：官方产物名是 `graphjin_<ver>_<os>_<arch>.tar.gz`（`os ∈ darwin/linux/windows`，`arch ∈ amd64/arm64`），
 > **不按 Rust 三元组发布**。因此三元组只用于「下载后重命名」，不用于拼下载地址。
@@ -395,8 +395,8 @@ src/
 | 0.1 | 下载 GraphJin **v3.21.14** 全平台 `*.tar.gz`（各 42–48 MB）与 `checksums.txt`，建立 `graphjin-binaries/v3.21.14/`，写 `version.json` 记录版本与 SHA256（已完成：`scripts/fetch-binaries.js`，6 个平台全部校验通过） |
 | 0.2 | 初始化桌面外壳 + Vue 3 + Vite 项目（**已改为 Electron 44.7.0**：`electron/main.js` + `electron/preload.js`，渲染进程复用现有 Vue 构建产物） |
 | 0.3 | Node.js 后端（**不再需要 pkg 打包**：Electron 主进程直接 `require` 后端，`createBackend()` 返回可编程启停的实例。Electron 44 内置 Node 24.21.0，`node:sqlite` 可用） |
-| 0.4 | 编写 `scripts/prepare-binaries.js`（下载走 `scripts/fetch-binaries.js`），构建时把当前平台的 GraphJin 二进制复制/解压到 `src-tauri/binaries/` 并按目标三元组命名（已完成；注意 `os.platform()` 返回 `win32`，需映射成 `windows`） |
-| 0.5 | 配置打包资源：`build.files` 含 `dist / electron / sidecar-backend/src / sidecar-backend/package.json / scripts/platforms.js`，`extraResources` 把 `src-tauri/binaries/graphjin-*` 放到 `resources/binaries/`；`electronDist` 复用已解压的 Electron，避免重复下载 |
+| 0.4 | 编写 `scripts/prepare-binaries.js`（下载走 `scripts/fetch-binaries.js`），构建时把当前平台的 GraphJin 二进制复制/解压到 `binaries/` 并按目标三元组命名（已完成；注意 `os.platform()` 返回 `win32`，需映射成 `windows`） |
+| 0.5 | 配置打包资源：`build.files` 含 `dist / electron / sidecar-backend/src / sidecar-backend/package.json / scripts/platforms.js`，`extraResources` 把 `binaries/graphjin-*` 放到 `resources/binaries/`；`electronDist` 复用已解压的 Electron，避免重复下载 |
 | 0.6 | 验证：`electron-builder --win nsis` 产出 `release-win/MCP Builder Setup 0.1.0.exe`（150 MB），打包产物实测可启动（进程内后端 :65339、数据落 `%APPDATA%\mcp-builder\data`） |
 
 > **Windows 构建环境（2026-10-17 实测）**
@@ -426,8 +426,11 @@ src/
 >   但产物需要额外带 `libgcc/libstdc++/libwinpthread` 运行时 DLL，NSIS 打包要自己补，且 Tauri
 >   官方只保证 MSVC，故仅作最后手段。
 >
-> **决定**：桌面外壳改用 **Electron 44.7.0**（2026-10-17）。上述 Tauri/MSVC 阻塞不再影响主线，
-> `src-tauri/` 保留作为备选，不参与当前构建。
+> **决定**：桌面外壳改用 **Electron 44.7.0**（2026-10-17）。上述 Tauri/MSVC 阻塞不再影响主线。
+>
+> **收尾（2026-10-19）**：`src-tauri/` 已整体移除（Cargo 工程、`tauri.conf.json`、`capabilities/`、`target/`），
+> 其中唯一被现役代码依赖的 `src-tauri/binaries/` 已迁到仓库根 `binaries/`；三元组命名保留。
+> 本节上方关于 Tauri sidecar / capabilities 的描述仅作历史决策记录。
 
 > **Electron 打包踩坑（均已验证修复）**
 >
@@ -449,7 +452,7 @@ src/
 | 1.4 | 封装权限配置 API：legacy 模式下 `update_current_config` 立即生效，故平台侧先算 diff + 二次确认再写入；写入前自动保存 `roles` 快照，`permissions.rollback` 可恢复并清理本次新增角色（已实现：`src/snapshots.js`） |
 | 1.5 | 实现 `buildRoleTableConfig(database, matrix)`（方案 B）：输出 `roles[].tables[]`，每项带 `database` 字段与 query/insert/update/delete 四项开关 |
 | 1.6 | 实现用户/组织管理模块：本地 SQLite 存储，与 GraphJin RBAC 角色映射（已实现：`src/users.js`，用 Node 内置 `node:sqlite`，避免原生依赖给后续 pkg 打包添麻烦；`syncRolesToGraphJin` 负责把本地角色补进 GraphJin） |
-| 1.7 | 实现 GraphJin 进程管理（已实现：`src/supervisor.js` + `graphjin.start/stop/status/health` RPC）。崩溃自动重启：窗口内（默认 60s）最多重启 3 次，超限记 `lastError` 并放弃；二进制按 显式入参 > `GRAPHJIN_BIN` > `src-tauri/binaries/<三元组>` 解析 |
+| 1.7 | 实现 GraphJin 进程管理（已实现：`src/supervisor.js` + `graphjin.start/stop/status/health` RPC）。崩溃自动重启：窗口内（默认 60s）最多重启 3 次，超限记 `lastError` 并放弃；二进制按 显式入参 > `GRAPHJIN_BIN` > `binaries/<三元组>` 解析 |
 | 1.8 | 实现 MCP 客户端配置生成（已实现：`src/mcp-config.js` + `mcp.clientConfig` / `mcp.clients` / `mcp.endpoint`）。默认输出 **HTTP 传输**直连 `/api/v1/mcp`（官方 `mcp add` 也会把 URL 规范化到该端点）；CLI 命令用已验证存在的 `graphjin mcp add claude\|codex\|all <url>`；stdio 形态仅作兜底并标注 v3.21.14 内置 proxy 的 400 缺陷 |
 
 ### 阶段 2：Vue 3 前端开发（4 周）

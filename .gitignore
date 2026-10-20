@@ -22,4 +22,6 @@ release-final-win/
 release-final-mac/
 release-final-linux/
 release-ci-check/
-src-tauri/
+
+# 构建期解压的 GraphJin 二进制（单平台约 158 MiB，不入库）
+binaries/

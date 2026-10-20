@@ -13,6 +13,7 @@
     "fetch:binaries": "node scripts/fetch-binaries.js",
     "smoke:binaries": "node scripts/smoke-binaries.js",
     "demo:db": "node scripts/create-demo-db.js",
+    "demo:orders": "node scripts/seed-demo-orders.js",
     "test": "npm run test:frontend && npm --prefix sidecar-backend test",
     "test:frontend": "node --test src/utils/policy.test.mjs",
     "backend": "node sidecar-backend/src/index.js",
@@ -42,7 +43,7 @@
     ],
     "extraResources": [
       {
-        "from": "src-tauri/binaries",
+        "from": "binaries",
         "to": "binaries",
         "filter": [
           "graphjin-*"

@@ -15,6 +15,9 @@ const savingRoleId = ref(0);
 const isEditOpen = ref(false);
 const isSavingEdit = ref(false);
 const editingUser = reactive({ id: 0, name: '', email: '' });
+const isTokenOpen = ref(false);
+const isIssuingToken = ref(false);
+const tokenState = reactive({ token: '', expiresAt: '', email: '' });
 
 const form = reactive({
   organizationId: null,
@@ -85,6 +88,34 @@ async function removeOrg(org) {
     ElMessage.success(t('users.orgDeleted', { name: org.name }));
   } catch (error) {
     ElMessage.error(error.message);
+  }
+}
+
+/**
+ * 签发令牌：令牌里的 role / user_code 决定 MCP 客户端能看到哪些行、哪些列，
+ * 所以改角色之后要重新生成，旧令牌不会自动失效。
+ */
+async function openToken(user) {
+  isIssuingToken.value = true;
+  try {
+    const result = await store.createToken(user.id);
+    tokenState.token = result.token;
+    tokenState.email = user.email;
+    tokenState.expiresAt = new Date(Date.now() + result.expiresIn * 1000).toLocaleString();
+    isTokenOpen.value = true;
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    isIssuingToken.value = false;
+  }
+}
+
+async function copyToken() {
+  try {
+    await navigator.clipboard.writeText(tokenState.token);
+    ElMessage.success(t('users.tokenCopied'));
+  } catch {
+    ElMessage.error(t('users.tokenCopyFailed'));
   }
 }
 
@@ -319,6 +350,9 @@ async function syncRoles() {
                 </el-select>
               </td>
               <td class="users__actions">
+                <el-button size="small" text :loading="isIssuingToken" @click="openToken(user)">
+                  {{ t('users.token') }}
+                </el-button>
                 <el-button size="small" text @click="openEdit(user)">
                   {{ t('users.edit') }}
                 </el-button>
@@ -347,6 +381,16 @@ async function syncRoles() {
         <el-button type="primary" :loading="isSavingEdit" @click="saveEdit">
           {{ t('common.save') }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="isTokenOpen" :title="t('users.tokenTitle')" width="560">
+      <p class="hint">{{ t('users.tokenHint', { email: tokenState.email }) }}</p>
+      <pre class="token">{{ tokenState.token }}</pre>
+      <p class="hint">{{ t('users.tokenExpires', { time: tokenState.expiresAt }) }}</p>
+      <template #footer>
+        <el-button @click="isTokenOpen = false">{{ t('common.close') }}</el-button>
+        <el-button type="primary" @click="copyToken">{{ t('users.tokenCopy') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -415,6 +459,20 @@ async function syncRoles() {
   font-size: 12px;
   line-height: 1.7;
   color: var(--text-dim);
+}
+
+.token {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .users {

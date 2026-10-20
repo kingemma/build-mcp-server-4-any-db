@@ -185,7 +185,7 @@ watch(
 
 .state {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-micro);
 }
 
 .state--allowed {
@@ -201,7 +201,7 @@ watch(
 }
 
 .detail {
-  font-size: 12px;
+  font-size: var(--fs-note);
   color: var(--text-dim);
 }
 
@@ -238,7 +238,7 @@ watch(
 
 .note {
   margin: 12px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-note);
   line-height: 1.7;
   color: var(--text-dim);
 }

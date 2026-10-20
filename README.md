@@ -181,6 +181,41 @@ npm start
 2. 点「测试连接」，再点「启动」；
 3. 到「Schema 浏览器」确认表结构，到「权限矩阵」配置权限。
 
+### 订单演示数据（含多用户隔离）
+
+```bash
+npm run demo:orders                     # 写入开发数据目录 sidecar-backend/data
+npm run demo:orders -- --db <路径>      # 指定 Electron 用的 mcp-builder.db
+```
+
+脚本会建 `projects/demo-orders/demo.db`、组织 `demo-shop`、两个用户，并写入权限矩阵，
+最后用真实查询跑 9 项断言（失败会以非零码退出）：
+
+| 用户 | 角色 | 行过滤 | 列 | 写操作 |
+|:--|:--|:--|:--|:--|
+| `user-a@demo.local` | `customer` | `owner_code = $user_code` | 白名单 6 列，看不到 `internal_note` | 全阻止 |
+| `user-b@demo.local` | `ops` | 无（看全部） | 不限 | 允许更新、删除 |
+
+**多用户身份走「平台网关 + JWT」**，不用 GraphJin 原生 JWT——实测 v3.21.14 的 legacy
+`roles[].tables` 模式不解析 token 里的 `roles`/`role`，`roles_query` 也查不到表
+（见 `sidecar-backend/scripts/verify-identity.js`）。链路是：
+
+```
+外部客户端 → http://127.0.0.1:<后端端口>/api/v1/mcp
+             Authorization: Bearer <JWT>
+           → 平台网关验签
+           → 注入 X-User-Role / X-User-Code（仅回环）
+           → GraphJin（只监听 127.0.0.1，auth.type: none）
+```
+
+令牌用 `auth.token` RPC 按用户签发（默认 12 小时），客户端配置由 `mcp.clientConfig`
+带 `gatewayUrl` + `token` 生成。
+
+> **已知限制**：MCP 的 `execute_graphql` 不透传自定义请求头，`$user_code` 因此解析为空，
+> 行过滤会退化成 0 行。所以**行级隔离只在平台内的 HTTP GraphQL 路径生效**
+>（验证面板、`graphql.execute`）；外部 MCP 客户端能用角色与列白名单，但拿不到按人过滤的行。
+> 彻底解决需要在网关里把 `execute_graphql` 改写成 GraphQL 请求，尚未实现。
+
 如果不想用一键脚本，等价的**手动分终端**方式是：
 
 ```bash
@@ -268,7 +303,7 @@ npm run smoke:binaries
 # 期望输出：PASS  windows-amd64  ...  GraphJin 3.21.14
 ```
 
-解压后的文件位于 `src-tauri/binaries/graphjin-<target-triple>[.exe]`。
+解压后的文件位于 `binaries/graphjin-<target-triple>[.exe]`。
 如需使用自定义路径，可设置环境变量 `GRAPHJIN_BIN`。
 
 ### 4. 启动桌面端（手动分终端）
@@ -437,7 +472,7 @@ docker compose -f docs/docker-compose-4-test-db-connection.yml down
 ## GraphJin 二进制
 
 构建期从 `graphjin-binaries/<version>/*.tar.gz` 解压，按 `graphjin-<target-triple>` 命名
-放进 `src-tauri/binaries/`（打包时随 `extraResources` 落到 `resources/binaries/`）。
+放进 `binaries/`（打包时随 `extraResources` 落到 `resources/binaries/`）。
 
 ```bash
 # 下载官方发布包并校验 sha256（需要网络与 curl）
@@ -502,7 +537,7 @@ sidecar-backend/       Node 后端
 scripts/               本地启动、演示库、二进制准备 / 冒烟、UI 冒烟
 .github/workflows/     四平台打包 CI
 docs/                  基线文档、功能矩阵、UI 截图
-src-tauri/binaries/    GraphJin 二进制（构建期解压）
+binaries/              GraphJin 二进制（构建期解压）
 ```
 
 ## 已知限制
@@ -515,3 +550,13 @@ src-tauri/binaries/    GraphJin 二进制（构建期解压）
 - 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
 
 完整的「已完成 / 未完成」清单见 [docs/FEATURES.md](./docs/FEATURES.md)。
+
+# 常见问题
+## 策略预览中显示GraphJin未运行
+以win11为例：进入build-mcp-server-4-any-db\binaries目录，执行cmd.exe
+运行
+``` bash
+npm run prepare:binaries
+graphjin-x86_64-pc-windows-msvc.exe serve
+
+```

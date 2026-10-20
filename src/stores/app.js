@@ -606,6 +606,18 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
+     * 为成员签发 MCP 访问令牌。
+     *
+     * 令牌里的 role / user_code 就是网关转发给 GraphJin 的身份，改角色后需重新签发。
+     *
+     * @param {number} userId
+     * @returns {Promise<{token: string, expiresIn: number, user: Object}>}
+     */
+    async createToken(userId) {
+      return rpc('auth.token', { userId });
+    },
+
+    /**
      * 把成员用到的角色补齐进 GraphJin：角色不存在时 roles[].tables 会被拒。
      *
      * @returns {Promise<{created: string[], existing: string[]}>}

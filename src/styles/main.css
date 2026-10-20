@@ -34,6 +34,11 @@
   --rail-faint: #6d86a4;
   --rail-active: #1d4ed8;
 
+  /* 字号只留两档小字：说明文字用 note，紧凑控件/标签用 micro。
+     之前散落的 10.5/11/11.5/12/12.5/13 让同类文字在不同页面看起来不一样大。 */
+  --fs-note: 13px;
+  --fs-micro: 12px;
+
   --sans: 'Inter', 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei',
     system-ui, -apple-system, sans-serif;
   --mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
@@ -169,7 +174,7 @@ a {
   gap: 6px;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-micro);
   font-weight: 500;
   letter-spacing: 0;
   border: 1px solid transparent;
@@ -224,6 +229,13 @@ a {
   padding: 1px 11px !important;
   box-shadow: 0 0 0 1px var(--line) inset !important;
   transition: box-shadow 0.15s ease;
+}
+
+/* 表单里的下拉框要和输入框等高。Element 的 size 变体在样式表末尾把 min-height 写死成
+   24px，同优先级会盖掉上面的 34px，于是并排时差 10px。多一层选择器提权压回来。
+   只限定 el-form，避免表格行、工具条里的紧凑下拉被一起撑高。 */
+.el-form .el-select .el-select__wrapper {
+  min-height: 34px;
 }
 
 .el-textarea__inner {

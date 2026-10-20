@@ -4,10 +4,12 @@
 /**
  * 构建期准备 sidecar 二进制。
  *
- * 从 graphjin-binaries/<version>/ 取出当前平台的 *.tar.gz，解压后按 Tauri 要求
- * 重命名为 graphjin-<target-triple>[.exe] 放进 src-tauri/binaries/。
+ * 从 graphjin-binaries/<version>/ 取出当前平台的 *.tar.gz，解压后重命名为
+ * graphjin-<target-triple>[.exe] 放进仓库根 binaries/。
  *
- * Tauri 要求 sidecar 文件名带目标三元组后缀，且 externalBin 里写不带后缀的名字。
+ * 文件名带目标三元组后缀沿用自 Tauri sidecar 约定：多平台产物同名会互相覆盖，
+ * 三元组后缀让三平台可以共存于同一目录。electron/main.js 与 supervisor 都按
+ * scripts/platforms.js 的 sidecarFileName() 拼路径，改名时三处必须同步。
  *
  * 用法：
  *   node scripts/prepare-binaries.js                      # 当前平台
@@ -23,7 +25,7 @@ const { assetName, sidecarFileName, currentPlatformKey, PLATFORMS } = require('.
 
 const ROOT = path.join(__dirname, '..');
 const BINARIES_DIR = path.join(ROOT, 'graphjin-binaries');
-const TARGET_DIR = path.join(ROOT, 'src-tauri', 'binaries');
+const TARGET_DIR = path.join(ROOT, 'binaries');
 
 function parseArgs(argv) {
   const args = { platform: null };
