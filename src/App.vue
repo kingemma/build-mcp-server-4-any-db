@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
@@ -24,12 +24,38 @@ const navHint = (item) => t(item.meta.hintKey);
 const pageTitle = computed(() => (route.meta?.titleKey ? t(route.meta.titleKey) : ''));
 const pageHint = computed(() => (route.meta?.hintKey ? t(route.meta.hintKey) : ''));
 
-onMounted(() => store.refreshBackend());
+/**
+ * Windows 用 titleBarOverlay 自绘系统按钮，窗口顶部会多出 40px 控制区。
+ * 浏览器模式和 macOS 没有这个 API，值为 false，布局保持原样。
+ */
+const hasTitlebarOverlay = ref(false);
+let overlayApi = null;
+
+const syncTitlebarOverlay = (visible) => {
+  hasTitlebarOverlay.value = Boolean(visible);
+};
+
+const onOverlayGeometryChange = (event) => syncTitlebarOverlay(event.visible);
+
+onMounted(() => {
+  store.refreshBackend();
+
+  overlayApi = window.navigator.windowControlsOverlay ?? null;
+  if (!overlayApi) return;
+  syncTitlebarOverlay(overlayApi.visible);
+  overlayApi.addEventListener('geometrychange', onOverlayGeometryChange);
+});
+
+onBeforeUnmount(() => {
+  overlayApi?.removeEventListener('geometrychange', onOverlayGeometryChange);
+});
 </script>
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <div class="shell">
+    <div class="shell" :class="{ 'shell--titlebar': hasTitlebarOverlay }">
+    <!-- 自绘标题栏：系统按钮画在这条 40px 带上，整条可拖动窗口 -->
+    <div v-if="hasTitlebarOverlay" class="titlebar" aria-hidden="true" />
     <aside class="rail">
       <div class="brand">
         <div class="brand__mark">◈</div>
@@ -64,7 +90,7 @@ onMounted(() => store.refreshBackend());
           <div class="eyebrow">{{ pageHint }}</div>
           <h1 class="topbar__title">{{ pageTitle }}</h1>
         </div>
-        <div class="topbar__meta">
+        <div class="topbar__meta no-drag">
           <el-select v-model="locale" size="small" class="locale" :aria-label="t('app.language')">
             <el-option
               v-for="item in SUPPORTED_LOCALES"
@@ -98,6 +124,27 @@ onMounted(() => store.refreshBackend());
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   height: 100%;
+}
+
+/* 40px 与 electron/main.js 的 TITLEBAR_HEIGHT 一致 */
+.shell--titlebar {
+  padding-top: 40px;
+}
+
+.titlebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: 40px;
+  background: #ffffff;
+  -webkit-app-region: drag;
+}
+
+/* 顶栏留作拖拽区，里面的下拉框 / 状态胶囊要能点 */
+.no-drag {
+  -webkit-app-region: no-drag;
 }
 
 .rail {
@@ -221,6 +268,7 @@ onMounted(() => store.refreshBackend());
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(10px);
+  -webkit-app-region: drag;
 }
 
 .topbar__title {

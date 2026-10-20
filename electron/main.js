@@ -8,10 +8,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell } = require('electron');
 
 const ROOT = path.join(__dirname, '..');
 const IS_DEV = !app.isPackaged;
+
+/** 自绘标题栏高度：与 App.vue 里留出的顶部拖拽区保持一致 */
+const TITLEBAR_HEIGHT = 40;
 
 let backend = null;
 let isQuitting = false;
@@ -68,7 +71,22 @@ function createWindow(port) {
     title: 'MCP Server Build',
     // 任务栏 / 窗口标题栏图标；打包后的安装包图标由 build/icon.png 生成
     icon: path.join(__dirname, 'icon.png'),
-    backgroundColor: '#0a0d10',
+    // 与浅色主题一致，避免加载期先闪一块深色
+    backgroundColor: '#ffffff',
+    // 不要 File / Edit / View 这类系统菜单栏；同时挡掉 Alt 唤出隐藏菜单
+    autoHideMenuBar: true,
+    // Windows 去掉原生标题栏，改用系统自绘按钮（最小化 / 最大化 / 关闭），
+    // 颜色跟主题走，且保留 Win11 的贴靠布局悬停
+    ...(process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: {
+            color: '#ffffff',
+            symbolColor: '#3a5573',
+            height: TITLEBAR_HEIGHT,
+          },
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -86,12 +104,25 @@ function createWindow(port) {
   if (IS_DEV) window.loadURL(process.env.MCP_BUILDER_DEV_URL || 'http://127.0.0.1:1420');
   else window.loadFile(path.join(ROOT, 'dist', 'index.html'));
 
+  // 菜单没了，Ctrl+Shift+I / F12 也跟着失效，开发态补一个
+  if (IS_DEV) {
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'F12') {
+        window.webContents.toggleDevTools();
+        event.preventDefault();
+      }
+    });
+  }
+
   return window;
 }
 
 app
   .whenReady()
   .then(async () => {
+    // macOS 的系统菜单还提供复制 / 粘贴快捷键，只在 Windows / Linux 上整体移除
+    if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+
     backend = await startBackend();
     console.log(`后端已就绪: http://127.0.0.1:${backend.port}`);
     console.log(`数据目录: ${process.env.MCP_BUILDER_DATA_DIR}`);
