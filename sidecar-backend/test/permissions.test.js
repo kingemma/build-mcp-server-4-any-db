@@ -251,3 +251,21 @@ test('migrateLegacyRoleTables: 缺列清单时不生成 grants 并记冲突', ()
     ['missing-columns']
   );
 });
+
+test('buildSourceAccessConfig: owner 档位缺少 ownerColumn 时拒绝写入', () => {
+  assert.throws(
+    () => buildSourceAccessConfig({ read: 'owner' }),
+    /owner 需要 ownerColumn/
+  );
+  assert.throws(
+    () => buildSourceAccessConfig({ write: 'owner' }),
+    /owner 需要 ownerColumn/
+  );
+});
+
+test('buildSourceAccessConfig: 同一张表不能既 admin_tables 又 blocked_tables', () => {
+  assert.throws(
+    () => buildSourceAccessConfig({ adminTables: ['orders'], blockedTables: ['orders'] }),
+    /不能同时是 admin_tables 与 blocked_tables/
+  );
+});

@@ -11,8 +11,8 @@
 | 1 | 配置生成 source 化：`project.js` 模板、`graphjin.js` 读写通道、旧项目迁移 | 已完成 |
 | 2 | 权限模型映射：`permissions.js` 由 `roles[].tables` 改为 `sources[].access` + `grants` | 已完成（决策 A） |
 | 3 | 写侧兜底：表级写开关在 source 模式下无对应结构 | 决策 A：不做兜底，写/删降级为 source 级 |
-| 4 | 前端适配：权限矩阵改版、迁移向导、提示降级项 | 待开工 |
-| 5 | 端到端回归：`verify:e2e` / `verify:migration` | 已完成（24 + 9 项） |
+| 4 | 前端适配：权限矩阵改版、源级访问面板、降级提示 | 已完成 |
+| 5 | 端到端回归：`verify:e2e` / `verify:migration` / `npm run build` | 已完成（24 + 9 项） |
 
 ## 2. 实测结论
 
@@ -175,6 +175,16 @@ preview 未落盘 = FAIL（1 条 source 已生效）
 
 已删除：`scripts/verify-plan-b.js`、`scripts/verify-columns.js`（被 e2e 覆盖）。
 `scripts/verify-identity.js` 仍是 legacy 夹具，未迁移。
+
+**前端（阶段 4）**
+
+- `src/utils/policy.js`：`OPERATIONS` 只剩 `query`；新增 `normalizeSourceAccesses` /
+  `emptySourceAccess` / `toAccessPayload`，`normalizeCurrentRoles` 改读 `sources[].access.grants`。
+- `src/stores/app.js`：新增 `sourceAccess` / `currentSourceAccess` / `configRoles`；
+  `permissions.apply` 同时提交矩阵与源级 access。
+- `src/views/PermissionsView.vue`：新增「数据源访问」面板（读/写/删档位、owner 列、
+  仅管理员/全局屏蔽表）；矩阵只剩「读取」，编辑器移除 limit（grants 无此字段）。
+- 降级提示：面板内注明「写入/删除为数据源级」「未列入规则的表对已认证角色完全可读」。
 
 ## 6. 决策记录
 

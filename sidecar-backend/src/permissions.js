@@ -153,12 +153,22 @@ function buildSourceAccessConfig({
     write: normalizeMode(write, WRITE_MODES, 'blocked'),
     delete: normalizeMode(del, WRITE_MODES, 'blocked'),
   };
+
+  // owner 档位没有归属列会退化成「谁能看所有行」，属于静默故障，直接拒绝
+  const needsOwner = ['read', 'write', 'delete'].filter((key) => access[key] === 'owner');
+  if (needsOwner.length > 0 && !ownerColumn) {
+    throw new Error(`access.${needsOwner[0]} = owner 需要 ownerColumn`);
+  }
   if (ownerColumn) access.owner_column = ownerColumn;
   if (namespaceColumn) access.namespace_column = namespaceColumn;
 
   const blocked = [...new Set(blockedTables)];
-  if (blocked.length > 0) access.blocked_tables = blocked;
   const admin = [...new Set(adminTables)];
+  const overlap = blocked.filter((table) => admin.includes(table));
+  if (overlap.length > 0) {
+    throw new Error(`表 ${overlap.join(', ')} 不能同时是 admin_tables 与 blocked_tables`);
+  }
+  if (blocked.length > 0) access.blocked_tables = blocked;
   if (admin.length > 0) access.admin_tables = admin;
 
   const grantList = [];

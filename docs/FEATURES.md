@@ -26,9 +26,9 @@
 | GraphJin 进程编排 | 绝对路径校验、端口探活、崩溃自动重启、状态查询 |
 | MCP 客户端 | Streamable HTTP、会话管理、**会话失效自动重连**、请求串行队列 |
 | Schema 发现 | `query_catalog` 分页（table / column / relationship），支持按库过滤 |
-| 权限编排 | 方案 B：本地角色名 = GraphJin 角色名；四项操作 + 行过滤 + 列管控 + 默认 limit |
-| 权限快照 / 回滚 | 每次写入前把 `get_current_config.roles` 落盘；`permissions.rollback` 恢复并删除本次新增角色（admin 受保护） |
-| 策略读取 | `get_current_config` 顶层 `roles` 解析成可对比结构 |
+| 权限编排 | source 模式：数据源级 `access`（读/写/删 + owner 列）+ 角色级 `grants`（列白名单 / 行过滤） |
+| 权限快照 / 回滚 | 每次写入前把 `roles` 与 `sources[].access` 落盘；回滚先恢复 access 再删本次新增角色（admin 受保护） |
+| 策略读取 | `get_current_config` 的 `sources[].access.grants` 解析成可对比结构 |
 | admin 角色保障 | 启动与每次写入前自动补齐 `admin`，避免 `roles 'admin' not defined` |
 | block 列管控保护 | 表列清单缺失时拒绝展开补集，避免把全部列静默放行 |
 | 驱动能力校验 | `driverVerified=false` 的类型在测试/启动前直接返回明确错误，不再拉起进程 |
@@ -46,7 +46,7 @@
 | 数据库连接 | 内置类型 + 自定义模板；三种录入方式；测试 / 启动 / 存模板；驱动未验证类型自动禁用测试与启动 |
 | 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除 |
 | Schema 浏览器 | 顶部库选择，按库加载表 / 列 / 关系；结构与关系隔离 |
-| 权限矩阵 | 角色 × 表 × 四项操作；行过滤、列白名单 / 黑名单、默认 limit；按库隔离（表身份 `database::table`）；可移除本地角色 |
+| 权限矩阵 | 角色 × 表的读规则（行过滤、列白名单 / 黑名单）；数据源级读/写/删档位、owner 列、仅管理员/全局屏蔽表；按库隔离（表身份 `database::table`）；可移除本地角色 |
 | 策略回填 / 导入 | 加载时用生效策略补空格子（不覆盖本地改动）；「从生效策略导入」二次确认后覆盖 |
 | 写入历史 / 回滚 | 列出每份快照（时间、角色数、库、原因），可恢复到任意一份；回滚前自动再快照 |
 | 用户与组织 | 组织 / 成员增删改；成员角色即 GraphJin 角色名，一键把成员角色同步进 GraphJin；组织有成员时拒绝删除 |
@@ -94,8 +94,9 @@
 ## 已知边界（非缺陷）
 
 - 一个后端进程只托管一个 GraphJin 实例；切换连接会先停止再启动。
-- 运行时用 `update_current_config` 合并 `databases` 会让实例进入
-  `roles 'admin' not defined` 状态；平台现在会在启动与写入前补齐 admin。
+- source 模式下 `source_patches` 会忽略 `access.grants`，平台改为整份替换 `sources`；
+  替换前先从 dev.yml 读回真实连接串（配置 API 返回 `[REDACTED]`）。
+- 删除角色必须在清空引用它的 grants 之后，否则 `update_current_config` 会 reload 失败。
 - 连接凭据依赖 `keystore.key`；该文件丢失后旧记录只能重新录入密码。
 - 权限快照存在同一个 `mcp-builder.db`，只保留每个项目最近 30 份。
 - `admin` 是保留角色：平台不为它写限制规则、默认不进入矩阵，任何回滚都不会删除它。

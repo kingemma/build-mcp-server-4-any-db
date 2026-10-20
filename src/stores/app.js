@@ -6,10 +6,13 @@ import {
   OPERATION_KEYS,
   STATE_KEYS,
   diffPolicy,
+  emptySourceAccess,
   normalizeCurrentRoles,
   normalizePendingMatrix,
+  normalizeSourceAccesses,
   resolveColumns,
   scopeToDatabase,
+  toAccessPayload,
   unresolvedBlockTables,
 } from '../utils/policy';
 
@@ -56,6 +59,14 @@ export const useAppStore = defineStore('app', {
     policyRaw: {},
     /** 当前生效策略，已按 applyDatabase 收敛成纯表名 */
     currentPolicy: {},
+    /** GraphJin 配置里已存在的角色名（可能还没有任何 grants） */
+    configRoles: [],
+    /** 每个数据源的 source 级访问档位（读/写/删 + owner 列 + 表分类） */
+    sourceAccessByDb: {},
+    /** 当前写入目标库的 source 级档位（可编辑） */
+    sourceAccess: emptySourceAccess(),
+    /** 生效中的 source 级档位，用于判断是否有未提交改动 */
+    currentSourceAccess: emptySourceAccess(),
     /** 是否成功读过一次生效策略：空策略与「还没读」要分开提示 */
     hasLoadedPolicy: false,
     /** 支持的 MCP 客户端清单（含各平台配置路径） */
@@ -172,6 +183,10 @@ export const useAppStore = defineStore('app', {
         this.matrix = {};
         this.policyRaw = {};
         this.currentPolicy = {};
+        this.configRoles = [];
+        this.sourceAccessByDb = {};
+        this.sourceAccess = emptySourceAccess();
+        this.currentSourceAccess = emptySourceAccess();
         this.hasLoadedPolicy = false;
         this.applyDatabase = '';
         this.snapshots = [];
@@ -269,6 +284,13 @@ export const useAppStore = defineStore('app', {
             };
           }
         }
+      }
+
+      // 配置里已存在但还没有 grants 的角色也要出现在编辑器里，
+      // 否则「先建角色、后配规则」的流程会看不到角色
+      for (const role of this.configRoles) {
+        if (RESERVED_ROLES.has(role) || this.roles.includes(role)) continue;
+        this.roles.push(role);
       }
 
       if (!this.currentRole && this.roles.length) this.currentRole = this.roles[0];
@@ -415,6 +437,10 @@ export const useAppStore = defineStore('app', {
         return;
       }
       this.policyRaw = normalizeCurrentRoles(result.data);
+      this.sourceAccessByDb = normalizeSourceAccesses(result.data);
+      this.configRoles = (result.data?.roles ?? [])
+        .map((role) => role?.name)
+        .filter(Boolean);
       this.hasLoadedPolicy = true;
       this.applyPolicyScope();
       // 启动后角色与矩阵都是空的：自动回填一次，已配置的策略才能继续编辑
@@ -424,6 +450,27 @@ export const useAppStore = defineStore('app', {
     /** 把完整策略按写入目标库收敛，diff 与策略页只比较这个库 */
     applyPolicyScope() {
       this.currentPolicy = scopeToDatabase(this.policyRaw, this.applyDatabase);
+      const access = this.sourceAccessByDb[this.applyDatabase] ?? emptySourceAccess();
+      this.sourceAccess = { ...access, adminTables: [...access.adminTables], blockedTables: [...access.blockedTables] };
+      this.currentSourceAccess = {
+        ...access,
+        adminTables: [...access.adminTables],
+        blockedTables: [...access.blockedTables],
+      };
+    },
+
+    /**
+     * 修改当前数据源的 source 级档位（读/写/删/owner 列/表分类）。
+     *
+     * @param {string} field
+     * @param {*} value
+     */
+    setSourceAccess(field, value) {
+      if (!Object.hasOwn(this.sourceAccess, field)) return;
+      this.sourceAccess = { ...this.sourceAccess, [field]: value };
+      if (this.applyDatabase) {
+        this.sourceAccessByDb = { ...this.sourceAccessByDb, [this.applyDatabase]: this.sourceAccess };
+      }
     },
 
     /**
@@ -456,6 +503,7 @@ export const useAppStore = defineStore('app', {
           projectDir: this.status?.projectDir ?? null,
           database: this.applyDatabase,
           matrix: this.resolveMatrix(),
+          access: toAccessPayload(this.sourceAccess),
         });
         await Promise.all([this.loadCurrentPolicy(), this.loadSnapshots()]);
         return result;

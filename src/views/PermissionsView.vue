@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore, OPERATIONS, OPERATION_KEYS, STATE_KEYS } from '../stores/app';
-import { formatDetail } from '../utils/policy';
+import { ACCESS_MODES, READ_MODES, formatDetail, toAccessPayload } from '../utils/policy';
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -24,7 +24,6 @@ const editing = reactive({
   filters: '',
   columnMode: 'allow',
   columns: [],
-  limit: null,
 });
 const lastSummary = ref(null);
 
@@ -112,7 +111,6 @@ function openEditor(role, table, operation) {
   editing.filters = (entry.filters ?? []).join('\n');
   editing.columnMode = entry.columns?.length ? (entry.columnMode ?? 'allow') : UNRESTRICTED;
   editing.columns = [...(entry.columns ?? [])];
-  editing.limit = entry.limit ?? null;
   isEditorOpen.value = true;
 }
 
@@ -127,7 +125,8 @@ function saveEditor() {
   entry.filters = filters;
   entry.columnMode = editing.columnMode === UNRESTRICTED ? 'allow' : editing.columnMode;
   entry.columns = editing.columnMode === UNRESTRICTED ? [] : [...editing.columns];
-  entry.limit = editing.operation === 'query' && Number.isFinite(editing.limit) ? editing.limit : null;
+  // grants 没有 limit 字段：source 模式的读规则只支持列白名单与行过滤
+  entry.limit = null;
   isEditorOpen.value = false;
 }
 
@@ -135,12 +134,22 @@ function saveEditor() {
 const rows = computed(() => store.applyTables);
 const changes = computed(() => store.changes);
 
+/** source 级档位是否有未提交改动（读/写/删/owner 列/表分类） */
+const accessDirty = computed(
+  () =>
+    JSON.stringify(toAccessPayload(store.sourceAccess)) !==
+    JSON.stringify(toAccessPayload(store.currentSourceAccess))
+);
+
+/** 矩阵改动 + source 级改动，确认弹窗与按钮状态都用它 */
+const totalChanges = computed(() => changes.value.length + (accessDirty.value ? 1 : 0));
+
 async function apply() {
   if (!store.applyDatabase) {
     ElMessage.warning(t('permissions.selectDatabase'));
     return;
   }
-  if (changes.value.length === 0) {
+  if (totalChanges.value === 0) {
     ElMessage.info(t('permissions.noChanges'));
     return;
   }
@@ -150,7 +159,7 @@ async function apply() {
 async function confirmApply() {
   isConfirmOpen.value = false;
   // 写入成功后会重载生效策略，diff 归零，所以变更数要在写入前取
-  const count = changes.value.length;
+  const count = totalChanges.value;
   try {
     const result = await store.applyPermissions(store.applyDatabase);
     lastSummary.value = result;
@@ -331,6 +340,99 @@ watch(
     <section class="panel">
       <div class="panel__head">
         <span class="panel__title">
+          {{ t('permissions.sourceAccess.title', { database: store.applyDatabase || '—' }) }}
+        </span>
+      </div>
+      <div class="panel__body">
+        <div class="access-grid">
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.read') }}</span>
+            <el-select
+              :model-value="store.sourceAccess.read"
+              size="small"
+              @change="store.setSourceAccess('read', $event)"
+            >
+              <el-option
+                v-for="mode in READ_MODES"
+                :key="mode"
+                :label="t(`permissions.accessModes.${mode}`)"
+                :value="mode"
+              />
+            </el-select>
+          </label>
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.write') }}</span>
+            <el-select
+              :model-value="store.sourceAccess.write"
+              size="small"
+              @change="store.setSourceAccess('write', $event)"
+            >
+              <el-option
+                v-for="mode in ACCESS_MODES"
+                :key="mode"
+                :label="t(`permissions.accessModes.${mode}`)"
+                :value="mode"
+              />
+            </el-select>
+          </label>
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.delete') }}</span>
+            <el-select
+              :model-value="store.sourceAccess.delete"
+              size="small"
+              @change="store.setSourceAccess('delete', $event)"
+            >
+              <el-option
+                v-for="mode in ACCESS_MODES"
+                :key="mode"
+                :label="t(`permissions.accessModes.${mode}`)"
+                :value="mode"
+              />
+            </el-select>
+          </label>
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.ownerColumn') }}</span>
+            <el-input
+              :model-value="store.sourceAccess.ownerColumn"
+              size="small"
+              :placeholder="t('permissions.sourceAccess.ownerColumnPlaceholder')"
+              @change="store.setSourceAccess('ownerColumn', $event)"
+            />
+          </label>
+        </div>
+        <div class="access-grid">
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.adminTables') }}</span>
+            <el-select
+              :model-value="store.sourceAccess.adminTables"
+              size="small"
+              multiple
+              collapse-tags
+              @change="store.setSourceAccess('adminTables', $event)"
+            >
+              <el-option v-for="table in rows" :key="table" :label="table" :value="table" />
+            </el-select>
+          </label>
+          <label class="field">
+            <span class="field__label">{{ t('permissions.sourceAccess.blockedTables') }}</span>
+            <el-select
+              :model-value="store.sourceAccess.blockedTables"
+              size="small"
+              multiple
+              collapse-tags
+              @change="store.setSourceAccess('blockedTables', $event)"
+            >
+              <el-option v-for="table in rows" :key="table" :label="table" :value="table" />
+            </el-select>
+          </label>
+        </div>
+        <p class="access-hint mono-dim">{{ t('permissions.sourceAccess.hint') }}</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head">
+        <span class="panel__title">
           {{
             store.currentRole
               ? t('permissions.matrix', { role: store.currentRole })
@@ -454,10 +556,7 @@ watch(
           <span class="hint">{{ t('permissions.editor.columnsHint') }}</span>
         </el-form-item>
 
-        <el-form-item v-if="editing.operation === 'query'" :label="t('permissions.editor.limit')">
-          <el-input-number v-model="editing.limit" :min="1" controls-position="right" />
-          <span class="hint">{{ t('permissions.editor.limitHint') }}</span>
-        </el-form-item>
+        <p class="hint">{{ t('permissions.editor.grantHint') }}</p>
       </el-form>
       <template #footer>
         <el-button @click="isEditorOpen = false">{{ t('common.cancel') }}</el-button>
@@ -528,8 +627,17 @@ watch(
     </el-dialog>
 
     <el-dialog v-model="isConfirmOpen" :title="t('permissions.confirm.title')" width="640">
-      <p class="warn">{{ t('permissions.confirm.warning', { count: changes.length }) }}</p>
+      <p class="warn">{{ t('permissions.confirm.warning', { count: totalChanges }) }}</p>
       <ul class="changes">
+        <li v-if="accessDirty">
+          <b>{{ t('permissions.sourceAccess.title', { database: store.applyDatabase }) }}</b>
+          · {{ t('permissions.sourceAccess.changed') }}
+          <span class="detail">{{ t('permissions.sourceAccess.modes', {
+            read: t(`permissions.accessModes.${store.sourceAccess.read}`),
+            write: t(`permissions.accessModes.${store.sourceAccess.write}`),
+            delete: t(`permissions.accessModes.${store.sourceAccess.delete}`),
+          }) }}</span>
+        </li>
         <li v-for="(change, index) in changes" :key="index">
           <b>{{ change.role }}</b> · {{ change.table }} · {{ t(OPERATION_KEYS[change.operation]) }}
           <span class="from">{{ t(STATE_KEYS[change.from.state]) }}</span>
@@ -679,6 +787,29 @@ watch(
 
 .panel__body--flush {
   padding: 0;
+}
+
+.access-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: var(--fs-note);
+  color: var(--c-dim);
+}
+
+.access-hint {
+  margin: 0;
+  font-size: var(--fs-note);
+  line-height: 1.7;
 }
 
 .matrix {

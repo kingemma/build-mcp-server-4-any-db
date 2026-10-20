@@ -1,21 +1,26 @@
 /**
  * 策略归一化与变更 diff。
  *
- * 形态依据是 scripts/verify-columns.js 的真机 dump：get_current_config 返回的是
- * Go 结构体直出的键（Query / Columns / Filters / Limit，但 database 是小写），
- * 所以这里统一做大小写不敏感的取值。
+ * GraphJin source 模式下，角色只能约束「读」：`sources[].access.grants[]`。
+ * 写/删是 source 级开关（`access.write` / `access.delete`），不按角色区分。
  */
 
-/** 四项操作，与后端 buildRoleTableConfig 一一对应 */
-export const OPERATIONS = ['query', 'insert', 'update', 'delete'];
+/** 角色级可编辑的操作：只剩读 */
+export const OPERATIONS = ['query'];
 
 /** 操作名的 i18n key；文案不落在这里，视图用 t() 渲染 */
 export const OPERATION_KEYS = {
   query: 'permissions.operations.query',
-  insert: 'permissions.operations.insert',
-  update: 'permissions.operations.update',
-  delete: 'permissions.operations.delete',
 };
+
+/** source 级访问档位（与 GraphJin access 枚举一致） */
+export const ACCESS_MODES = ['authenticated', 'owner', 'account', 'blocked'];
+
+/** 读档位额外支持 public */
+export const READ_MODES = ['public', ...ACCESS_MODES];
+
+/** 需要 owner 列配合的档位 */
+export const OWNER_MODES = new Set(['owner']);
 
 /** 操作状态：allowed / blocked / default（配置里没写，走 default_block） */
 export const STATE_KEYS = {
@@ -50,26 +55,6 @@ function toArray(value) {
 }
 
 /**
- * 把一项操作配置归一化。
- *
- * @param {Object|null} raw GraphJin 的 Query / Insert / Update / Delete
- * @returns {{state: string, filters: string[], columns: string[], limit: number|null}}
- */
-function normalizeOperation(raw) {
-  if (!raw || typeof raw !== 'object') {
-    return { state: 'default', filters: [], columns: [], limit: null };
-  }
-  const block = pick(raw, 'block');
-  const limit = pick(raw, 'limit');
-  return {
-    state: block === true ? 'blocked' : 'allowed',
-    filters: toArray(pick(raw, 'filters')),
-    columns: toArray(pick(raw, 'columns')),
-    limit: typeof limit === 'number' && limit > 0 ? limit : null,
-  };
-}
-
-/**
  * 把 get_current_config 的结果归一化成与前端矩阵同构的结构。
  *
  * 表键带库名（`database::table`）：多库项目里同名表不能互相覆盖，
@@ -80,25 +65,91 @@ function normalizeOperation(raw) {
  */
 export function normalizeCurrentRoles(config = {}) {
   const result = {};
-  for (const role of toArray(pick(config, 'roles'))) {
-    const roleName = pick(role, 'name');
-    if (!roleName) continue;
-    const tables = {};
-    for (const table of toArray(pick(role, 'tables'))) {
-      const tableName = pick(table, 'name', 'Name');
-      if (!tableName) continue;
-      // RoleTable.database 是小写；缺这个字段时 GraphJin 会把规则挂到内部库
-      const database = pick(table, 'database') ?? '';
-      const operations = {};
-      for (const operation of OPERATIONS) {
-        // Go 直出的是 Query / Insert / Update / Delete，yaml 写入侧可能是小写
-        operations[operation] = normalizeOperation(pick(table, operation, capitalize(operation)));
+  for (const source of toArray(pick(config, 'sources'))) {
+    const database = pick(source, 'name');
+    if (!database) continue;
+    const access = pick(source, 'access') ?? {};
+    for (const grant of toArray(pick(access, 'grants'))) {
+      const roleName = pick(grant, 'role');
+      if (!roleName) continue;
+      result[roleName] ??= {};
+      for (const table of toArray(pick(grant, 'tables'))) {
+        const tableName = pick(table, 'name', 'Name');
+        if (!tableName) continue;
+        const filter = pick(table, 'filter');
+        result[roleName][`${database}::${tableName}`] = {
+          query: {
+            state: 'allowed',
+            filters: filter ? [filter] : [],
+            columns: toArray(pick(table, 'columns')),
+            limit: null,
+          },
+        };
       }
-      tables[database ? `${database}::${tableName}` : tableName] = operations;
     }
-    result[roleName] = tables;
   }
   return result;
+}
+
+/**
+ * 把每个数据源的 source 级访问档位归一化。
+ *
+ * @param {Object} config config.current 的返回值
+ * @returns {Object} { [database]: { read, write, delete, ownerColumn, namespaceColumn, adminTables, blockedTables } }
+ */
+export function normalizeSourceAccesses(config = {}) {
+  const result = {};
+  for (const source of toArray(pick(config, 'sources'))) {
+    const name = pick(source, 'name');
+    if (!name) continue;
+    const access = pick(source, 'access') ?? {};
+    result[name] = {
+      read: pick(access, 'read') ?? 'authenticated',
+      write: pick(access, 'write') ?? 'blocked',
+      delete: pick(access, 'delete') ?? 'blocked',
+      ownerColumn: pick(access, 'owner_column') ?? '',
+      namespaceColumn: pick(access, 'namespace_column') ?? '',
+      adminTables: toArray(pick(access, 'admin_tables')),
+      blockedTables: toArray(pick(access, 'blocked_tables')),
+    };
+  }
+  return result;
+}
+
+/**
+ * 缺省（还没读到配置时）的 source 级档位：读需认证，写/删关闭。
+ *
+ * @returns {Object}
+ */
+export function emptySourceAccess() {
+  return {
+    read: 'authenticated',
+    write: 'blocked',
+    delete: 'blocked',
+    ownerColumn: '',
+    namespaceColumn: '',
+    adminTables: [],
+    blockedTables: [],
+  };
+}
+
+/**
+ * 把前端表单里的档位折成后端 `permissions.build/apply` 的 access 入参。
+ *
+ * @param {Object} access
+ * @returns {Object}
+ */
+export function toAccessPayload(access = {}) {
+  const payload = {
+    read: access.read ?? 'authenticated',
+    write: access.write ?? 'blocked',
+    delete: access.delete ?? 'blocked',
+  };
+  if (access.ownerColumn) payload.ownerColumn = access.ownerColumn;
+  if (access.namespaceColumn) payload.namespaceColumn = access.namespaceColumn;
+  if (access.adminTables?.length) payload.adminTables = access.adminTables;
+  if (access.blockedTables?.length) payload.blockedTables = access.blockedTables;
+  return payload;
 }
 
 /**
@@ -155,10 +206,6 @@ export function unresolvedBlockTables(matrix = {}, columnsByTable = {}) {
     }
   }
   return [...unresolved];
-}
-
-function capitalize(value) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 /**
