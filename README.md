@@ -580,6 +580,7 @@ sidecar-backend/       Node 后端
 scripts/               本地启动、演示库、二进制准备 / 冒烟、UI 冒烟
 .github/workflows/     四平台打包 CI
 docs/                  基线、迁移设计、功能矩阵、UI 截图
+build/                 应用图标：icon.png（1024×1024，打包时转 ico / icns）
 binaries/              GraphJin 二进制（构建期解压）
 ```
 

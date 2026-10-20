@@ -35,6 +35,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/mcp-build-server.png",
       "sidecar-backend/src/**/*",
       "sidecar-backend/package.json",
       "graphjin-binaries/version.json",
@@ -53,7 +54,8 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -65,7 +67,8 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
     },
     "linux": {
       "target": [
@@ -73,7 +76,8 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "MCP Server Build"
+      "maintainer": "MCP Server Build",
+      "icon": "build/icon.png"
     }
   },
   "dependencies": {

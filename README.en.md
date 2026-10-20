@@ -596,6 +596,7 @@ sidecar-backend/       Node backend
 scripts/               local startup, demo DB, binary prep / smoke, UI smoke test
 .github/workflows/     four-platform packaging CI
 docs/                  baseline notes, migration design, feature matrix, UI screenshots
+build/                 app icon: icon.png (1024×1024, converted to ico / icns when packaging)
 binaries/              GraphJin binaries (extracted at build time)
 ```
 

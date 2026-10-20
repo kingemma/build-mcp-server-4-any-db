@@ -60,6 +60,8 @@ function createWindow(port) {
     minWidth: 1100,
     minHeight: 720,
     title: 'MCP Server Build',
+    // 任务栏 / 窗口标题栏图标；打包后的安装包图标由 build/icon.png 生成
+    icon: path.join(__dirname, 'icon.png'),
     backgroundColor: '#0a0d10',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

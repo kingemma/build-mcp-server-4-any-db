@@ -14,6 +14,7 @@
 | macOS 打包配置 | `npm run dist:mac` → dmg + zip；GitHub Actions 在 macOS 13 / 14 上产出 |
 | Linux 打包配置 | `npm run dist:linux` → AppImage + deb；GitHub Actions 在 ubuntu-latest 上产出 |
 | CI / CD | `.github/workflows/build.yml`：单测 + Web 构建 → 四平台矩阵打包并上传产物 |
+| 应用图标 | `build/icon.png`（1024×1024）打包时转 ico / icns，exe 与安装器共用；窗口 / 任务栏图标用 `electron/icon.png`（512×512） |
 | 二进制随包分发 | `extraResources` 打包 `binaries/graphjin-*` |
 | 二进制管理 | `fetch:binaries` 下载 + sha256 校验，`prepare:binaries` 解压改名 |
 | 二进制冒烟 | `smoke:binaries` 真实执行 `graphjin version` 并核对版本，CI 三平台各跑一次 |
