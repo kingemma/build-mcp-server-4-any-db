@@ -94,7 +94,12 @@ its tables, columns and foreign keys only (`query_catalog` is filtered by
 
 ### Permission matrix
 
-Two panels that mirror the two layers of GraphJin's source mode:
+The page is split into one tab per database: **each database keeps its own role list, matrix and
+uncommitted edits**, so switching tabs never leaks rules across; a dot on the tab means that
+database has pending changes. Applying only touches the active tab's database, and the confirm
+dialog names the target database.
+
+Inside a tab there are two panels that mirror the two layers of GraphJin's source mode:
 
 **Source access** (`sources[].access`, applies to the whole database):
 
@@ -452,7 +457,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (21 checks)
+npm run verify:ui        # real backend + headless Edge (23 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -574,7 +579,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, orgs/members, write/verify/rollback (21)
+npm run verify:ui        # real backend + headless Edge: locales, orgs/members, write/verify/rollback, per-db tabs (23)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

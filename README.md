@@ -83,7 +83,9 @@ YAML，也不需要理解 GraphJin 的配置细节。
 
 ### 权限矩阵
 
-分成两块，对应 GraphJin source 模式的两层结构：
+顶部按数据源分成标签页：**每个库一套独立的角色清单、矩阵和未提交改动**，切换标签不会串数据；标签上的小圆点表示该库有未提交改动。写入只作用于当前标签的库，确认弹窗会写明目标库名。
+
+每个标签内部又分成两块，对应 GraphJin source 模式的两层结构：
 
 **数据源访问**（`sources[].access`，对整个库生效）：
 
@@ -450,7 +452,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（21 项）
+npm run verify:ui        # 真实后端 + Edge headless（23 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -560,7 +562,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、建组织/成员、权限写入/验证/回滚（21 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、建组织/成员、权限写入/验证/回滚、每库独立标签（23 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 
