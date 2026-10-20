@@ -341,19 +341,33 @@ async function verifyUsers(cdp, rpc) {
   record('删除组织', true);
 }
 
-/** 生效配置里的角色名 / 表名 / block 标记大小写不统一（Go 结构体直出） */
+/** 生效配置里的角色名（Go 结构体直出，键大小写不统一） */
 function findRole(config, name) {
   return (config?.roles ?? []).find((role) => (role.name ?? role.Name) === name) ?? null;
 }
 
-function findRoleTable(role, tableName) {
-  return (role?.tables ?? []).find((table) => (table.Name ?? table.name) === tableName) ?? null;
-}
-
-function isQueryAllowed(role, tableName) {
-  const table = findRoleTable(role, tableName);
-  const query = table?.Query ?? table?.query;
-  return query ? query.Block === false || query.block === false : false;
+/**
+ * 找某角色在某表上的读规则。
+ *
+ * source 模式下角色的表规则在 `sources[].access.grants[]` 里，`roles[].tables`
+ * 已经被 GraphJin 废弃（存在即启动 FATAL），不能再拿它断言。
+ *
+ * @param {Object} config config.current 的返回值
+ * @param {string} roleName
+ * @param {string} tableName
+ * @returns {{source: Object, table: Object}|null}
+ */
+function findGrant(config, roleName, tableName) {
+  for (const source of config?.sources ?? []) {
+    const grants = source?.access?.grants ?? source?.Access?.Grants ?? [];
+    for (const grant of grants) {
+      if ((grant.role ?? grant.Role) !== roleName) continue;
+      const tables = grant.tables ?? grant.Tables ?? [];
+      const table = tables.find((item) => (item.name ?? item.Name) === tableName);
+      if (table) return { source, table };
+    }
+  }
+  return null;
 }
 
 /**
@@ -418,7 +432,7 @@ async function verifyPermissions(cdp, rpc, status) {
 
   await waitFor('策略真的写进 GraphJin', async () => {
     const config = await rpc('config.current', { baseUrl });
-    return isQueryAllowed(findRole(config, 'readonly'), 'events');
+    return findGrant(config, 'readonly', 'events') !== null;
   });
   record('界面写入的权限已生效', true);
 
