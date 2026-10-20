@@ -633,9 +633,13 @@ The full done / not-done matrix is in [docs/FEATURES.md](./docs/FEATURES.md) (Ch
 
 
 # Common Errors
-## GraphJin didn't start
-Based on win11：Enter into build-mcp-server-4-any-db\binaries folder and run cmd.exe
-``` bash
-npm run prepare:binaries
-graphjin-x86_64-pc-windows-msvc.exe serve
-```
+## GraphJin didn't start or graphjin idle
+1. 「Connections」→ Start one Connection, it will start GraphJin automatically；
+The graphjin idle change to graphjin live.
+
+2. If the Step 1 doesn't work, you need to verify the binary whether can work or not manually
+  Based on win11：Enter into build-mcp-server-4-any-db\binaries folder and run cmd.exe
+  ``` bash
+  npm run prepare:binaries
+  graphjin-x86_64-pc-windows-msvc.exe serve
+  ```

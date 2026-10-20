@@ -612,10 +612,14 @@ binaries/              GraphJin 二进制（构建期解压）
 
 # 常见问题
 ## 策略预览中显示GraphJin未运行
-以win11为例：进入build-mcp-server-4-any-db\binaries目录，执行cmd.exe
-运行
-``` bash
-npm run prepare:binaries
-graphjin-x86_64-pc-windows-msvc.exe serve
+1. 「数据库连接」→ 选 app 这条连接 →「启动」；
+底部状态从 graphjin idle 变 graphjin live，策略预览就有数据了。
 
-```
+2. 如果第一步还是无法解决，则需要手动验证GraphJin是否可用。
+  以win11为例：进入build-mcp-server-4-any-db\binaries目录，执行cmd.exe
+  运行
+  ``` bash
+  npm run prepare:binaries
+  graphjin-x86_64-pc-windows-msvc.exe serve
+
+  ```
