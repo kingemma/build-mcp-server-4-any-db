@@ -76,6 +76,12 @@ and the copyable MCP client configuration.
 - Three input modes: file path, connection fields, connection string;
 - **A connection is saved locally once a test or start succeeds**; the list below lets
   you refill the form, start from it, or delete it;
+- The "connected" badge is computed from the instance running right now (project directory
+  plus the source names in `dev.yml`); stopping the service or switching projects drops it
+  back to "tested" instead of leaving the last start result in the status column;
+- Deleting a connection also removes it from the running instance's `dev.yml`: the instance
+  restarts when other databases remain, and the service stops when the last one is deleted,
+  so the Schema browser and the permission matrix stop showing it;
 - Credentials are encrypted with the keystore key before hitting SQLite; the list only
   shows non-sensitive summary fields;
 - Testing works even when the service is down: the backend spins up a throwaway
@@ -380,6 +386,11 @@ GraphJin and the backend before exiting; on macOS closing it only hides the wind
 `Cmd+Q` to quit. Development data lives under Electron's `userData/data` (on Windows this
 is usually `%APPDATA%\mcp-builder\data`).
 
+The window title carries the current project name (the app name passed at start, stored as
+`app_name` in the project's `dev.yml`), e.g. `Demo Orders — MCP Server Build`. On Windows
+the native title bar is hidden, so the name is centred on the custom 40px title strip; with
+no project open it falls back to the product name.
+
 ### 5. Browser-only debugging (optional)
 
 If you do not want Electron, start the frontend and backend manually in two terminals:
@@ -457,7 +468,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (23 checks)
+npm run verify:ui        # real backend + headless Edge (26 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -579,7 +590,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, orgs/members, write/verify/rollback, per-db tabs (23)
+npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, status fallback, schema reset after delete (26)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

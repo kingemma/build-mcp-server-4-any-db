@@ -714,6 +714,13 @@ async function main() {
     record('连接页列出已保存连接', savedText.includes('app') && savedText.includes('analytics'));
     record('连接状态显示已连接', savedText.includes('已连接'));
 
+    // 标题三条链路：后端 status.appName（dev.yml）→ store → document.title / Electron IPC
+    await waitFor('标题带上项目名', async () =>
+      (await cdp.evaluate(`document.title`)).includes('UI Verify')
+    );
+    const windowTitle = await cdp.evaluate(`document.title`);
+    record('窗口标题显示项目名', windowTitle === 'UI Verify — MCP Server Build', windowTitle);
+
     // 切语言要整棵树重渲染：顶部标题 + 表格表头都跟着变，防漏翻
     await switchLocale(cdp, 'en-US');
     await waitFor('英文界面下连接列表仍在', async () =>
@@ -806,6 +813,89 @@ async function main() {
     await verifyPermissions(cdp, rpc, await rpc('graphjin.status'));
 
     if (SHOT_DIR) await capturePages(cdp, SHOT_DIR);
+
+    // 状态列表达的是「当前实例」，不是历史值：停止后必须立刻回落
+    await switchLocale(cdp, 'zh-CN');
+    await cdp.evaluate(`location.hash = '#/status'; 'ok'`);
+    await waitFor('运行状态页出现停止按钮', async () =>
+      (await cdp.evaluate(
+        `[...document.querySelectorAll('button')].some((item) => item.textContent.includes('停止'))`
+      )) === true
+    );
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.includes('停止'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('GraphJin 已停止', async () => (await rpc('graphjin.status')).running === false);
+
+    await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
+    let stoppedText = '';
+    await waitFor('停止后连接列表回落', async () => {
+      stoppedText = await cdp.evaluate(`document.querySelector('.conns')?.textContent ?? ''`);
+      return stoppedText.includes('已测试');
+    });
+    record(
+      '停止后连接状态回落为已测试',
+      stoppedText.includes('已测试') && !stoppedText.includes('已连接'),
+      stoppedText.includes('已连接') ? '仍显示已连接' : ''
+    );
+
+    // 删掉运行中实例正在用的库：实例要重启，Schema 页随之少一个库
+    await cdp.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.conns tbody tr')]
+        .find((item) => item.querySelector('.conns__name')?.textContent.trim() === 'app');
+      const button = [...(row?.querySelectorAll('button') ?? [])]
+        .find((item) => item.textContent.includes('启动'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('实例重新启动并标为已连接', async () => {
+      const text = await cdp.evaluate(`document.querySelector('.conns')?.textContent ?? ''`);
+      return (await rpc('graphjin.status')).running === true && text.includes('已连接');
+    });
+
+    await cdp.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.conns tbody tr')]
+        .find((item) => item.querySelector('.conns__name')?.textContent.trim() === 'analytics');
+      const button = [...(row?.querySelectorAll('button') ?? [])]
+        .find((item) => item.textContent.includes('删除'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('删除确认框弹出', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.el-message-box').length`)) > 0
+    );
+    await cdp.evaluate(`(() => {
+      const box = [...document.querySelectorAll('.el-message-box')].pop();
+      box.querySelector('.el-button--primary')?.click();
+      return 'ok';
+    })()`);
+
+    // 重启后库清单来自 dev.yml：被删的库不该还留在运行实例里
+    await waitFor('实例重启后不再加载被删的库', async () => {
+      const current = await rpc('graphjin.status');
+      if (!current.running) return false;
+      const live = await rpc('graphjin.databases', { baseUrl: current.baseUrl });
+      return !live.databases.includes('analytics');
+    });
+
+    await cdp.evaluate(`location.hash = '#/schema'; 'ok'`);
+    await waitFor('Schema 页只剩一个库', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.database').length`)) === 1
+    );
+    const remainingDatabases = await cdp.evaluate(
+      `[...document.querySelectorAll('.database')].map((item) => item.textContent.trim())`
+    );
+    record(
+      '删除连接后 Schema 随之重置',
+      remainingDatabases.length === 1 && remainingDatabases[0].includes('app'),
+      remainingDatabases.join(', ')
+    );
 
     console.log(`\n截图：${connectionsShot}`);
     console.log(`      ${analyticsShot}`);

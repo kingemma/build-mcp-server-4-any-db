@@ -9,7 +9,7 @@
 
 | 能力 | 说明 |
 |:--|:--|
-| Electron 外壳 | 主进程起后端、注入端口、外链走系统浏览器、退出前先停 GraphJin |
+| Electron 外壳 | 主进程起后端、注入端口、外链走系统浏览器、退出前先停 GraphJin；窗口标题跟着项目名走（`dev.yml` 的 `app_name`），Windows 自绘标题带居中显示 |
 | Windows 安装包 | `npm run dist:win` → `release-final/`（NSIS，可选安装目录） |
 | macOS 打包配置 | `npm run dist:mac` → dmg + zip；GitHub Actions 在 macOS 13 / 14 上产出 |
 | Linux 打包配置 | `npm run dist:linux` → AppImage + deb；GitHub Actions 在 ubuntu-latest 上产出 |
@@ -38,7 +38,7 @@
 | 连接本地存储 | SQLite + AES-256-GCM；`name + project_dir` 唯一；摘要字段独立明文列 |
 | 连接自检 | 服务未运行时临时起单库实例跑 `validate_config`，用完即停；缺必填字段的配置前置拦截，不起进程 |
 | dev.yml 增量合并 | 只改 `sources:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 显式拒绝 |
-| 测试 | `node:test` 共 175 项 |
+| 测试 | `node:test` 共 183 项 |
 
 ### 前端
 
@@ -46,7 +46,7 @@
 |:--|:--|
 | 运行状态 | 进程、端点、项目目录、重启次数、探活、停止、MCP 客户端配置复制 |
 | 数据库连接 | 内置类型 + 自定义模板；三种录入方式；测试 / 启动 / 存模板；驱动未验证类型自动禁用测试与启动 |
-| 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除 |
+| 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除；「已连接」按当前运行实例现算（项目目录 + dev.yml 库名匹配），停止或换项目后回落为「已测试」；删除时同步从 dev.yml 摘掉该库，还有别的库则重启实例、删最后一个则停止服务 |
 | Schema 浏览器 | 顶部库选择，按库加载表 / 列 / 关系；结构与关系隔离 |
 | 权限矩阵 | 每个数据源一个独立标签页，角色清单、矩阵与未提交改动各自独立；角色 × 表的读规则（行过滤、列白名单 / 黑名单）；数据源级读/写/删档位、owner 列、仅管理员/全局屏蔽表；标签上有未提交改动提示；可移除本地角色 |
 | 策略回填 / 导入 | 加载时用生效策略补空格子（不覆盖本地改动）；「从生效策略导入」二次确认后覆盖 |
@@ -74,7 +74,7 @@
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
 | legacy 迁移验证 | `cd sidecar-backend && npm run verify:migration`（12 项，含数据库不可达的项目） |
 | 二进制冒烟 | `npm run smoke:binaries` |
-| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（23 项：语言切换、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、本地角色删除） |
+| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（26 项：语言切换、窗口标题带项目名、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、停止后连接状态回落、删库后 Schema 重置、本地角色删除） |
 
 ## 未完成
 

@@ -8,7 +8,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
 
 const ROOT = path.join(__dirname, '..');
 const IS_DEV = !app.isPackaged;
@@ -16,7 +16,11 @@ const IS_DEV = !app.isPackaged;
 /** 自绘标题栏高度：与 App.vue 里留出的顶部拖拽区保持一致 */
 const TITLEBAR_HEIGHT = 40;
 
+/** 产品名：还没打开项目时窗口标题只用它 */
+const APP_TITLE = 'MCP Server Build';
+
 let backend = null;
+let mainWindow = null;
 let isQuitting = false;
 
 /**
@@ -68,7 +72,7 @@ function createWindow(port) {
     height: 860,
     minWidth: 1100,
     minHeight: 720,
-    title: 'MCP Server Build',
+    title: APP_TITLE,
     // 任务栏 / 窗口标题栏图标；打包后的安装包图标由 build/icon.png 生成
     icon: path.join(__dirname, 'icon.png'),
     // 与浅色主题一致，避免加载期先闪一块深色
@@ -96,6 +100,11 @@ function createWindow(port) {
     },
   });
 
+  mainWindow = window;
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
+
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -116,6 +125,19 @@ function createWindow(port) {
 
   return window;
 }
+
+/**
+ * 渲染进程把当前项目名同步过来。
+ *
+ * Windows 用自绘标题栏，标题文字只能画在那条 40px 带上；macOS / Linux 走原生
+ * 标题栏，setTitle 直接可见。没打开项目时回落到产品名。
+ */
+ipcMain.on('app:project-name', (_event, name) => {
+  const project = typeof name === 'string' ? name.trim() : '';
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitle(project ? `${project} — ${APP_TITLE}` : APP_TITLE);
+  }
+});
 
 app
   .whenReady()

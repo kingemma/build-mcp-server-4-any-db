@@ -202,6 +202,11 @@ class ConnectionStore {
       origin: row.origin,
       /** false 表示 payload 解不开，UI 应提示重新录入 */
       readable,
+      /**
+       * 是否由当前运行实例加载。这里恒为 false：存储层看不到进程状态，
+       * connections.list 会在出口按运行态覆盖成真实值。
+       */
+      active: false,
       host: row.host ?? null,
       port: row.port ?? null,
       dbname: row.dbname ?? null,

@@ -207,6 +207,8 @@ export const useAppStore = defineStore('app', {
         this.hasLoadedPolicy = false;
         this.applyDatabase = '';
         this.snapshots = [];
+        // 「已连接」由后端按运行态现算，停止后必须重新拉一次才会回落成已测试
+        await this.loadConnections();
       } finally {
         this.isBusy = false;
       }
@@ -222,6 +224,8 @@ export const useAppStore = defineStore('app', {
       if (schema.ok) this.schema = schema.data;
       const names = this.databaseNames;
       if (!names.includes(this.applyDatabase)) this.applyDatabase = names[0] ?? '';
+      // 库可能刚刚被删掉：Schema 页的选择不能停在已经不存在的库上
+      if (!names.includes(this.activeDatabase)) this.activeDatabase = this.applyDatabase;
       this.ensureDatabase();
       await this.loadCurrentPolicy();
     },
@@ -788,11 +792,26 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
+     * 删除已保存连接。
+     *
+     * 后端会把该库从运行实例的 dev.yml 里摘掉：还有别的库就重启，最后一个库
+     * 就停掉服务。这里跟着同步运行态，否则 Schema 页会继续显示已经删掉的库。
+     *
      * @param {number} id
+     * @returns {Promise<{action: 'record'|'stopped'|'restarted'}>}
      */
     async removeConnection(id) {
-      await rpc('connections.remove', { id });
+      const result = await rpc('connections.remove', { id });
       await this.loadConnections();
+      if (result?.action === 'stopped') {
+        // 服务已经由后端停掉，复用停止流程把矩阵 / schema / 库列表一起归零
+        await this.stopGraphJin();
+      } else if (result?.action === 'restarted') {
+        await this.refreshStatus();
+        await this.loadConnectedDatabases();
+        await this.loadSchema();
+      }
+      return result;
     },
 
     /**

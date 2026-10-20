@@ -2,8 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { createRouter, startHttpServer } = require('../src/index');
+const { ORIGIN_START, STATUS_CONNECTED, ConnectionStore } = require('../src/connections');
 const { UserStore } = require('../src/users');
 
 async function withServer(run) {
@@ -193,4 +198,141 @@ test('graphjin.start 对驱动未实现的类型提前报错', async () => {
     assert.strictEqual(response.error.code, -32602);
     assert.match(response.error.message, /unsupported database type/);
   });
+});
+
+const SOURCES_YAML = `sources:
+  - name: app
+    type: sqlite
+    path: app.db
+`;
+
+function tempProject(yaml = SOURCES_YAML) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-live-'));
+  fs.writeFileSync(path.join(dir, 'dev.yml'), yaml, 'utf8');
+  return dir;
+}
+
+/**
+ * 造一份「都已经启动成功过」的连接记录，再配一个假的 supervisor。
+ * status 故意写成 connected，用来验证历史值不会冒充运行态。
+ */
+function connectionRouter({ dir, running = true, runDir = dir }) {
+  const connections = new ConnectionStore(':memory:', {
+    secretKey: crypto.randomBytes(32).toString('base64'),
+  });
+  for (const name of ['app', 'other']) {
+    connections.save({
+      name,
+      projectDir: dir,
+      config: { type: 'sqlite', path: `${name}.db` },
+      status: STATUS_CONNECTED,
+      origin: ORIGIN_START,
+    });
+  }
+  const supervisor = { status: () => ({ running, projectDir: runDir }) };
+  return createRouter({ store: new UserStore(':memory:'), connections, supervisor });
+}
+
+/** @returns {Promise<Object>} { name: active } */
+async function activeByName(router) {
+  const response = await router.dispatch({ jsonrpc: '2.0', id: 1, method: 'connections.list' });
+  return Object.fromEntries(response.result.map((row) => [row.name, row.active]));
+}
+
+test('connections.list 的 active 只由当前运行实例决定', async () => {
+  const dir = tempProject();
+
+  // 在跑，dev.yml 里只有 app
+  assert.deepStrictEqual(await activeByName(connectionRouter({ dir })), { app: true, other: false });
+
+  // 已停止：历史 status=connected 仍不能算已连接
+  assert.deepStrictEqual(await activeByName(connectionRouter({ dir, running: false })), {
+    app: false,
+    other: false,
+  });
+
+  // 跑的是另一个项目目录，库名相同也不算
+  assert.deepStrictEqual(await activeByName(connectionRouter({ dir, runDir: tempProject() })), {
+    app: false,
+    other: false,
+  });
+});
+
+const TWO_SOURCES_YAML = `sources:
+  - name: app
+    type: sqlite
+    path: app.db
+  - name: other
+    type: sqlite
+    path: other.db
+`;
+
+/** 带 dev.yml 与可计数 supervisor 的 router，用来验证删除时的停 / 重启分支 */
+function removalRouter({ devYaml, names = ['app', 'other'], running = true }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-remove-'));
+  fs.writeFileSync(path.join(dir, 'dev.yml'), devYaml, 'utf8');
+  const connections = new ConnectionStore(':memory:', {
+    secretKey: crypto.randomBytes(32).toString('base64'),
+  });
+  for (const name of names) {
+    connections.save({ name, projectDir: dir, config: { type: 'sqlite', path: `${name}.db` } });
+  }
+  const calls = { start: 0, stop: 0 };
+  const supervisor = {
+    status: () => ({ running, projectDir: dir }),
+    stop: async () => {
+      calls.stop += 1;
+      return { running: false };
+    },
+    start: async () => {
+      calls.start += 1;
+      return { running: true, baseUrl: null, projectDir: dir };
+    },
+  };
+  const router = createRouter({ store: new UserStore(':memory:'), connections, supervisor });
+  const ids = Object.fromEntries(connections.list().map((row) => [row.name, row.id]));
+  return { dir, ids, calls, router, connections };
+}
+
+test('connections.remove 在实例未运行时只删记录', async () => {
+  const { router, ids, calls } = removalRouter({ devYaml: TWO_SOURCES_YAML, running: false });
+
+  const response = await router.dispatch({
+    jsonrpc: '2.0', id: 1, method: 'connections.remove', params: { id: ids.app },
+  });
+
+  assert.strictEqual(response.result.action, 'record');
+  assert.deepStrictEqual(calls, { start: 0, stop: 0 });
+});
+
+test('connections.remove 删掉运行中实例的库后重启，dev.yml 同步移除', async () => {
+  const { dir, router, ids, calls } = removalRouter({ devYaml: TWO_SOURCES_YAML });
+
+  const response = await router.dispatch({
+    jsonrpc: '2.0', id: 2, method: 'connections.remove', params: { id: ids.app },
+  });
+
+  assert.strictEqual(response.result.action, 'restarted');
+  assert.strictEqual(response.result.deleted, true);
+  // 先停再起，重启后库清单以 dev.yml 为准
+  assert.deepStrictEqual(calls, { start: 1, stop: 1 });
+  const text = fs.readFileSync(path.join(dir, 'dev.yml'), 'utf8');
+  assert.doesNotMatch(text, /- name: app/);
+  assert.match(text, /- name: other/);
+});
+
+test('connections.remove 删掉最后一个库时停止服务', async () => {
+  const single = `sources:
+  - name: app
+    type: sqlite
+    path: app.db
+`;
+  const { router, ids, calls } = removalRouter({ devYaml: single, names: ['app'] });
+
+  const response = await router.dispatch({
+    jsonrpc: '2.0', id: 3, method: 'connections.remove', params: { id: ids.app },
+  });
+
+  assert.strictEqual(response.result.action, 'stopped');
+  assert.deepStrictEqual(calls, { start: 0, stop: 1 });
 });

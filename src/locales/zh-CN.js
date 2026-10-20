@@ -123,6 +123,8 @@ export default {
       templateRemoved: '模板已删除',
       filled: '已填入 {name}',
       removed: '已删除',
+      removedAndRestarted: '已删除，并把 {name} 从运行中的实例移除了（服务已重启）',
+      removedAndStopped: '已删除：{name} 是实例的最后一个库，服务已停止',
       secretLost: '这条记录无法解密，已回填非敏感字段，请重新填写密码或连接串',
       missing: '这条连接不存在',
     },

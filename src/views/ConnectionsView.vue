@@ -167,11 +167,19 @@ function targetOf(row) {
   return `${host}${port}${row.dbname ? `/${row.dbname}` : ''}`;
 }
 
+/**
+ * 状态文案：只有当前运行实例真的加载了这个库才算「已连接」。
+ * row.status 是历史值（最后一次测试 / 启动成功），实例停掉后不能继续当运行态用。
+ */
 function statusLabel(row) {
   if (!row.readable) return t('connections.status.unreadable');
-  return row.status === 'connected'
-    ? t('connections.status.connected')
-    : t('connections.status.verified');
+  return row.active ? t('connections.status.connected') : t('connections.status.verified');
+}
+
+/** 状态胶囊配色，与 statusLabel 保持同一套判断 */
+function statusClass(row) {
+  if (!row.readable) return 'pill--warn';
+  return row.active ? 'pill--on' : 'pill--idle';
 }
 
 function formatTime(value) {
@@ -251,8 +259,15 @@ async function dropConnection(row) {
     return;
   }
   try {
-    await store.removeConnection(row.id);
-    ElMessage.success(t('connections.messages.removed'));
+    const result = await store.removeConnection(row.id);
+    // 删掉运行实例正在用的库会连带重启 / 停止服务，提示要写清发生了什么
+    if (result?.action === 'restarted') {
+      ElMessage.success(t('connections.messages.removedAndRestarted', { name: row.name }));
+    } else if (result?.action === 'stopped') {
+      ElMessage.warning(t('connections.messages.removedAndStopped', { name: row.name }));
+    } else {
+      ElMessage.success(t('connections.messages.removed'));
+    }
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -464,10 +479,7 @@ const summary = computed(() => ({
               <td class="mono-dim">{{ row.wireType }}</td>
               <td class="mono-dim conns__target">{{ targetOf(row) }}</td>
               <td>
-                <span
-                  class="pill"
-                  :class="row.readable ? (row.status === 'connected' ? 'pill--on' : 'pill--idle') : 'pill--warn'"
-                >
+                <span class="pill" :class="statusClass(row)">
                   <span class="dot" />{{ statusLabel(row) }}
                 </span>
               </td>

@@ -69,6 +69,10 @@ YAML，也不需要理解 GraphJin 的配置细节。
 - 内置驱动 + 自定义别名模板（TiDB / CockroachDB 这类兼容库以 postgres / mysql 协议接入）；
 - 三种录入方式：文件路径、连接字段、连接串；
 - **测试通过或启动成功后自动保存到本地**，下方列表可回填表单、一键启动、删除；
+- 状态列里的「已连接」由当前运行实例现算（项目目录 + dev.yml 里的库名都匹配才成立），
+  停止服务或换项目后立刻回落成「已测试」，不会把上一次的启动结果留在状态列；
+- 删除连接会同步把它从运行实例的 `dev.yml` 里摘掉：还有别的库就重启实例，删的是最后一个库
+  则停掉服务，Schema 浏览器与权限矩阵不会再显示这个库；
 - 连接凭据用 keystore key 加密后写入 SQLite，列表只显示非敏感摘要；
 - 未启动服务也能测试连接：后端会临时拉起一个用完即停的 GraphJin 实例；
 - 白名单里 `driverVerified=false` 的类型（ClickHouse / Redshift / BigQuery 等）在当前
@@ -379,6 +383,10 @@ Electron 会：
 macOS 关闭窗口只隐藏窗口，退出请用 `Cmd+Q`。开发态数据落在 Electron 的
 `userData/data`（Windows 通常是 `%APPDATA%\mcp-builder\data`）。
 
+窗口标题会显示当前项目名（启动参数里的应用名，落在项目 `dev.yml` 的 `app_name`），
+形如 `Demo Orders — MCP Server Build`；Windows 用的是自绘标题栏，项目名居中画在那条
+40px 标题带上，没打开项目时回落到产品名。
+
 ### 5. 纯浏览器调试（可选）
 
 不想开 Electron 时，可以用两个终端手动起前后端：
@@ -452,7 +460,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（23 项）
+npm run verify:ui        # 真实后端 + Edge headless（26 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -562,7 +570,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、建组织/成员、权限写入/验证/回滚、每库独立标签（23 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、停止后状态回落、删库后 Schema 重置（26 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 

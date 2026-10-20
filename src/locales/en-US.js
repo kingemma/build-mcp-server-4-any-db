@@ -123,6 +123,9 @@ export default {
       templateRemoved: 'Template removed',
       filled: 'Form filled from {name}',
       removed: 'Removed',
+      removedAndRestarted:
+        'Removed — {name} is also gone from the running instance, which was restarted',
+      removedAndStopped: 'Removed — {name} was the last database, so the service was stopped',
       secretLost:
         'This record cannot be decrypted. Non-sensitive fields were restored — please re-enter the password or connection string.',
       missing: 'This connection no longer exists',

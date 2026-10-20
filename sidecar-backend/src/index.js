@@ -42,7 +42,7 @@ const {
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
 const { SnapshotStore, buildRollbackPatch, accessForWrite } = require('./snapshots');
-const { readSourceConnections } = require('./project');
+const { readSourceConnections, removeProjectSource } = require('./project');
 const { dataFile } = require('./paths');
 const { executeGraphql } = require('./graphql-http');
 const { createMcpGateway } = require('./mcp-gateway');
@@ -240,6 +240,44 @@ function isConnectionOk(result) {
 }
 
 /**
+ * 运行中实例实际加载的库名。
+ *
+ * supervisor 的 status 只有 running / projectDir，不带库清单；dev.yml 才是
+ * GraphJin 启动时真正读的那份配置，所以库名从这里取。
+ *
+ * @param {string} projectDir 运行中的项目目录
+ * @returns {string[]} 库名，读不到时为空（宁可少标「已连接」，也不假报）
+ */
+function readLiveSourceNames(projectDir) {
+  if (!projectDir) return [];
+  try {
+    const file = path.join(projectDir, 'dev.yml');
+    if (!fs.existsSync(file)) return [];
+    return Object.keys(readSourceConnections(fs.readFileSync(file, 'utf8')));
+  } catch {
+    // 文件被改坏只影响「已连接」标记，不该让整个列表报错
+    return [];
+  }
+}
+
+/**
+ * 判断两个项目目录是否指向同一处。
+ *
+ * Windows 路径大小写不敏感，手填的项目目录大小写常和保存时不一致，
+ * 所以只在该平台做折叠；大小写敏感的文件系统上保持原样比较。
+ *
+ * @param {string} left
+ * @param {string} right
+ * @returns {boolean}
+ */
+function sameProjectDir(left, right) {
+  if (!left || !right) return false;
+  const normalize = (value) =>
+    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return normalize(left) === normalize(right);
+}
+
+/**
  * 组装 JSON-RPC 方法表。
  *
  * 同一份路由同时挂在两种传输上：Tauri 走 stdin/stdout，前端走 HTTP POST /rpc。
@@ -299,6 +337,48 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       console.error(`[rpc] 保存连接 ${name} 失败: ${error.stack ?? error.message}`);
     }
   };
+
+  /**
+   * 起 GraphJin 并补齐 admin 角色。
+   *
+   * graphjin.start 与「删连接后重启」共用：重启不传 databases，库清单以项目里
+   * 的 dev.yml 为准，避免把刚删掉的库又合并回去。
+   *
+   * @param {Object} params 同 graphjin.start 的参数
+   * @returns {Promise<Object>} status()
+   */
+  async function startService(params) {
+    // 驱动未实现的类型不必拉起进程：写进 dev.yml 只会让 GraphJin 启动失败
+    for (const [name, connection] of Object.entries(params?.databases ?? {})) {
+      if (UNVERIFIED_DRIVERS.has(connection?.type)) {
+        throw RpcError.invalidParams(`库 ${name}: ${unsupportedDriverReason(connection.type)}`);
+      }
+    }
+    const status = await services.start(params ?? {});
+    // 平台以 admin 执行 GraphJin；roles 里没有 admin 时连它自己都会被拒
+    // （基线 §6.5：roles '<role>' not defined，包括 admin）。
+    if (status?.running && status.baseUrl) {
+      try {
+        const service = await getService(status.baseUrl);
+        status.adminRole = await syncRolesToGraphJin({ store, service, roleNames: ['admin'] });
+      } catch (error) {
+        // 补角色失败不该让「进程已启动」变成启动失败，但要让人看得见
+        status.adminRoleError = error.message;
+      }
+    }
+    // 只有真的跑起来才记为 connected；库配置以项目里的 dev.yml 为准
+    if (status?.running && params?.databases) {
+      for (const [name, connection] of Object.entries(params.databases)) {
+        remember(name, connection, {
+          projectDir: params.projectDir,
+          appName: params?.appName,
+          status: STATUS_CONNECTED,
+          origin: ORIGIN_START,
+        });
+      }
+    }
+    return status;
+  }
 
   router
     .register('ping', () => 'pong')
@@ -414,55 +494,59 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       }
       return result;
     })
-    // 本地已保存的连接
-    .register('connections.list', () => connectionStore().list())
+    // 本地已保存的连接。status 是历史值（最后一次测试 / 启动），不能代表当前实例，
+    // 所以在列表出口补一个 active：由运行中的实例现算，停止后自然全部为 false
+    .register('connections.list', () => {
+      const status = services.status();
+      const live = status.running ? readLiveSourceNames(status.projectDir) : [];
+      return connectionStore()
+        .list()
+        .map((row) => ({
+          ...row,
+          active:
+            status.running &&
+            sameProjectDir(row.projectDir, status.projectDir) &&
+            live.includes(row.name),
+        }));
+    })
     .register('connections.get', (params) => {
       const id = params?.id;
       if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
       return connectionStore().get(id);
     })
-    .register('connections.remove', (params) => {
+    // 删记录；如果这个库正被运行实例加载，连带从 dev.yml 移除并按需要停/重启，
+    // 否则 Schema 页与权限矩阵会一直显示一个「已经不存在」的库
+    .register('connections.remove', async (params) => {
       const id = params?.id;
       if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
-      return { deleted: connectionStore().remove(id) };
+      const record = connectionStore().get(id);
+      const deleted = connectionStore().remove(id);
+      const live = services.status();
+      // 实例没跑，或跑的是别的项目：只删记录
+      if (!deleted || !record || !live.running) {
+        return { deleted, action: 'record', status: live };
+      }
+      if (!sameProjectDir(record.projectDir, live.projectDir)) {
+        return { deleted, action: 'record', status: live };
+      }
+
+      const devYaml = path.join(live.projectDir, 'dev.yml');
+      if (!removeProjectSource(devYaml, record.name)) {
+        return { deleted, action: 'record', status: live };
+      }
+      // 最后一个库删掉后没有可用数据源：停掉实例，dev.yml 留空等下一次启动
+      if (readLiveSourceNames(live.projectDir).length === 0) {
+        return { deleted, action: 'stopped', status: await services.stop() };
+      }
+      await services.stop();
+      return {
+        deleted,
+        action: 'restarted',
+        status: await startService({ projectDir: live.projectDir }),
+      };
     })
     // GraphJin 进程生命周期
-    .register('graphjin.start', async (params) => {
-      // 驱动未实现的类型不必拉起进程：写进 dev.yml 只会让 GraphJin 启动失败
-      for (const [name, connection] of Object.entries(params?.databases ?? {})) {
-        if (UNVERIFIED_DRIVERS.has(connection?.type)) {
-          throw RpcError.invalidParams(`库 ${name}: ${unsupportedDriverReason(connection.type)}`);
-        }
-      }
-      const status = await services.start(params ?? {});
-      // 平台以 admin 执行 GraphJin；roles 里没有 admin 时连它自己都会被拒
-      // （基线 §6.5：roles '<role>' not defined，包括 admin）。
-      if (status?.running && status.baseUrl) {
-        try {
-          const service = await getService(status.baseUrl);
-          status.adminRole = await syncRolesToGraphJin({
-            store,
-            service,
-            roleNames: ['admin'],
-          });
-        } catch (error) {
-          // 补角色失败不该让「进程已启动」变成启动失败，但要让人看得见
-          status.adminRoleError = error.message;
-        }
-      }
-      // 只有真的跑起来才记为 connected；库配置以项目里的 dev.yml 为准
-      if (status?.running && params?.databases) {
-        for (const [name, connection] of Object.entries(params.databases)) {
-          remember(name, connection, {
-            projectDir: params.projectDir,
-            appName: params?.appName,
-            status: STATUS_CONNECTED,
-            origin: ORIGIN_START,
-          });
-        }
-      }
-      return status;
-    })
+    .register('graphjin.start', (params) => startService(params))
     .register('graphjin.tools', async (params) => {
       const service = await getService(requireBaseUrl(params));
       return service.listTools();

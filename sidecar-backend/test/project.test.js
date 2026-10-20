@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   renderDevYaml,
@@ -9,6 +12,7 @@ const {
   mergeSourceBlock,
   upsertSourcesBlock,
   replaceRolesBlock,
+  removeProjectSource,
 } = require('../src/project');
 
 const BASE = { appName: 'Demo', port: 8080, sources: [] };
@@ -270,4 +274,43 @@ test('replaceRolesBlock: 整块重写，后面的兄弟段不受影响', () => {
   const next = replaceRolesBlock(text, ['admin', 'analyst']);
   assert.doesNotMatch(next, /tables:/);
   assert.match(next, /roles:\n  - name: "admin"\n  - name: "analyst"\nsystem:/);
+});
+
+function writeDevYaml(sources) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-remove-'));
+  const file = path.join(dir, 'dev.yml');
+  fs.writeFileSync(file, renderDevYaml({ ...BASE, sources }), 'utf8');
+  return file;
+}
+
+test('removeProjectSource: 只删指定库，其余条目与 access 保留', () => {
+  const file = writeDevYaml([
+    { name: 'app', ...SQLITE },
+    { name: 'other', type: 'sqlite', path: 'other.db' },
+  ]);
+
+  assert.strictEqual(removeProjectSource(file, 'app'), true);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(text, /- name: "app"/);
+  assert.match(text, /- name: "other"/);
+  assert.match(text, /access:/);
+});
+
+test('removeProjectSource: 删掉默认库时把 default 交给剩下的第一条', () => {
+  const file = writeDevYaml([
+    { name: 'app', ...SQLITE },
+    { name: 'other', type: 'sqlite', path: 'other.db' },
+  ]);
+
+  removeProjectSource(file, 'app');
+  // 少了默认库，GraphJin 就不知道该用哪个源，必须就近补上
+  assert.match(fs.readFileSync(file, 'utf8'), /- name: "other"\n {4}default: true/);
+});
+
+test('removeProjectSource: 库里没有这个名字时返回 false 且不改文件', () => {
+  const file = writeDevYaml([{ name: 'app', ...SQLITE }]);
+  const before = fs.readFileSync(file, 'utf8');
+
+  assert.strictEqual(removeProjectSource(file, 'nope'), false);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
 });

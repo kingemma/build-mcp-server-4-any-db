@@ -182,6 +182,27 @@ class GraphJinSupervisor {
   }
 
   /**
+   * 读当前项目的应用名，供桌面外壳显示窗口标题。
+   *
+   * 以 dev.yml 的 `app_name` 为准：用户可能手改过项目名，start 参数只是首次
+   * 创建时的初值。进程停了也照读 —— 项目身份不随运行态消失。
+   *
+   * @returns {string|null}
+   */
+  #readAppName() {
+    if (!this.projectDir) return null;
+    try {
+      const text = fs.readFileSync(path.join(this.projectDir, 'dev.yml'), 'utf8');
+      const match = /^app_name:\s*(.+)$/m.exec(text);
+      if (!match) return null;
+      return match[1].trim().replace(/^["']|["']$/g, '');
+    } catch {
+      // 文件被删或读不了只影响标题，不该让 status 整个失败
+      return null;
+    }
+  }
+
+  /**
    * @returns {Object} 当前状态
    */
   status() {
@@ -189,6 +210,7 @@ class GraphJinSupervisor {
     return {
       running,
       projectDir: this.projectDir,
+      appName: this.#readAppName(),
       baseUrl: running ? this.process.baseUrl : null,
       port: running ? this.process.port : null,
       pid: running ? this.process.pid : null,

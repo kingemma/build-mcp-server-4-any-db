@@ -94,6 +94,21 @@ test('start 会初始化项目目录并返回运行状态', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('status 带上 dev.yml 里的 app_name，停止后仍保留', async () => {
+  const dir = tempDir();
+  const { supervisor } = makeSupervisor();
+  await supervisor.start({ projectDir: dir, appName: 'Demo Orders', databases: DATABASES });
+
+  assert.strictEqual(supervisor.status().appName, 'Demo Orders');
+
+  // 项目身份不随运行态消失：服务停了，窗口标题仍应显示项目名
+  await supervisor.stop();
+  assert.strictEqual(supervisor.status().running, false);
+  assert.strictEqual(supervisor.status().appName, 'Demo Orders');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('重复 start 不会启第二个进程', async () => {
   const dir = tempDir();
   const { supervisor, state } = makeSupervisor();

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
@@ -17,6 +17,26 @@ const locale = computed({
   set: (value) => setLocale(value),
 });
 const elementLocale = computed(() => ELEMENT_LOCALES[locale.value]);
+
+/** 产品名：没打开项目时窗口标题只用它 */
+const APP_TITLE = 'MCP Server Build';
+
+/** 窗口标题里的项目名，来源是运行实例 dev.yml 的 app_name */
+const projectName = computed(() => store.status?.appName || APP_TITLE);
+
+/**
+ * 标题三处同步：浏览器标签、Electron 原生标题（macOS / Linux 可见）、
+ * 自绘标题带（Windows 隐藏原生标题栏，只能画在页面上）。
+ */
+watch(
+  projectName,
+  (name) => {
+    const full = name === APP_TITLE ? APP_TITLE : `${name} — ${APP_TITLE}`;
+    document.title = full;
+    window.mcpBuilder?.setProjectName?.(name === APP_TITLE ? '' : name);
+  },
+  { immediate: true }
+);
 
 const navItems = computed(() => routes.filter((item) => item.meta?.titleKey));
 const navTitle = (item) => t(item.meta.titleKey);
@@ -55,7 +75,9 @@ onBeforeUnmount(() => {
   <el-config-provider :locale="elementLocale">
     <div class="shell" :class="{ 'shell--titlebar': hasTitlebarOverlay }">
     <!-- 自绘标题栏：系统按钮画在这条 40px 带上，整条可拖动窗口 -->
-    <div v-if="hasTitlebarOverlay" class="titlebar" aria-hidden="true" />
+    <div v-if="hasTitlebarOverlay" class="titlebar">
+      <span class="titlebar__project">{{ projectName }}</span>
+    </div>
     <aside class="rail">
       <div class="brand">
         <div class="brand__mark">◈</div>
@@ -137,9 +159,24 @@ onBeforeUnmount(() => {
   right: 0;
   left: 0;
   z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 40px;
+  /* 右侧要让开系统自绘的最小化 / 最大化 / 关闭按钮 */
+  padding: 0 150px;
   background: #ffffff;
   -webkit-app-region: drag;
+}
+
+/* 项目名居中，过长时省略，避免压到系统按钮 */
+.titlebar__project {
+  overflow: hidden;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 顶栏留作拖拽区，里面的下拉框 / 状态胶囊要能点 */

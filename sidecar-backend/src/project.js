@@ -467,6 +467,45 @@ function replaceRolesBlock(text, names) {
 }
 
 /**
+ * 从 dev.yml 的 sources 段删掉一个库。
+ *
+ * 只动这一个条目，其余条目（含 access）逐字保留；删掉的如果是默认源，
+ * 把 default 挪给剩下的第一条，避免整个项目失去默认库。
+ *
+ * @param {string} file dev.yml 路径
+ * @param {string} name 库名
+ * @returns {boolean} 文件里没有这个 source 时返回 false
+ */
+function removeProjectSource(file, name) {
+  if (!fs.existsSync(file)) return false;
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  const block = findSourcesBlock(lines);
+  const entries = splitSourceEntries(lines, block);
+  const target = entries.find((entry) => entry.name === name);
+  if (!target) return false;
+
+  const isDefaultLine = (line) => /^\s+default:\s*true\s*$/.test(line);
+  let kept = entries.filter((entry) => entry !== target);
+  const lostDefault =
+    target.lines.some(isDefaultLine) && !kept.some((entry) => entry.lines.some(isDefaultLine));
+  if (lostDefault && kept.length > 0) {
+    const [first, ...rest] = kept;
+    const [head, ...body] = first.lines;
+    const indent = /^ */.exec(head)[0];
+    kept = [{ ...first, lines: [head, `${indent}  default: true`, ...body] }, ...rest];
+  }
+
+  const blockLines = kept.flatMap((entry) => entry.lines);
+  const text = [
+    ...lines.slice(0, block.header + 1),
+    ...blockLines,
+    ...lines.slice(block.end),
+  ].join('\n');
+  fs.writeFileSync(file, text, 'utf8');
+  return true;
+}
+
+/**
  * 就地合并 dev.yml 里的 sources 段。
  *
  * @param {string} file dev.yml 路径
@@ -588,6 +627,7 @@ module.exports = {
   createProject,
   mergeSourceBlock,
   mergeProjectSources,
+  removeProjectSource,
   upsertSourcesBlock,
   replaceRolesBlock,
   readSourceConnections,
