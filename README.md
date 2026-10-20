@@ -26,6 +26,7 @@ YAML，也不需要理解 GraphJin 的配置细节。
 - [验证](#验证)
 - [项目结构](#项目结构)
 - [已知限制](#已知限制)
+- [作者](#作者)
 
 ## 架构
 
@@ -600,6 +601,13 @@ binaries/              GraphJin 二进制（构建期解压）
 - 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
 
 完整的「已完成 / 未完成」清单见 [docs/FEATURES.md](./docs/FEATURES.md)。
+
+## 作者
+
+**Zhen (Evan) Wang**
+
+- 电话：+86 18901599114
+- 微信：+86 18901599114
 
 # 常见问题
 ## 策略预览中显示GraphJin未运行

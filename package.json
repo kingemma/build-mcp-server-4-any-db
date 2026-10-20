@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "MCP Server Build：为任意数据库可视化构建 MCP Server（Electron + Vue 3 + Node.js + GraphJin）",
+  "author": "Zhen (Evan) Wang — Tel / WeChat: +86 18901599114",
   "main": "electron/main.js",
   "scripts": {
     "start": "node scripts/dev-all.js",

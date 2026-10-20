@@ -28,6 +28,7 @@ migration fails.
 - [Verification](#verification)
 - [Project layout](#project-layout)
 - [Known limitations](#known-limitations)
+- [Author](#author)
 
 ## Architecture
 
@@ -621,6 +622,13 @@ binaries/              GraphJin binaries (extracted at build time)
   script still requires Windows + Edge.
 
 The full done / not-done matrix is in [docs/FEATURES.md](./docs/FEATURES.md) (Chinese).
+
+## Author
+
+**Zhen (Evan) Wang**
+
+- Tel: +86 18901599114
+- WeChat: +86 18901599114
 
 
 # Common Errors

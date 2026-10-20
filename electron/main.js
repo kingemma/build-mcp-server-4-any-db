@@ -1,3 +1,9 @@
+/**
+ * MCP Server Build 主进程：起后端、注入端口、退出前停 GraphJin。
+ *
+ * @author Zhen (Evan) Wang — Tel / WeChat: +86 18901599114
+ */
+
 'use strict';
 
 const fs = require('node:fs');
