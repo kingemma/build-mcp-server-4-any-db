@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS policy_snapshots (
   reason TEXT NOT NULL,
   roles_json TEXT NOT NULL,
   role_count INTEGER NOT NULL,
+  source_access_json TEXT,
+  source_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_policy_snapshots_project
@@ -117,6 +119,68 @@ function rolesForWrite(roles, { database = null } = {}) {
 }
 
 /**
+ * 把快照里的 source access 转成可回写形态。
+ *
+ * 只保留 access：连接字段（含密码）在 get_current_config 里是脱敏的，
+ * 回滚绝不能把 `[REDACTED]` 写回配置，所以回滚走 source_patches 只改权限。
+ *
+ * @param {Object|null} access get_current_config 里的 access 原样
+ * @returns {Object|undefined}
+ */
+function accessForWrite(access) {
+  if (!access || typeof access !== 'object') return undefined;
+  const variants = (key) => [
+    key,
+    key.replace(/_([a-z])/g, (_, char) => char.toUpperCase()),
+    key
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(''),
+  ];
+  const pick = (key) => {
+    for (const name of variants(key)) {
+      if (access[name] !== undefined) return access[name];
+    }
+    return undefined;
+  };
+
+  const result = {};
+  for (const key of ['read', 'write', 'delete', 'owner_column', 'namespace_column']) {
+    const value = pick(key);
+    if (typeof value === 'string' && value !== '') result[key] = value;
+  }
+  for (const key of ['admin_tables', 'blocked_tables']) {
+    const value = pick(key);
+    if (Array.isArray(value) && value.length > 0) result[key] = value;
+  }
+
+  const grants = access.grants ?? access.Grants;
+  if (Array.isArray(grants) && grants.length > 0) {
+    result.grants = grants
+      .map((grant) => {
+        const role = grant?.role ?? grant?.Role;
+        const tables = (grant?.tables ?? grant?.Tables ?? [])
+          .map((table) => {
+            const name = table?.name ?? table?.Name;
+            const columns = table?.columns ?? table?.Columns ?? [];
+            if (typeof name !== 'string' || columns.length === 0) return null;
+            const entry = { name, columns };
+            const filter = table?.filter ?? table?.Filter;
+            if (typeof filter === 'string' && filter !== '') entry.filter = filter;
+            return entry;
+          })
+          .filter(Boolean);
+        if (typeof role !== 'string' || tables.length === 0) return null;
+        return { role, tables };
+      })
+      .filter(Boolean);
+    if (result.grants.length === 0) delete result.grants;
+  }
+
+  return result;
+}
+
+/**
  * 生成「恢复到快照」的配置补丁。
  *
  * 只发 roles 不会删除本次新增的角色（实测：未列出的角色原样保留），
@@ -127,12 +191,13 @@ function rolesForWrite(roles, { database = null } = {}) {
  * @param {Object} [options]
  * @param {string} [options.database] 表缺少 database 时的兜底
  * @param {string[]} [options.protectedRoles] 额外保护的角色名
- * @returns {{roles: Array<Object>, remove_roles?: string[]}}
+ * @param {Array<Object>} [options.sources] 快照里的 sources（含 access），用于恢复权限
+ * @returns {{roles: Array<Object>, remove_roles?: string[], source_patches?: Array<Object>}}
  */
 function buildRollbackPatch(
   snapshotRoles,
   currentRoles,
-  { database = null, protectedRoles = [] } = {}
+  { database = null, protectedRoles = [], sources = [] } = {}
 ) {
   const snapshot = rolesForWrite(snapshotRoles, { database });
   const currentNames = roleNamesOf(currentRoles);
@@ -142,6 +207,15 @@ function buildRollbackPatch(
   const remove = currentNames.filter((name) => !snapshotNames.has(name) && !keep.has(name));
   const patch = { roles: snapshot };
   if (remove.length > 0) patch.remove_roles = remove;
+
+  const patches = (Array.isArray(sources) ? sources : [])
+    .map((source) => {
+      const access = accessForWrite(source?.access);
+      return source?.name && access ? { name: source.name, access } : null;
+    })
+    .filter(Boolean);
+  if (patches.length > 0) patch.source_patches = patches;
+
   return patch;
 }
 
@@ -154,6 +228,23 @@ class SnapshotStore {
     // 同一个 SQLite 文件还可能被 UserStore / ConnectionStore 写入，稍等锁而不是立刻报错
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(SCHEMA);
+    this.#ensureColumns();
+  }
+
+  /**
+   * 旧库升级：source 模式需要额外保存每个数据源的 access。
+   */
+  #ensureColumns() {
+    const columns = this.db.prepare('PRAGMA table_info(policy_snapshots)').all();
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has('source_access_json')) {
+      this.db.exec('ALTER TABLE policy_snapshots ADD COLUMN source_access_json TEXT');
+    }
+    if (!names.has('source_count')) {
+      this.db.exec(
+        'ALTER TABLE policy_snapshots ADD COLUMN source_count INTEGER NOT NULL DEFAULT 0'
+      );
+    }
   }
 
   close() {
@@ -187,6 +278,7 @@ class SnapshotStore {
    * @param {string} [input.database]
    * @param {'before-apply'|'before-rollback'|string} [input.reason]
    * @param {Array<Object>} input.roles get_current_config 的 roles 原样
+   * @param {Array<Object>} [input.sources] get_current_config 的 sources 原样（取 name + access）
    * @returns {Object} 快照摘要（不含 roles）
    */
   save({
@@ -195,15 +287,21 @@ class SnapshotStore {
     database = null,
     reason = 'before-apply',
     roles = [],
+    sources = [],
   } = {}) {
     if (!Array.isArray(roles)) throw new SnapshotStoreError('roles 必须是数组');
+    if (!Array.isArray(sources)) throw new SnapshotStoreError('sources 必须是数组');
     const projectKey = SnapshotStore.projectKey({ projectDir, baseUrl });
     const now = new Date().toISOString();
+    const sourceAccess = sources
+      .filter((source) => source?.name)
+      .map((source) => ({ name: source.name, access: source.access ?? null }));
     const row = this.db
       .prepare(
         `INSERT INTO policy_snapshots
-           (project_key, project_dir, base_url, database, reason, roles_json, role_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (project_key, project_dir, base_url, database, reason, roles_json, role_count,
+            source_access_json, source_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id`
       )
       .get(
@@ -214,6 +312,8 @@ class SnapshotStore {
         reason,
         JSON.stringify(roles),
         roleNamesOf(roles).length,
+        sourceAccess.length > 0 ? JSON.stringify(sourceAccess) : null,
+        sourceAccess.length,
         now
       );
 
@@ -273,7 +373,11 @@ class SnapshotStore {
     if (!Number.isInteger(id)) throw new SnapshotStoreError('id 必须是整数');
     const row = this.db.prepare('SELECT * FROM policy_snapshots WHERE id = ?').get(id);
     if (!row) return null;
-    return { ...this.#summarize(row), roles: JSON.parse(row.roles_json) };
+    return {
+      ...this.#summarize(row),
+      roles: JSON.parse(row.roles_json),
+      sources: row.source_access_json ? JSON.parse(row.source_access_json) : [],
+    };
   }
 
   /**
@@ -299,6 +403,7 @@ class SnapshotStore {
       database: row.database,
       reason: row.reason,
       roleCount: row.role_count,
+      sourceCount: row.source_count ?? 0,
       createdAt: row.created_at,
     };
   }
@@ -313,4 +418,5 @@ module.exports = {
   normalizeOperation,
   roleNamesOf,
   rolesForWrite,
+  accessForWrite,
 };

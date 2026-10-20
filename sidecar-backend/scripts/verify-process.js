@@ -30,24 +30,24 @@ function record(name, pass, detail) {
 
 async function main() {
   // 渲染层：非法输入应直接抛错，避免产出会 panic 的配置
-  record('缺少 databases 时抛错', (() => {
+  record('缺少 sources 时抛错', (() => {
     try {
-      renderDevYaml({ appName: 'x', port: 8080, databases: {} });
+      renderDevYaml({ appName: 'x', port: 8080, sources: [] });
       return false;
     } catch (error) {
-      return /databases 不能为空/.test(error.message);
+      return /sources 不能为空/.test(error.message);
     }
   })());
 
   const yaml = renderDevYaml({
     appName: 'Verify App',
     port: 8080,
-    databases: {
-      app: { type: 'sqlite', path: 'app.db', default: true },
-      warehouse: { type: 'postgres', host: '127.0.0.1', port: 5432, dbname: 'wh', user: 'u' },
-    },
+    sources: [
+      { name: 'app', type: 'sqlite', path: 'app.db', default: true },
+      { name: 'warehouse', type: 'postgres', host: '127.0.0.1', port: 5432, dbname: 'wh', user: 'u' },
+    ],
   });
-  record('只输出 databases map，无 sources', !/\bsources:/.test(yaml) && /\ndatabases:/.test(yaml));
+  record('输出 sources 数组且不含 databases', /\nsources:/.test(yaml) && !/^databases:/m.test(yaml));
   record('不输出单数 database', !/^database:/m.test(yaml));
   record('password 等空字段不落盘', !/password:/.test(yaml));
 
@@ -57,7 +57,7 @@ async function main() {
     dir,
     appName: 'Verify App',
     port,
-    databases: { app: { type: 'sqlite', path: 'app.db', default: true } },
+    sources: [{ name: 'app', type: 'sqlite', path: 'app.db', default: true }],
   });
 
   const db = new DatabaseSync(path.join(dir, 'app.db'));
@@ -73,8 +73,12 @@ async function main() {
 
     const service = new GraphJinService({ baseUrl, role: 'admin' });
     await service.connect();
-    const config = await service.assertLegacyMode();
-    record('生成的项目通过方案 B 形态校验', Boolean(config.databases), JSON.stringify(Object.keys(config.databases ?? {})));
+    const config = await service.assertSourceMode();
+    record(
+      '生成的项目通过 source 形态校验',
+      (config.sources ?? []).length === 1,
+      JSON.stringify((config.sources ?? []).map((source) => source.name))
+    );
 
     await process_.stop();
     record('进程可停止', !process_.isRunning);

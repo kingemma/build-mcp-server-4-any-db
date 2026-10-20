@@ -18,7 +18,11 @@ const { GraphJinService } = require('./graphjin');
 const { probeConnection } = require('./connection-probe');
 const { discoverSchema, listTables } = require('./schema');
 const { GraphJinSupervisor } = require('./supervisor');
-const { buildRoleTableConfig, summarizePatch } = require('./permissions');
+const {
+  buildSourceAccessConfig,
+  migrateLegacyRoleTables,
+  summarizeSourceAccess,
+} = require('./permissions');
 const { buildClientConfig, buildCliCommands, listClients, normalizeEndpoint } = require('./mcp-config');
 const {
   BUILT_IN_TYPES,
@@ -31,8 +35,12 @@ const {
   validateConnectionFields,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
-const { SnapshotStore, buildRollbackPatch } = require('./snapshots');
+const { SnapshotStore, buildRollbackPatch, accessForWrite } = require('./snapshots');
+const { readSourceConnections } = require('./project');
 const { dataFile } = require('./paths');
+const { executeGraphql } = require('./graphql-http');
+const { createMcpGateway } = require('./mcp-gateway');
+const { loadSecret, signToken } = require('./jwt');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
 const serviceCache = new Map();
@@ -73,6 +81,154 @@ function requireBaseUrl(params) {
  * @param {Object} result
  * @returns {boolean}
  */
+/**
+ * 写入某个数据源的访问配置。
+ *
+ * 为什么不用 `source_patches`：实测它只更新 read/write/delete/owner_column 等标量，
+ * **`access.grants` 会被静默忽略**（.probe/verify-source-config-write.js）。
+ * 所以权限只能走整份 `sources` 替换，而替换需要真实连接串 —— 配置 API 返回的是
+ * `[REDACTED]`，必须从 dev.yml 里读。
+ *
+ * @param {GraphJinService} service
+ * @param {string|null} projectDir
+ * @param {string} database 目标数据源名
+ * @param {Object} access buildSourceAccessConfig 的输出
+ * @returns {Promise<Object>} 写入结果
+ */
+async function applySourceAccess(service, projectDir, database, access) {
+  if (!projectDir) throw RpcError.invalidParams('缺少 projectDir，无法读取数据源连接信息');
+  const devYaml = path.join(path.resolve(projectDir), 'dev.yml');
+  const text = fs.existsSync(devYaml) ? fs.readFileSync(devYaml, 'utf8') : '';
+  const connections = text ? readSourceConnections(text) : {};
+
+  const config = await service.readConfig('all');
+  const sources = (config.sources ?? []).map((source) => {
+    const normalized =
+      source.name === database ? { ...access } : (accessForWrite(source.access) ?? {});
+    // access 是合并写入：不显式给空数组的话，旧 grants 会留在配置里
+    if (!normalized.grants) normalized.grants = [];
+    return {
+      name: source.name,
+      kind: source.kind ?? 'database',
+      ...(connections[source.name] ?? {}),
+      access: normalized,
+    };
+  });
+
+  if (!sources.some((source) => source.name === database)) {
+    throw RpcError.invalidParams(`数据源 ${database} 不存在`);
+  }
+  return service.updateConfig({ sources });
+}
+
+/**
+ * 把 GraphJin 形态的 grants 数组折成 { role: { table: rule } }。
+ *
+ * @param {Array<Object>|Object|null} grants
+ * @returns {Object}
+ */
+function grantsToMap(grants) {
+  if (!grants) return {};
+  if (!Array.isArray(grants)) return grants;
+  const map = {};
+  for (const grant of grants) {
+    if (!grant?.role) continue;
+    map[grant.role] ??= {};
+    for (const table of grant.tables ?? []) {
+      if (!table?.name) continue;
+      map[grant.role][table.name] = {
+        columns: table.columns ?? [],
+        ...(table.filter ? { filter: table.filter } : {}),
+      };
+    }
+  }
+  return map;
+}
+
+/**
+ * 用显式 access 覆盖迁移出来的默认档位。
+ *
+ * @param {Object} built buildSourceAccessConfig 或 migrateLegacyRoleTables 的输出
+ * @param {Object} access 调用方显式传入的档位
+ * @returns {Object}
+ */
+function mergeAccessOverride(built, access = {}) {
+  return buildSourceAccessConfig({
+    read: access.read ?? built.read,
+    write: access.write ?? built.write,
+    del: access.del ?? access.delete ?? built.delete,
+    ownerColumn: access.ownerColumn ?? built.owner_column,
+    namespaceColumn: access.namespaceColumn ?? built.namespace_column,
+    adminTables: access.adminTables ?? built.admin_tables ?? [],
+    blockedTables: access.blockedTables ?? built.blocked_tables ?? [],
+    grants: grantsToMap(access.grants ?? built.grants),
+  });
+}
+
+/**
+ * 把前端矩阵转成 source access。
+ *
+ * 优先用显式的 `grants`（阶段 4 的新矩阵）；否则按 legacy 矩阵降级映射，
+ * 此时列清单缺失需要调用方提供 schema 兜底。
+ *
+ * @param {Object} params permissions.build/apply 的入参
+ * @param {Object} [columnsByTable]
+ * @returns {Object}
+ */
+function buildAccessFromParams(params, columnsByTable = {}) {
+  const access = params?.access ?? {};
+  if (params?.grants || access.grants) {
+    return mergeAccessOverride(
+      { read: 'authenticated', write: 'blocked', delete: 'blocked' },
+      access
+    );
+  }
+
+  const matrix = params?.matrix ?? {};
+  const roles = Object.entries(matrix).map(([name, tables]) => ({
+    name,
+    tables: Object.entries(tables ?? {}).map(([tableName, rule]) => ({
+      name: tableName,
+      database: params?.database,
+      query: rule?.query ?? {},
+      insert: rule?.insert ?? {},
+      update: rule?.update ?? {},
+      delete: rule?.delete ?? {},
+    })),
+  }));
+
+  const columns = { ...columnsByTable };
+  for (const tables of Object.values(matrix)) {
+    for (const [tableName, rule] of Object.entries(tables ?? {})) {
+      const explicit = rule?.query?.columns;
+      if (Array.isArray(explicit) && explicit.length > 0) columns[tableName] = explicit;
+    }
+  }
+
+  const migrated = migrateLegacyRoleTables({ roles, columnsByTable: columns, adminRoles: ['admin'] });
+  return mergeAccessOverride(migrated.access, access);
+}
+
+/**
+ * 统一入口：没有列清单时从运行实例的 schema 补上（source mode 要求显式 columns）。
+ *
+ * @param {Object} params
+ * @param {GraphJinService|null} service
+ * @returns {Promise<Object>}
+ */
+async function buildAccessPipeline(params, service) {
+  if (params?.grants || params?.access?.grants) return buildAccessFromParams(params);
+  if (!service) {
+    throw RpcError.invalidParams('source 模式需要列清单：请传 grants，或提供 baseUrl 以读取 schema');
+  }
+  const schema = await discoverSchema(service.mcp, { withRelationships: false });
+  const columnsByTable = {};
+  for (const table of schema.tables ?? []) {
+    columnsByTable[table.name] = (table.columns ?? []).map((column) => column.name);
+  }
+  return buildAccessFromParams(params, columnsByTable);
+}
+
 function isConnectionOk(result) {
   return result?.success === true || result?.valid === true;
 }
@@ -89,7 +245,7 @@ function isConnectionOk(result) {
  * @param {SnapshotStore} [options.snapshots] 权限快照；缺省时写入不回滚
  * @returns {RpcRouter}
  */
-function createRouter({ store, connections = null, supervisor = null, snapshots = null }) {
+function createRouter({ store, connections = null, supervisor = null, snapshots = null, jwtSecret = null }) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
 
@@ -238,7 +394,7 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       // 服务在跑就复用现成实例；没跑就起一个用完即停的临时实例，不必先启动才能测
       const result = baseUrl
         ? await (await getService(baseUrl)).mcp.callTool('validate_config', {
-            databases: { [name]: connection },
+            sources: [{ name, kind: 'database', ...connection }],
           })
         : await probeConnection({ name, connection });
       // 测试通过才落盘，列表里看到的都是"真的连通过"的记录
@@ -310,10 +466,13 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
     // 运行中实例实际加载的库名：Schema 页顶部的库选择器以它为准
     .register('graphjin.databases', async (params) => {
       const service = await getService(requireBaseUrl(params));
-      const config = await service.readConfig('databases');
-      const databases = Object.keys(config?.databases ?? {}).sort();
+      const config = await service.readConfig('sources');
+      const databases = (config?.sources ?? [])
+        .map((source) => source?.name)
+        .filter(Boolean)
+        .sort();
       return {
-        activeDatabase: config?.active_database ?? databases[0] ?? null,
+        activeDatabase: config?.active_source ?? config?.active_database ?? databases[0] ?? null,
         databases,
       };
     })
@@ -324,20 +483,22 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       const service = await getService(requireBaseUrl(params));
       return service.readConfig(params?.section ?? 'all');
     })
-    // 权限编排（方案 B：roles[].tables + 四项操作开关）
+    // 权限编排（source 模式：source 级 read/write/delete + 角色级 grants）
     .register('permissions.build', (params) => {
       const database = params?.database;
       if (typeof database !== 'string' || database === '') {
         throw RpcError.invalidParams('database 不能为空');
       }
-      return buildRoleTableConfig(database, params?.matrix ?? {});
+      return { access: buildAccessFromParams({ ...params, database }) };
     })
-    .register('permissions.summarize', (params) => {
+    .register('permissions.summarize', async (params) => {
       const database = params?.database;
       if (typeof database !== 'string' || database === '') {
         throw RpcError.invalidParams('database 不能为空');
       }
-      return summarizePatch(buildRoleTableConfig(database, params?.matrix ?? {}));
+      const service = params?.baseUrl ? await getService(requireBaseUrl(params)) : null;
+      const access = await buildAccessPipeline({ ...params, database }, service);
+      return summarizeSourceAccess(access);
     })
     .register('permissions.apply', async (params) => {
       const database = params?.database;
@@ -348,29 +509,29 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       const service = await getService(baseUrl);
       const matrix = params?.matrix ?? {};
 
-      // 写之前先留快照：legacy 模式立即生效，写坏了只能靠它恢复。
-      // 必须在 syncRoles 之前拍，否则本次新建的角色会被记进快照、回滚时删不掉。
+      // 必须在 syncRoles 之前拍快照，否则本次新建的角色会被记进快照、回滚时删不掉
       let snapshot = null;
       if (snapshots) {
-        const current = await service.readConfig('roles');
+        const current = await service.readConfig('all');
         snapshot = snapshots.save({
           ...snapshotScope(params),
           database,
           reason: 'before-apply',
           roles: current?.roles ?? [],
+          sources: current?.sources ?? [],
         });
       }
 
-      // 角色必须先存在，否则 roles[].tables 会被拒。
-      // admin 是平台自身执行配置读写用的角色，即使不在矩阵里也一并补齐。
       const synced = await syncRolesToGraphJin({
         store,
         service,
-        roleNames: [...new Set([...Object.keys(matrix), 'admin'])],
+        roleNames: [...new Set([...Object.keys(matrix), ...Object.keys(params?.grants ?? {}), 'admin'])],
       });
-      const patch = buildRoleTableConfig(database, matrix);
-      const applied = await service.applyConfig(patch);
-      return { synced, applied, snapshot };
+
+      const access = await buildAccessPipeline({ ...params, database }, service);
+      const projectDir = params?.projectDir ?? services.status().projectDir;
+      const applied = await applySourceAccess(service, projectDir, database, access);
+      return { synced, applied, snapshot, access };
     })
     // 写入历史：只返回摘要，roles 全文按需用 permissions.rollback 恢复
     .register('permissions.snapshots', (params) => {
@@ -401,29 +562,72 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       }
 
       const service = await getService(baseUrl);
-      const current = await service.readConfig('roles');
+      const current = await service.readConfig('all');
       const before = snapshotDb.save({
         ...scope,
         database: target.database,
         reason: 'before-rollback',
         roles: current?.roles ?? [],
+        sources: current?.sources ?? [],
       });
 
       const patch = buildRollbackPatch(target.roles, current?.roles ?? [], {
         database: target.database,
+        sources: target.sources ?? [],
       });
-      const applied = await service.applyConfig(patch);
-      const { roles, ...summary } = target;
-      return { target: summary, before, applied, removed: patch.remove_roles ?? [] };
+
+      // 必须先恢复 sources 再删角色：grants 里引用着本次新增的角色，
+      // 先 remove_roles 会触发 `role "xxx" is not defined in roles`（实测）
+      const projectDir = params?.projectDir ?? services.status().projectDir;
+      let sourcesApplied = null;
+      for (const entry of patch.source_patches ?? []) {
+        sourcesApplied = await applySourceAccess(service, projectDir, entry.name, entry.access);
+      }
+
+      // source 模式不允许 roles[].tables，回滚时角色只保留名字
+      const rolesPatch = { roles: (patch.roles ?? []).map((role) => ({ name: role.name })) };
+      if (patch.remove_roles) rolesPatch.remove_roles = patch.remove_roles;
+      const rolesApplied = await service.updateConfig(rolesPatch);
+      const { roles, sources, ...summary } = target;
+      return {
+        target: summary,
+        before,
+        applied: sourcesApplied ?? rolesApplied,
+        removed: patch.remove_roles ?? [],
+      };
     })
-    // 以某个角色真实执行一条 GraphQL，用于验证权限是否生效
+    // 以某个角色（可选某个用户）真实执行一条 GraphQL，用于验证权限是否生效。
+    // 必须走 HTTP GraphQL：MCP 的 execute_graphql 不透传 X-User-Code，行过滤会失效。
     .register('graphql.execute', async (params) => {
       const query = params?.query;
       if (typeof query !== 'string' || query === '') {
         throw RpcError.invalidParams('query 不能为空');
       }
-      const service = await getService(requireBaseUrl(params), params?.role ?? 'admin');
-      return service.mcp.callTool('execute_graphql', { query });
+      return executeGraphql(requireBaseUrl(params), {
+        query,
+        role: params?.role ?? 'admin',
+        userCode: params?.userCode ?? null,
+      });
+    })
+    // 为用户签发 MCP 访问令牌：外部客户端拿它连网关，网关验签后转成 GraphJin 的身份头
+    .register('auth.token', (params) => {
+      if (!jwtSecret) throw RpcError.invalidParams('令牌密钥未初始化');
+      const userId = params?.userId;
+      if (!Number.isInteger(userId)) throw RpcError.invalidParams('userId 必须是整数');
+      const user = store.findUserById(userId);
+      if (!user) throw RpcError.invalidParams('用户不存在');
+
+      const ttlSeconds = Number.isInteger(params?.ttlSeconds) ? params.ttlSeconds : 12 * 3600;
+      const token = signToken(
+        { sub: String(user.id), role: user.role, user_code: user.email, name: user.name },
+        jwtSecret,
+        ttlSeconds
+      );
+      return {
+        token,
+        expiresIn: ttlSeconds,
+        user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      };
     })
     // 1.8 客户端配置生成
     .register('mcp.endpoint', (params) => ({
@@ -432,14 +636,19 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
     .register('mcp.clients', () => listClients())
     .register('mcp.clientConfig', (params) => {
       const baseUrl = requireBaseUrl(params);
+      // 传了 gatewayUrl 就生成「客户端 → 平台网关」的配置：带 Bearer 令牌，不再直连 GraphJin
+      const gatewayUrl = typeof params?.gatewayUrl === 'string' && params.gatewayUrl ? params.gatewayUrl : null;
+      const token = typeof params?.token === 'string' && params.token ? params.token : null;
       return {
         ...buildClientConfig({
-          baseUrl,
+          baseUrl: gatewayUrl ?? baseUrl,
           name: params?.name ?? 'GraphJin',
           transport: params?.transport ?? 'http',
           binPath: params?.binPath ?? null,
+          token,
         }),
-        cliCommands: buildCliCommands({ baseUrl, binPath: params?.binPath ?? 'graphjin' }),
+        gateway: Boolean(gatewayUrl),
+        cliCommands: buildCliCommands({ baseUrl: gatewayUrl ?? baseUrl, binPath: params?.binPath ?? 'graphjin' }),
       };
     });
 
@@ -453,9 +662,10 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
  * @param {Object} options
  * @param {RpcRouter} options.router
  * @param {number} [options.port] 默认 0
+ * @param {{path: string, handle: Function}} [options.gateway] MCP 网关，挂到 /api/v1/mcp
  * @returns {Promise<http.Server>}
  */
-function startHttpServer({ router, port = 0 }) {
+function startHttpServer({ router, port = 0, gateway = null }) {
   const server = http.createServer((request, response) => {
     const finish = (status, payload) => {
       const body = JSON.stringify(payload);
@@ -480,6 +690,17 @@ function startHttpServer({ router, port = 0 }) {
 
     if (request.method === 'GET' && request.url === '/health') {
       finish(200, { ok: true, pid: process.pid });
+      return;
+    }
+
+    if (gateway && (request.url ?? '').startsWith(gateway.path)) {
+      gateway.handle(request, response).catch((error) => {
+        if (response.headersSent) {
+          response.end();
+          return;
+        }
+        finish(502, { error: `MCP 网关转发失败：${error.message}` });
+      });
       return;
     }
 
@@ -548,18 +769,26 @@ async function createBackend({ dbPath } = {}) {
   const resolvedDbPath = dbPath || process.env.MCP_BUILDER_DB || dataFile('mcp-builder.db');
   fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
 
+  // 令牌密钥落在数据目录，首次运行自动生成；网关和 auth.token 共用同一份
+  const jwtSecret = loadSecret(dataFile('jwt.secret'));
+
   const store = new UserStore(resolvedDbPath);
   // 两张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
   const connections = new ConnectionStore(resolvedDbPath);
   const snapshots = new SnapshotStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
-  const router = createRouter({ store, connections, supervisor, snapshots });
-  const server = await startHttpServer({ router, port: 0 });
+  const router = createRouter({ store, connections, supervisor, snapshots, jwtSecret });
+  const gateway = createMcpGateway({
+    secret: jwtSecret,
+    resolveTarget: () => supervisor.status().baseUrl ?? null,
+  });
+  const server = await startHttpServer({ router, port: 0, gateway });
 
   return {
     port: server.address().port,
     router,
     dbPath: resolvedDbPath,
+    gatewayUrl: `http://127.0.0.1:${server.address().port}/api/v1/mcp`,
     /** 先停 GraphJin 再关服务，避免子进程残留锁住二进制 */
     async stop() {
       await supervisor.stop();

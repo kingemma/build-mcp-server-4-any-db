@@ -120,7 +120,7 @@ test('syncRolesToGraphJin：只补齐缺失的角色', async () => {
   const applied = [];
   const service = {
     readConfig: async () => ({ roles: [{ name: 'admin' }] }),
-    applyConfig: async (patch) => {
+    updateConfig: async (patch) => {
       applied.push(patch);
       return { success: true };
     },
@@ -141,7 +141,7 @@ test('syncRolesToGraphJin：全部已存在时不写入', async () => {
   let called = false;
   const service = {
     readConfig: async () => ({ roles: [{ name: 'admin' }] }),
-    applyConfig: async () => {
+    updateConfig: async () => {
       called = true;
       return { success: true };
     },
@@ -158,7 +158,7 @@ test('syncRolesToGraphJin：显式指定 roleNames 时以它为准', async () =>
   const applied = [];
   const service = {
     readConfig: async () => ({ roles: [] }),
-    applyConfig: async (patch) => {
+    updateConfig: async (patch) => {
       applied.push(patch);
       return { success: true };
     },

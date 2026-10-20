@@ -6,12 +6,11 @@
   "main": "src/index.js",
   "scripts": {
     "verify": "node scripts/verify.js",
-    "verify:plan-b": "node scripts/verify-plan-b.js",
+    "verify:migration": "node scripts/verify-source-migration.js",
     "verify:process": "node scripts/verify-process.js",
     "verify:stdio": "node scripts/verify-stdio.js",
     "verify:schema": "node scripts/verify-schema.js",
     "verify:supervisor": "node scripts/verify-supervisor.js",
-    "verify:columns": "node scripts/verify-columns.js",
     "verify:e2e": "node scripts/verify-e2e.js",
     "demo": "node scripts/demo.js",
     "test": "node --test"

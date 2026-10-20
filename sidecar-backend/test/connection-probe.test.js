@@ -46,7 +46,7 @@ test('probeConnection：成功时返回 validate_config 结果并停止进程', 
 
   assert.strictEqual(result.success, true);
   assert.strictEqual(result.tool, 'validate_config');
-  assert.deepStrictEqual(result.params.databases, { app: SQLITE_CONNECTION });
+  assert.deepStrictEqual(result.params.sources, [{ name: 'app', kind: 'database', ...SQLITE_CONNECTION }]);
   assert.strictEqual(stopped, true);
 });
 

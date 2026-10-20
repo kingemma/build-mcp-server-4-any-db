@@ -3,9 +3,12 @@
 /**
  * 权限编排：把平台内部的权限矩阵转换成 GraphJin 配置。
  *
- * 采用方案 B —— 不使用 sources，走 legacy 的 `databases` + `roles[].tables`，
- * 因为 `roles[].tables[]` 是唯一支持 query/insert/update/delete 四项独立开关的结构。
- * 实测依据见 docs/graphjin-3.21.14-baseline.md §6.4。
+ * 当前正在从 legacy（`databases` + `roles[].tables`）迁移到 source 模式：
+ * - `buildSourceAccessConfig` / `migrateLegacyRoleTables` 是新的写入路径；
+ * - `buildRoleTableConfig` 保留，只用于读取与迁移旧项目的矩阵。
+ *
+ * source 模式的能力边界见 docs/graphjin-source-migration.md §2：
+ * 写/删只到 source 级，表级可见性只有公开 / 仅 admin / 全局屏蔽三档。
  */
 
 /**
@@ -81,4 +84,247 @@ function summarizePatch(patch) {
   return summary;
 }
 
-module.exports = { buildOperation, buildRoleTableConfig, summarizePatch };
+/** source 模式支持的读档位（`blocked` 会让整个 source 不加载） */
+const READ_MODES = ['public', 'authenticated', 'owner', 'account', 'blocked'];
+
+/** source 模式支持的写/删档位；没有 `public`，公开写会被官方 recipe 拒绝 */
+const WRITE_MODES = ['blocked', 'authenticated', 'owner', 'account'];
+
+/**
+ * 归一化访问档位：非法值回落到安全默认，避免把拼写错误写进配置。
+ *
+ * @param {string|undefined} value
+ * @param {string[]} allowed
+ * @param {string} fallback
+ * @returns {string}
+ */
+function normalizeMode(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+/**
+ * 把多个行过滤条件合并成一个 source grants 的 filter 字符串。
+ *
+ * legacy 的 `filters` 是数组，source 的 `filter` 只接受一个表达式；
+ * 多个条件用 `_and` 组合，语义与 legacy 的「全部满足」一致。
+ *
+ * @param {string[]} filters
+ * @returns {string|undefined}
+ */
+function combineFilters(filters) {
+  const list = (Array.isArray(filters) ? filters : [])
+    .filter((item) => typeof item === 'string' && item.trim() !== '')
+    .map((item) => item.trim());
+  if (list.length === 0) return undefined;
+  if (list.length === 1) return list[0];
+  return `{ _and: [${list.join(', ')}] }`;
+}
+
+/**
+ * 生成 source 模式的 `access` 配置。
+ *
+ * 决策 A 的映射：写/删只到 source 级；表级只剩「公开 / 仅 admin / 全局屏蔽」三档，
+ * 角色之间靠列白名单与行过滤区分。`grants` 是加法而不是白名单 —— 未列出的表
+ * 对已认证角色完全可读，所以「按角色屏蔽表」不会再由这里产出。
+ *
+ * @param {Object} [options]
+ * @param {string} [options.read] public / authenticated / owner / account / blocked
+ * @param {string} [options.write] blocked / authenticated / owner / account
+ * @param {string} [options.del] 删除档位，取值同 write
+ * @param {string} [options.ownerColumn] owner 模式使用的归属列
+ * @param {string} [options.namespaceColumn] account 模式使用的租户列
+ * @param {string[]} [options.adminTables] 仅 admin 可读的表
+ * @param {string[]} [options.blockedTables] 所有人（含 admin）都不可读的表
+ * @param {Object} [options.grants] { role: { table: { columns, filter } } }
+ * @returns {Object} 可直接并入 `sources[].access` 的对象
+ */
+function buildSourceAccessConfig({
+  read = 'authenticated',
+  write = 'blocked',
+  del = 'blocked',
+  ownerColumn,
+  namespaceColumn,
+  adminTables = [],
+  blockedTables = [],
+  grants = {},
+} = {}) {
+  const access = {
+    read: normalizeMode(read, READ_MODES, 'authenticated'),
+    write: normalizeMode(write, WRITE_MODES, 'blocked'),
+    delete: normalizeMode(del, WRITE_MODES, 'blocked'),
+  };
+  if (ownerColumn) access.owner_column = ownerColumn;
+  if (namespaceColumn) access.namespace_column = namespaceColumn;
+
+  const blocked = [...new Set(blockedTables)];
+  if (blocked.length > 0) access.blocked_tables = blocked;
+  const admin = [...new Set(adminTables)];
+  if (admin.length > 0) access.admin_tables = admin;
+
+  const grantList = [];
+  for (const [role, tables] of Object.entries(grants ?? {})) {
+    const entries = [];
+    for (const [name, rule] of Object.entries(tables ?? {})) {
+      const columns = Array.isArray(rule?.columns) ? rule.columns.filter(Boolean) : [];
+      // GraphJin 会以「columns is required」拒绝空数组，缺列清单不能靠空数组糊过去
+      if (columns.length === 0) {
+        throw new Error(`grants.${role}.${name} 缺少 columns：source 模式要求显式列白名单`);
+      }
+      const entry = { name, columns };
+      const filter = typeof rule?.filter === 'string' ? rule.filter.trim() : '';
+      if (filter !== '') entry.filter = filter;
+      entries.push(entry);
+    }
+    if (entries.length > 0) grantList.push({ role, tables: entries });
+  }
+  if (grantList.length > 0) access.grants = grantList;
+
+  return access;
+}
+
+/**
+ * 把 access 配置折算成 UI 可展示的摘要。
+ *
+ * @param {Object} access buildSourceAccessConfig 的返回值（或从运行实例读回的配置）
+ * @returns {Object} 含各档位、表分类与角色级 grants
+ */
+function summarizeSourceAccess(access = {}) {
+  const grants = {};
+  for (const grant of access.grants ?? []) {
+    const tables = {};
+    for (const table of grant.tables ?? []) {
+      tables[table.name] = {
+        columns: Array.isArray(table.columns) ? table.columns : [],
+        filter: typeof table.filter === 'string' && table.filter !== '' ? table.filter : null,
+      };
+    }
+    if (grant.role) grants[grant.role] = tables;
+  }
+
+  return {
+    read: access.read ?? null,
+    write: access.write ?? null,
+    delete: access.delete ?? null,
+    ownerColumn: access.owner_column ?? null,
+    namespaceColumn: access.namespace_column ?? null,
+    adminTables: Array.isArray(access.admin_tables) ? access.admin_tables : [],
+    blockedTables: Array.isArray(access.blocked_tables) ? access.blocked_tables : [],
+    grants,
+  };
+}
+
+/**
+ * 把 legacy 的 `roles[].tables` 迁移成 source 模式的 access。
+ *
+ * 迁移按「不放大权限」原则：
+ * - 写/删一律 blocked（legacy 的表级写开关无法表达，迁移后在 UI 里重新开启）；
+ * - 只有 query 未 block 的角色/表才生成 grants；
+ * - 缺少列清单的表不生成 grants（否则会退化成「全列可读」），并记为冲突；
+ * - 所有非 admin 角色都屏蔽的表归入 admin_tables，混合情况记为冲突。
+ *
+ * @param {Object} options
+ * @param {Array<Object>} options.roles legacy 的 roles 数组
+ * @param {Object} options.columnsByTable { tableName: string[] } 列表清单
+ * @param {string[]} [options.adminRoles] 拥有 admin 身份的角色名
+ * @param {string} [options.ownerColumn] 留空时用 legacy 的 `$user_code` 约定
+ * @returns {{access: Object, conflicts: Array<Object>}} access 与无法表达或需要人工确认的规则
+ */
+function migrateLegacyRoleTables({ roles = [], columnsByTable = {}, adminRoles = ['admin'], ownerColumn } = {}) {
+  const conflicts = [];
+  const grants = {};
+  const blockedByNonAdmin = new Map();
+
+  for (const role of roles ?? []) {
+    const roleName = role?.name;
+    if (!roleName) continue;
+    const isAdmin = adminRoles.includes(roleName);
+
+    for (const table of role.tables ?? []) {
+      const tableName = table?.name;
+      if (!tableName) continue;
+
+      const query = table.query ?? {};
+      const allowed = query.block !== true;
+      const columnList = Array.isArray(query.columns) ? query.columns.filter(Boolean) : [];
+
+      if (!allowed) {
+        if (!isAdmin) {
+          const entry = blockedByNonAdmin.get(tableName) ?? { blocked: 0, allowed: 0 };
+          entry.blocked += 1;
+          blockedByNonAdmin.set(tableName, entry);
+        }
+        conflicts.push({
+          role: roleName,
+          table: tableName,
+          reason: 'per-role-block',
+          detail: 'source 模式无法按角色屏蔽表；已按其他角色的规则处理',
+        });
+        continue;
+      }
+
+      if (!isAdmin) {
+        const entry = blockedByNonAdmin.get(tableName) ?? { blocked: 0, allowed: 0 };
+        entry.allowed += 1;
+        blockedByNonAdmin.set(tableName, entry);
+      }
+
+      const columns = columnList.length > 0 ? columnList : (columnsByTable[tableName] ?? []).filter(Boolean);
+      if (columns.length === 0) {
+        conflicts.push({
+          role: roleName,
+          table: tableName,
+          reason: 'missing-columns',
+          detail: '缺少列清单，无法生成 grants（空数组会被 GraphJin 拒绝）',
+        });
+        continue;
+      }
+
+      const rule = { columns };
+      const filter = combineFilters(query.filters);
+      if (filter) rule.filter = filter;
+
+      if (!isAdmin) {
+        grants[roleName] ??= {};
+        grants[roleName][tableName] = rule;
+      }
+
+      for (const [op, label] of [['insert', 'insert'], ['update', 'update'], ['delete', 'delete']]) {
+        if (table[op] && table[op].block !== true) {
+          conflicts.push({
+            role: roleName,
+            table: tableName,
+            reason: `${label}-rule-dropped`,
+            detail: '表级写开关无法表达，迁移后写/删为 source 级且默认 blocked',
+          });
+        }
+      }
+    }
+  }
+
+  // 只有当一个表被所有提及它的非 admin 角色都屏蔽时，才等价于「仅 admin 可读」
+  const adminTables = [];
+  for (const [tableName, entry] of blockedByNonAdmin) {
+    if (entry.blocked > 0 && entry.allowed === 0) adminTables.push(tableName);
+  }
+
+  const access = buildSourceAccessConfig({
+    read: 'authenticated',
+    write: 'blocked',
+    del: 'blocked',
+    ownerColumn,
+    adminTables,
+    grants,
+  });
+
+  return { access, conflicts };
+}
+
+module.exports = {
+  buildOperation,
+  buildRoleTableConfig,
+  summarizePatch,
+  buildSourceAccessConfig,
+  summarizeSourceAccess,
+  migrateLegacyRoleTables,
+  combineFilters,
+};

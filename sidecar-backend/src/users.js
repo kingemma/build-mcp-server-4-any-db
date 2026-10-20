@@ -136,6 +136,16 @@ class UserStore {
       .all(organizationId);
   }
 
+  /** @param {number} userId @returns {Object|null} */
+  findUserById(userId) {
+    if (!Number.isInteger(userId)) return null;
+    return (
+      this.db
+        .prepare('SELECT id, organization_id, name, email, role, created_at FROM users WHERE id = ?')
+        .get(userId) ?? null
+    );
+  }
+
   findUserByEmail(email) {
     return (
       this.db
@@ -212,7 +222,8 @@ async function syncRolesToGraphJin({ store, service, roleNames = null }) {
   const missing = localRoles.filter((role) => !existing.has(role));
   if (missing.length === 0) return { created: [], existing: localRoles };
 
-  await service.applyConfig({ roles: missing.map((name) => ({ name })) });
+  // source 模式下配置写入必须带 mode，统一走 updateConfig
+  await service.updateConfig({ roles: missing.map((name) => ({ name })) });
   return { created: missing, existing: localRoles.filter((role) => existing.has(role)) };
 }
 

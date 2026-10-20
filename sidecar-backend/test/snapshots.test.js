@@ -2,8 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 const {
   SnapshotStore,
@@ -12,6 +14,7 @@ const {
   buildRollbackPatch,
   roleNamesOf,
   rolesForWrite,
+  accessForWrite,
 } = require('../src/snapshots');
 
 function withStore(run) {
@@ -202,4 +205,100 @@ test('buildRollbackPatch：回放前归一化表名，不会把原始 Go 字段�
 
   assert.strictEqual(patch.roles[0].tables[0].name, 'accounts');
   assert.strictEqual(patch.roles[0].tables[0].query.block, false);
+});
+
+test('save：source 模式同时保存每个源的 access，get 能读回', () => {
+  withStore((store) => {
+    const access = {
+      read: 'authenticated',
+      write: 'blocked',
+      delete: 'blocked',
+      grants: [{ role: 'analyst', tables: [{ name: 'orders', columns: ['id'] }] }],
+    };
+    const saved = store.save({
+      projectDir: 'projects/app',
+      roles: [ADMIN],
+      sources: [{ name: 'app', access }],
+    });
+
+    assert.strictEqual(saved.sourceCount, 1);
+    assert.deepStrictEqual(store.get(saved.id).sources, [{ name: 'app', access }]);
+  });
+});
+
+test('buildRollbackPatch：带 sources 时生成 source_patches，只回写 access', () => {
+  const patch = buildRollbackPatch([ADMIN], [ADMIN], {
+    sources: [
+      {
+        name: 'app',
+        access: {
+          read: 'authenticated',
+          write: 'owner',
+          delete: 'blocked',
+          owner_column: 'owner_code',
+          grants: [{ role: 'analyst', tables: [{ name: 'orders', columns: ['id'], filter: '{ a: 1 }' }] }],
+        },
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(patch.source_patches, [
+    {
+      name: 'app',
+      access: {
+        read: 'authenticated',
+        write: 'owner',
+        delete: 'blocked',
+        owner_column: 'owner_code',
+        grants: [{ role: 'analyst', tables: [{ name: 'orders', columns: ['id'], filter: '{ a: 1 }' }] }],
+      },
+    },
+  ]);
+});
+
+test('accessForWrite：兼容 Go 结构体的 PascalCase 字段', () => {
+  const access = accessForWrite({
+    Read: 'owner',
+    Write: 'owner',
+    Delete: 'blocked',
+    OwnerColumn: 'owner_code',
+    BlockedTables: ['secrets'],
+    Grants: [{ Role: 'analyst', Tables: [{ Name: 'orders', Columns: ['id'], Filter: '{ a: 1 }' }] }],
+  });
+
+  assert.deepStrictEqual(access, {
+    read: 'owner',
+    write: 'owner',
+    delete: 'blocked',
+    owner_column: 'owner_code',
+    blocked_tables: ['secrets'],
+    grants: [{ role: 'analyst', tables: [{ name: 'orders', columns: ['id'], filter: '{ a: 1 }' }] }],
+  });
+});
+
+test('旧库升级：自动补上 source_access_json / source_count 列', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-upgrade-'));
+  const dbPath = path.join(dir, 'snapshots.db');
+  const raw = new DatabaseSync(dbPath);
+  raw.exec(`CREATE TABLE policy_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_key TEXT NOT NULL,
+    project_dir TEXT,
+    base_url TEXT,
+    database TEXT,
+    reason TEXT NOT NULL,
+    roles_json TEXT NOT NULL,
+    role_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );`);
+  raw.close();
+
+  const store = new SnapshotStore(dbPath);
+  try {
+    const saved = store.save({ projectDir: dir, roles: [ADMIN], sources: [{ name: 'app', access: { read: 'authenticated' } }] });
+    assert.strictEqual(saved.sourceCount, 1);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

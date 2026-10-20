@@ -78,9 +78,10 @@ function normalizeEndpoint(baseUrl) {
  * @param {string} options.baseUrl
  * @param {string} [options.transport] http（默认）或 stdio
  * @param {string} [options.binPath] stdio 传输下 graphjin 可执行文件路径
+ * @param {string} [options.token] 访问平台网关用的 JWT
  * @returns {Object} mcpServers 里的一个条目
  */
-function buildServerEntry({ baseUrl, transport = TRANSPORT_HTTP, binPath = null }) {
+function buildServerEntry({ baseUrl, transport = TRANSPORT_HTTP, binPath = null, token = null }) {
   const endpoint = normalizeEndpoint(baseUrl);
 
   if (transport === TRANSPORT_STDIO) {
@@ -93,6 +94,10 @@ function buildServerEntry({ baseUrl, transport = TRANSPORT_HTTP, binPath = null 
     };
   }
 
+  // 连平台网关时必须带令牌：网关靠它确定「是谁」，再据此注入行过滤用的用户标识
+  if (token) {
+    return { type: 'http', url: endpoint, headers: { Authorization: `Bearer ${token}` } };
+  }
   return { type: 'http', url: endpoint };
 }
 
@@ -104,11 +109,12 @@ function buildServerEntry({ baseUrl, transport = TRANSPORT_HTTP, binPath = null 
  * @param {string} [options.name] server 名称，默认 GraphJin
  * @param {string} [options.transport]
  * @param {string} [options.binPath]
+ * @param {string} [options.token] 访问平台网关用的 JWT
  * @returns {{mcpServers: Object, endpoint: string, transport: string}}
  */
-function buildClientConfig({ baseUrl, name = 'GraphJin', transport = TRANSPORT_HTTP, binPath = null }) {
+function buildClientConfig({ baseUrl, name = 'GraphJin', transport = TRANSPORT_HTTP, binPath = null, token = null }) {
   return {
-    mcpServers: { [name]: buildServerEntry({ baseUrl, transport, binPath }) },
+    mcpServers: { [name]: buildServerEntry({ baseUrl, transport, binPath, token }) },
     endpoint: normalizeEndpoint(baseUrl),
     transport,
   };

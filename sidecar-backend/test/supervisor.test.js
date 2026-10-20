@@ -59,13 +59,13 @@ test('resolveGraphJinBinary：显式入参优先', () => {
   assert.strictEqual(resolveGraphJinBinary('/x/graphjin'), '/x/graphjin');
 });
 
-test('resolveGraphJinBinary：默认指向 src-tauri/binaries 下的当前平台产物', () => {
+test('resolveGraphJinBinary：默认指向仓库根 binaries 下的当前平台产物', () => {
   const saved = process.env.GRAPHJIN_BIN;
   delete process.env.GRAPHJIN_BIN;
   try {
     const resolved = resolveGraphJinBinary();
-    assert.match(resolved, /src-tauri/);
-    assert.match(resolved, /binaries/);
+    assert.doesNotMatch(resolved, /src-tauri/);
+    assert.match(resolved, /[\\/]binaries[\\/]/);
     assert.match(resolved, /graphjin-/);
   } finally {
     if (saved !== undefined) process.env.GRAPHJIN_BIN = saved;
@@ -183,5 +183,73 @@ test('health：运行中但连不上时给出原因而不是抛异常', async ()
   assert.strictEqual(typeof result.reason, 'string');
 
   await supervisor.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const LEGACY_YAML = `app_name: Demo
+host_port: 127.0.0.1:1234
+roles:
+  - name: admin
+databases:
+  app:
+    type: sqlite
+    path: app.db
+    default: true
+`;
+
+test('legacy 配置会触发迁移，迁移完成后用 source 配置重启', async () => {
+  const dir = tempDir();
+  const devYaml = path.join(dir, 'dev.yml');
+  fs.writeFileSync(devYaml, LEGACY_YAML, 'utf8');
+
+  let migrated = 0;
+  const { supervisor, state } = makeSupervisor({
+    migrate: async ({ projectDir }) => {
+      migrated += 1;
+      fs.writeFileSync(
+        path.join(projectDir, 'dev.yml'),
+        'app_name: Demo\nhost_port: 127.0.0.1:1234\nsources:\n  - name: app\n    type: sqlite\n    path: app.db\n',
+        'utf8'
+      );
+      return { migrated: true, backup: `${devYaml}.bak`, conflicts: [], sources: ['app'] };
+    },
+  });
+
+  const status = await supervisor.start({ projectDir: dir, databases: DATABASES });
+
+  assert.strictEqual(migrated, 1);
+  assert.strictEqual(state.started, 2);
+  assert.strictEqual(status.migration.ok, true);
+  assert.doesNotMatch(fs.readFileSync(devYaml, 'utf8'), /^databases:/m);
+
+  await supervisor.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('迁移失败时回滚 dev.yml 并抛出明确错误', async () => {
+  const dir = tempDir();
+  const devYaml = path.join(dir, 'dev.yml');
+  const backup = path.join(dir, 'dev.yml.legacy.bak');
+  fs.writeFileSync(devYaml, LEGACY_YAML, 'utf8');
+  fs.writeFileSync(backup, LEGACY_YAML, 'utf8');
+
+  const { supervisor } = makeSupervisor({
+    migrate: async () => {
+      fs.writeFileSync(devYaml, 'broken: true\n', 'utf8');
+      const error = new Error('写入 sources 失败');
+      error.backup = backup;
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    () => supervisor.start({ projectDir: dir, databases: DATABASES }),
+    /legacy 配置迁移失败/
+  );
+
+  assert.match(fs.readFileSync(devYaml, 'utf8'), /^databases:/m);
+  assert.strictEqual(supervisor.status().running, false);
+  assert.strictEqual(supervisor.status().migration.ok, false);
+
   fs.rmSync(dir, { recursive: true, force: true });
 });

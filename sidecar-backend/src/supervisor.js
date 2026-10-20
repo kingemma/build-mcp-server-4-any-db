@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { GraphJinProcess, pickFreePort } = require('./graphjin-process');
-const { createProject, mergeProjectDatabases } = require('./project');
+const { createProject, ensureGatewayConfig, mergeProjectSources } = require('./project');
+const { isLegacyConfig, migrateLegacyProject } = require('./migrate');
 const { keystoreEnv } = require('./keystore');
 
 /** 进程编排层的用法错误 */
@@ -18,7 +19,7 @@ class SupervisorError extends Error {
 /**
  * 定位 GraphJin 可执行文件。
  *
- * 优先级：显式传入 > 环境变量 GRAPHJIN_BIN > 构建期产出的 src-tauri/binaries/<三元组>。
+ * 优先级：显式传入 > 环境变量 GRAPHJIN_BIN > 构建期产出的 binaries/<三元组>。
  *
  * @param {string|null} [explicit]
  * @returns {string} 二进制路径（不保证存在）
@@ -29,9 +30,17 @@ function resolveGraphJinBinary(explicit = null) {
 
   // eslint-disable-next-line global-require
   const { currentPlatformKey, sidecarFileName } = require('../../scripts/platforms');
-  return path.join(
-    __dirname, '..', '..', 'src-tauri', 'binaries', sidecarFileName(currentPlatformKey())
-  );
+  return path.join(__dirname, '..', '..', 'binaries', sidecarFileName(currentPlatformKey()));
+}
+
+/**
+ * 把连接 map 转成 sources 数组。
+ *
+ * @param {Object} databases { name: conn }
+ * @returns {Array<Object>}
+ */
+function toSources(databases) {
+  return Object.entries(databases ?? {}).map(([name, conn]) => ({ name, ...conn }));
 }
 
 /**
@@ -52,11 +61,13 @@ class GraphJinSupervisor {
     binPath = null,
     env = {},
     createProcess = null,
+    migrate = null,
     maxRestarts = 3,
     restartWindowMs = 60_000,
   } = {}) {
     this.binPath = binPath;
     this.createProcess = createProcess;
+    this.migrate = migrate ?? migrateLegacyProject;
     this.env = env;
     this.maxRestarts = maxRestarts;
     this.restartWindowMs = restartWindowMs;
@@ -66,6 +77,8 @@ class GraphJinSupervisor {
     this.restartCount = 0;
     this.restartTimestamps = [];
     this.lastError = null;
+    /** 最近一次 legacy → source 迁移的结果（成功或失败摘要） */
+    this.migration = null;
   }
 
   #makeProcess() {
@@ -83,12 +96,13 @@ class GraphJinSupervisor {
   /**
    * 启动服务。
    *
-   * dev.yml 不存在时按传入的 databases 初始化一个；已存在时把 databases 合并进
-   * 它的 `databases:` 段（保留 roles 等其余内容），所以第二次启动新加的库能生效。
+   * dev.yml 不存在时按传入的连接初始化一个 source 模式项目；已存在时只合并
+   * `sources:` 块里的连接字段（保留 access 等其余内容）。legacy 项目会先启动一个
+   * 临时实例、通过配置 API 迁移成 source 模式，再按新配置重启。
    *
    * @param {Object} options
    * @param {string} options.projectDir
-   * @param {Object} [options.databases] 库连接，形态同 project.js
+   * @param {Object} [options.databases] 库连接 { name: conn }，会渲染成 sources
    * @param {string} [options.appName]
    * @param {boolean} [options.webUi]
    * @returns {Promise<Object>} status()
@@ -102,16 +116,27 @@ class GraphJinSupervisor {
     const dir = path.resolve(projectDir);
     fs.mkdirSync(dir, { recursive: true });
     const devYaml = path.join(dir, 'dev.yml');
+    this.projectDir = dir;
+
     if (!fs.existsSync(devYaml)) {
       if (!databases || Object.keys(databases).length === 0) {
         throw new SupervisorError('项目目录缺少 dev.yml，且未提供 databases，无法初始化项目');
       }
-      createProject({ dir, appName, port: await pickFreePort(), databases, webUi });
+      createProject({
+        dir,
+        appName,
+        port: await pickFreePort(),
+        sources: toSources(databases),
+        webUi,
+      });
+    } else if (isLegacyConfig(fs.readFileSync(devYaml, 'utf8'))) {
+      await this.#migrateLegacy(devYaml);
     } else if (databases && Object.keys(databases).length > 0) {
-      mergeProjectDatabases(devYaml, databases);
+      mergeProjectSources(devYaml, databases);
     }
+    // 老项目也要补上身份变量与回环绑定，否则网关和行过滤都不生效
+    ensureGatewayConfig(devYaml);
 
-    this.projectDir = dir;
     this.restartTimestamps = [];
     this.lastError = null;
 
@@ -119,6 +144,32 @@ class GraphJinSupervisor {
     await this.process.start();
     this.startedAt = new Date().toISOString();
     return this.status();
+  }
+
+  /**
+   * 用临时 legacy 实例完成迁移；失败时恢复备份，避免项目卡在中间态。
+   *
+   * @param {string} devYaml
+   * @returns {Promise<void>}
+   */
+  async #migrateLegacy(devYaml) {
+    this.process = this.#makeProcess();
+    await this.process.start();
+    const baseUrl = this.process.baseUrl;
+
+    try {
+      const report = await this.migrate({ projectDir: this.projectDir, baseUrl });
+      this.migration = { ok: true, ...report };
+    } catch (error) {
+      if (error.backup && fs.existsSync(error.backup)) {
+        fs.copyFileSync(error.backup, devYaml);
+      }
+      this.migration = { ok: false, reason: error.message, backup: error.backup ?? null };
+      throw new SupervisorError(`legacy 配置迁移失败：${error.message}`);
+    } finally {
+      await this.process.stop();
+      this.process = null;
+    }
   }
 
   /** @returns {Promise<Object>} status() */
@@ -144,6 +195,7 @@ class GraphJinSupervisor {
       startedAt: this.startedAt,
       restarts: this.restartCount,
       lastError: this.lastError,
+      migration: this.migration,
     };
   }
 

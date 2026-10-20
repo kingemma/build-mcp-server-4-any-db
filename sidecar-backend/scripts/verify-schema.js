@@ -39,7 +39,7 @@ async function main() {
     dir,
     appName: 'Schema Verify',
     port,
-    databases: { app: { type: 'sqlite', path: 'app.db', default: true } },
+    sources: [{ name: 'app', type: 'sqlite', path: 'app.db', default: true }],
   });
 
   const db = new DatabaseSync(path.join(dir, 'app.db'));

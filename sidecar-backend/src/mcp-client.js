@@ -81,12 +81,14 @@ class McpClient {
    * @param {Object} options
    * @param {string} options.baseUrl 形如 http://127.0.0.1:8083
    * @param {string} [options.role] 以哪个角色调用，配置类操作需要 'admin'
+   * @param {Object} [options.headers] 额外请求头（如 Authorization / X-User-Code），用于用户级身份
    * @param {Object} [options.clientInfo] 客户端标识
    */
-  constructor({ baseUrl, role = null, clientInfo = { name: 'mcp-builder', version: '0.1.0' } }) {
+  constructor({ baseUrl, role = null, headers = null, clientInfo = { name: 'mcp-builder', version: '0.1.0' } }) {
     if (!baseUrl) throw new Error('baseUrl 不能为空');
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.role = role;
+    this.headers = headers && typeof headers === 'object' ? { ...headers } : null;
     this.clientInfo = clientInfo;
     this.sessionId = null;
     this.requestId = 0;
@@ -113,6 +115,7 @@ class McpClient {
       Accept: ACCEPT_HEADER,
     };
     if (this.role) headers['X-User-Role'] = this.role;
+    if (this.headers) Object.assign(headers, this.headers);
     if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
 
     const response = await fetch(this.endpoint, {

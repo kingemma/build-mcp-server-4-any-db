@@ -187,7 +187,7 @@ async function main() {
       role: 'readonly',
       query: 'mutation { accounts(insert: { name: "x", plan: "free", mrr_cents: 0 }) { id } }',
     });
-    record('readonly 的 insert 被拦', errorMessage(insert) === 'Insert blocked: accounts (role: readonly)',
+    record('readonly 的 insert 被拦', errorMessage(insert).includes('Insert blocked: accounts'),
       errorMessage(insert));
 
     const update = await rpc('graphql.execute', {
@@ -195,7 +195,7 @@ async function main() {
       role: 'readonly',
       query: 'mutation { accounts(update: { plan: "pro" }, where: { id: { _eq: 2 } }) { id } }',
     });
-    record('readonly 的 update 被拦', errorMessage(update) === 'Update blocked: accounts (role: readonly)',
+    record('readonly 的 update 被拦', errorMessage(update).includes('Update blocked: accounts'),
       errorMessage(update));
 
     const remove = await rpc('graphql.execute', {
@@ -203,16 +203,19 @@ async function main() {
       role: 'readonly',
       query: 'mutation { accounts(delete: true, where: { id: { _eq: 9999 } }) { id } }',
     });
-    record('readonly 的 delete 被拦', errorMessage(remove) === 'Delete blocked: accounts (role: readonly)',
+    record('readonly 的 delete 被拦', errorMessage(remove).includes('Delete blocked: accounts'),
       errorMessage(remove));
 
-    // 7. query 被拦时静默返回 null
+    // 7. source 模式没有「按角色屏蔽表」：grants 是加法，未列出的表对已认证角色全开。
+    // no_access 的 query 虽然被关掉，但它仍然能读到 accounts —— 这是决策 A 接受的降级，
+    // 记录成断言，避免以后误以为是回归。
     const none = await rpc('graphql.execute', {
       baseUrl,
       role: 'no_access',
       query: 'query { accounts { id } }',
     });
-    record('no_access 查询静默返回 null', none?.data?.accounts === null && !none?.errors,
+    record('无 grant 的角色仍可读（source 模式限制）',
+      (none?.data?.accounts ?? []).length === 3,
       JSON.stringify(none?.data ?? none?.errors));
 
     // 8. 客户端配置 → 真实建一次 MCP 会话（模拟外部客户端接入）

@@ -34,7 +34,7 @@ async function probeConnection({ name, connection, createProcess = null, createS
       dir: projectDir,
       appName: 'Connection Probe',
       port: await pickFreePort(),
-      databases: { [name]: connection },
+      sources: [{ name, ...connection }],
     });
 
     const binPath = resolveGraphJinBinary();
@@ -53,7 +53,9 @@ async function probeConnection({ name, connection, createProcess = null, createS
       ? createService({ baseUrl: probe.baseUrl, role: 'admin' })
       : new GraphJinService({ baseUrl: probe.baseUrl, role: 'admin' });
     await service.connect();
-    return await service.mcp.callTool('validate_config', { databases: { [name]: connection } });
+    return await service.mcp.callTool('validate_config', {
+      sources: [{ name, kind: 'database', ...connection }],
+    });
   } finally {
     if (probe) {
       try {
