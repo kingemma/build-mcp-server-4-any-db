@@ -641,7 +641,12 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
         ? await (await getService(baseUrl)).mcp.callTool('validate_config', {
             sources: [{ name, kind: 'database', ...connection }],
           })
-        : await probeConnection({ name, connection });
+        : await probeConnection({
+            name,
+            connection,
+            // 相对路径的库文件要按项目目录解析，否则临时目录里会新建一个空库
+            projectDir: typeof params?.projectDir === 'string' ? params.projectDir : null,
+          });
       // 测试通过才落盘，列表里看到的都是"真的连通过"的记录
       if (isConnectionOk(result) && params?.projectDir) {
         remember(name, connection, {

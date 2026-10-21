@@ -112,8 +112,14 @@ are actually exposed.
   so the Schema browser and the permission matrix stop showing it;
 - Credentials are encrypted with the keystore key before hitting SQLite; the list only
   shows non-sensitive summary fields;
+- **Start verifies the connection first**: clicking Start on a saved connection really
+  dials the database once and stops with the reason in the message when it cannot be
+  reached (rotated password, database service down, network cut) instead of failing later
+  with a bare "GraphJin failed to start";
 - Testing works even when the service is down: the backend spins up a throwaway
-  GraphJin instance, validates, then stops it;
+  GraphJin instance, validates, then stops it. Relative database paths are resolved
+  against the connection's own project directory, so no empty database gets created in
+  the temp directory and reported as "no tables";
 - Types flagged `driverVerified=false` (ClickHouse / Redshift / BigQuery …) have no
   working driver in the bundled GraphJin version, so Test and Start are disabled and the
   UI points you at the postgres / mysql protocol instead.

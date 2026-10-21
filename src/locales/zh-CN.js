@@ -320,6 +320,7 @@ export default {
     },
     errors: {
       unreadable: '这条连接无法解密，请重新填写并测试一次',
+      startVerifyFailed: '启动前验证连接失败：{reason}。请先修好连接再启动',
     },
   },
 

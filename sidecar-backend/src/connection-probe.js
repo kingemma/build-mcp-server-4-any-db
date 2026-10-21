@@ -11,6 +11,25 @@ const { resolveGraphJinBinary } = require('./supervisor');
 const { keystoreEnv } = require('./keystore');
 
 /**
+ * 相对路径的库文件按连接所属的项目目录解析成绝对路径。
+ *
+ * 临时实例的工作目录是自己的临时目录，直接拿相对路径过去，GraphJin 会在那里
+ * 新建一个空库：连得上但一张表都没有，validate_config 以
+ * "schema discovery found no tables" 收尾，把好连接误判成坏连接。
+ *
+ * @param {Object} connection dev.yml 形态的连接配置
+ * @param {string|null} projectDir 连接所属的项目目录
+ * @returns {Object} 需要时替换 path 后的新配置
+ */
+function resolveDatabasePath(connection, projectDir) {
+  const file = connection?.path;
+  if (!projectDir || typeof file !== 'string' || file === '' || path.isAbsolute(file)) {
+    return connection;
+  }
+  return { ...connection, path: path.resolve(projectDir, file) };
+}
+
+/**
  * 单条连接的自检。
  *
  * validate_config 必须由一个活着的 GraphJin 执行，所以服务没起来时这里临时建一个
@@ -20,27 +39,35 @@ const { keystoreEnv } = require('./keystore');
  * @param {Object} options
  * @param {string} options.name 连接名
  * @param {Object} options.connection dev.yml 形态的连接配置
+ * @param {string} [options.projectDir] 连接所属项目目录，用于解析相对路径的库文件
  * @param {Function} [options.createProcess] 注入进程工厂，便于测试
  * @param {Function} [options.createService] 注入服务工厂，便于测试
  * @returns {Promise<Object>} validate_config 的结果；进程起不来时返回同样形态的失败结果
  */
-async function probeConnection({ name, connection, createProcess = null, createService = null }) {
+async function probeConnection({
+  name,
+  connection,
+  projectDir = null,
+  createProcess = null,
+  createService = null,
+}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-probe-'));
-  const projectDir = path.join(root, 'project');
+  const probeDir = path.join(root, 'project');
+  const resolved = resolveDatabasePath(connection, projectDir);
   let probe = null;
 
   try {
     createProject({
-      dir: projectDir,
+      dir: probeDir,
       appName: 'Connection Probe',
       port: await pickFreePort(),
-      sources: [{ name, ...connection }],
+      sources: [{ name, ...resolved }],
     });
 
     const binPath = resolveGraphJinBinary();
     probe = createProcess
-      ? createProcess({ binPath, projectDir })
-      : new GraphJinProcess({ binPath, projectDir, env: keystoreEnv() });
+      ? createProcess({ binPath, projectDir: probeDir })
+      : new GraphJinProcess({ binPath, projectDir: probeDir, env: keystoreEnv() });
 
     try {
       await probe.start();
@@ -54,7 +81,7 @@ async function probeConnection({ name, connection, createProcess = null, createS
       : new GraphJinService({ baseUrl: probe.baseUrl, role: 'admin' });
     await service.connect();
     return await service.mcp.callTool('validate_config', {
-      sources: [{ name, kind: 'database', ...connection }],
+      sources: [{ name, kind: 'database', ...resolved }],
     });
   } finally {
     if (probe) {

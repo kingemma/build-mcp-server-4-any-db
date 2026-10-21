@@ -678,6 +678,22 @@ async function main() {
   };
 
   const { server, port: staticPort } = await serveDist();
+
+  // 造一条「已保存但连不上」的记录：公开 API 只在验证通过时才落盘，坏记录只能
+  // 直接用后端的存储层写。keystore key 与连接库都在同一个数据目录，加密payload
+  // 用同一把 key，UI 拿到的 readable 才是 true、启动按钮才可用。
+  const { ConnectionStore } = require(path.join(ROOT, 'sidecar-backend', 'src', 'connections.js'));
+  const seedStore = new ConnectionStore(process.env.MCP_BUILDER_DB);
+  seedStore.save({
+    name: 'broken',
+    projectDir,
+    appName: 'UI Verify',
+    // postgres 打一个没人听的端口：validate_config 一定连不上
+    config: { type: 'postgres', host: '127.0.0.1', port: 1, dbname: 'nope', user: 'nope', password: 'nope' },
+    status: 'verified',
+    origin: 'test',
+  });
+  seedStore.close();
   const profileDir = path.join(workDir, 'edge-profile');
   const debugPort = 9333;
   const edge = spawn(
@@ -740,6 +756,38 @@ async function main() {
     const savedText = await cdp.evaluate(`document.querySelector('.conns').textContent`);
     record('连接页列出已保存连接', savedText.includes('app') && savedText.includes('analytics'));
     record('连接状态显示已连接', savedText.includes('已连接'));
+
+    // 启动前先验证：连不上的已保存记录必须被拦住、给出原因，且不能动到正在跑的实例
+    const pidBeforeStart = (await rpc('graphjin.status')).pid;
+    const brokenClicked = await cdp.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.conns tbody tr')]
+        .find((item) => item.querySelector('.conns__name')?.textContent.trim() === 'broken');
+      const button = [...(row?.querySelectorAll('.conns__actions button') ?? [])]
+        .find((item) => item.textContent.trim() === '启动');
+      if (!button) return 'no-button';
+      button.click();
+      return 'ok';
+    })()`);
+    record('连不上的记录也有启动按钮', brokenClicked === 'ok', brokenClicked);
+    await waitFor('启动被拦住并弹出提示', async () =>
+      (await cdp.evaluate(
+        `[...document.querySelectorAll('.el-message')].map((item) => item.textContent).join(' ')`
+      )).includes('验证连接失败')
+    );
+    const blockedText = await cdp.evaluate(
+      `[...document.querySelectorAll('.el-message')].map((item) => item.textContent).join(' ')`
+    );
+    record(
+      '启动前验证失败给出提示',
+      blockedText.includes('验证连接失败'),
+      blockedText.replace(/\s+/g, ' ').slice(0, 140)
+    );
+    const pidAfterBlocked = (await rpc('graphjin.status')).pid;
+    record(
+      '验证失败不影响运行中的实例',
+      pidAfterBlocked === pidBeforeStart,
+      `${pidBeforeStart} -> ${pidAfterBlocked}`
+    );
 
     // 标题三条链路：后端 status.appName（dev.yml）→ store → document.title / Electron IPC
     await waitFor('标题带上项目名', async () =>

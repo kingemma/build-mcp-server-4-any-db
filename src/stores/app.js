@@ -870,6 +870,9 @@ export const useAppStore = defineStore('app', {
     /**
      * 用已保存的连接直接启动。
      *
+     * 启动前先验证连接：库可能已经下线（密码改了、服务停了、网络断了），
+     * 不验证直接启动只会拿到一句 GraphJin 启动失败，看不出是连接本身的问题。
+     *
      * 服务在跑时先停掉：supervisor 只托管一个实例，且启动参数只在项目没有
      * dev.yml 时生效，不先停就会让人误以为换了库、实际还是旧的。
      *
@@ -880,6 +883,31 @@ export const useAppStore = defineStore('app', {
       const connection = await this.fetchConnection(id);
       if (!connection) throw new Error(i18n.global.t('connections.messages.missing'));
       if (!connection.config) throw new Error(i18n.global.t('connections.errors.unreadable'));
+      // 启动前先验证：库可能已经下线（密码改了、服务停了、网络断了），
+      // 不验证直接启动只会拿到一句 GraphJin 启动失败，看不出是连接本身的问题。
+      // 服务在跑就复用现成实例验证，没跑就起一个用完即停的临时实例。
+      // validate_config 有时把错误当结果返回、有时直接抛（isError），两条路都算没连上
+      //
+      // 先刷新状态：应用不轮询 graphjin.status，页面刷新还存在竞态（可能抓到停止前
+      // 的旧状态），isRunning 会一直是 true。拿着过期 baseUrl 去验证只会得到
+      // ECONNREFUSED，把好连接误判成坏连接 —— 下面选临时实例还是现成实例也依赖它。
+      await this.refreshStatus();
+      let probe;
+      try {
+        probe = await this.testConnection(connection.name, connection.config, {
+          projectDir: connection.projectDir,
+          appName: connection.appName,
+        });
+      } catch (error) {
+        probe = { ok: false, message: error.message };
+      }
+      if (!probe.ok) {
+        throw new Error(
+          i18n.global.t('connections.errors.startVerifyFailed', {
+            reason: probe.message || i18n.global.t('connections.messages.failed'),
+          })
+        );
+      }
       if (this.isRunning) await this.stopGraphJin();
       await this.startGraphJin({
         projectDir: connection.projectDir,

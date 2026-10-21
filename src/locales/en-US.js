@@ -324,6 +324,7 @@ export default {
     },
     errors: {
       unreadable: 'This connection cannot be decrypted — fill it in and test again',
+      startVerifyFailed: 'Connection check failed before start: {reason}. Fix the connection, then start again',
     },
   },
 
