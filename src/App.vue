@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
+import UsageGuide from './components/UsageGuide.vue';
 import { routes } from './router';
 import { ELEMENT_LOCALES, SUPPORTED_LOCALES } from './locales';
 import i18n, { setLocale } from './i18n';
@@ -59,6 +60,7 @@ const onOverlayGeometryChange = (event) => syncTitlebarOverlay(event.visible);
 
 onMounted(() => {
   store.refreshBackend();
+  store.autoOpenGuide();
 
   overlayApi = window.navigator.windowControlsOverlay ?? null;
   if (!overlayApi) return;
@@ -113,6 +115,9 @@ onBeforeUnmount(() => {
           <h1 class="topbar__title">{{ pageTitle }}</h1>
         </div>
         <div class="topbar__meta no-drag">
+          <el-button size="small" class="guide-open-btn" @click="store.openGuide()">
+            {{ t('guide.open') }}
+          </el-button>
           <el-select v-model="locale" size="small" class="locale" :aria-label="t('app.language')">
             <el-option
               v-for="item in SUPPORTED_LOCALES"
@@ -135,6 +140,17 @@ onBeforeUnmount(() => {
         <RouterView />
       </section>
     </main>
+    <UsageGuide />
+
+    <button
+      class="guide-fab"
+      type="button"
+      :aria-label="t('guide.open')"
+      @click="store.openGuide()"
+    >
+      <span class="guide-fab__icon" aria-hidden="true">?</span>
+      <span class="guide-fab__label">{{ t('guide.open') }}</span>
+    </button>
     </div>
   </el-config-provider>
 </template>
@@ -338,6 +354,43 @@ onBeforeUnmount(() => {
   max-width: 1480px;
   margin-right: auto;
   margin-left: auto;
+}
+
+/* 右下角常驻悬浮：随时打开使用向导；层级低于抽屉遮罩（约 2000），向导打开时自动被遮住 */
+.guide-fab {
+  position: fixed;
+  right: 32px;
+  bottom: 32px;
+  z-index: 40;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 11px 17px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(145deg, #3b82f6, var(--accent-strong));
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 12px 26px -10px rgba(29, 78, 216, 0.72);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.guide-fab:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px -10px rgba(29, 78, 216, 0.82);
+}
+
+.guide-fab__icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
 }
 
 @media (max-width: 1100px) {

@@ -21,6 +21,9 @@ export { OPERATIONS, OPERATION_KEYS, STATE_KEYS };
 /** 平台保留角色：始终全权限，不进入可编辑矩阵 */
 const RESERVED_ROLES = new Set(['admin']);
 
+/** 使用引导「关闭后不再自动弹出」的持久化标记 */
+const GUIDE_DISMISSED_KEY = 'mcpb.guideDismissed';
+
 function emptyOperation() {
   // columnMode: allow = 白名单；block = 阻止列表（写库时转成补集白名单）
   return { enabled: false, filters: [], columnMode: 'allow', columns: [] };
@@ -45,6 +48,8 @@ export const useAppStore = defineStore('app', {
     port: getPort(),
     isBackendUp: false,
     isBusy: false,
+    /** 使用引导抽屉是否打开；关闭后写 localStorage，不再自动弹出 */
+    guideOpen: false,
     status: null,
     tables: [],
     schema: null,
@@ -143,6 +148,21 @@ export const useAppStore = defineStore('app', {
   },
 
   actions: {
+    openGuide() {
+      this.guideOpen = true;
+    },
+
+    /** 关闭即视为「不再自动弹出」；顶栏按钮仍可再次打开 */
+    closeGuide() {
+      this.guideOpen = false;
+      localStorage.setItem(GUIDE_DISMISSED_KEY, '1');
+    },
+
+    /** 首次进入自动弹出，被关过就静默 */
+    autoOpenGuide() {
+      if (!localStorage.getItem(GUIDE_DISMISSED_KEY)) this.guideOpen = true;
+    },
+
     /**
      * @param {number} port 后端 HTTP 端口
      */

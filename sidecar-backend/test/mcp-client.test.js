@@ -149,3 +149,83 @@ test('McpClient: 非 session 失效的 404 不重试', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('McpClient: 连接被对端关掉（fetch failed）后自动重连并重试一次', async () => {
+  const { McpClient } = require('../src/mcp-client');
+  const client = new McpClient({ baseUrl: 'http://127.0.0.1:9' });
+  client.sessionId = 'stale';
+
+  const methods = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const payload = JSON.parse(options.body);
+    methods.push(payload.method);
+    // 空闲后 keep-alive 套接字已被服务端回收：第一个请求打在死连接上
+    if (payload.method === 'tools/call' && methods.filter((m) => m === 'tools/call').length === 1) {
+      throw new TypeError('fetch failed', { cause: new Error('read ECONNRESET') });
+    }
+    if (payload.method === 'initialize') return fakeResponse(200, '', 'fresh-session');
+    if (payload.method === 'notifications/initialized') return fakeResponse(202, '');
+    return fakeResponse(
+      200,
+      `data: ${JSON.stringify({
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: { content: [{ type: 'text', text: '{"ok":true}' }] },
+      })}`
+    );
+  };
+
+  try {
+    const result = await client.callTool('query_catalog', {});
+    assert.deepStrictEqual(result, { ok: true });
+    assert.deepStrictEqual(methods, [
+      'tools/call',
+      'initialize',
+      'notifications/initialized',
+      'tools/call',
+    ]);
+    assert.strictEqual(client.sessionId, 'fresh-session');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('McpClient: 握手断在半路时清掉会话号，下次请求重新握手', async () => {
+  const { McpClient } = require('../src/mcp-client');
+  const client = new McpClient({ baseUrl: 'http://127.0.0.1:9' });
+
+  let initializes = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const payload = JSON.parse(options.body);
+    if (payload.method === 'initialize') {
+      initializes += 1;
+      return fakeResponse(200, '', `session-${initializes}`);
+    }
+    // 第一次握手的通知发不出去：服务端那个会话停在 initializing
+    if (payload.method === 'notifications/initialized' && initializes === 1) {
+      throw new TypeError('fetch failed');
+    }
+    if (payload.method === 'notifications/initialized') return fakeResponse(202, '');
+    return fakeResponse(
+      200,
+      `data: ${JSON.stringify({
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: { content: [{ type: 'text', text: '{"ok":true}' }] },
+      })}`
+    );
+  };
+
+  try {
+    await assert.rejects(() => client.callTool('query_catalog', {}), /fetch failed/);
+    // 半初始化的会话号留着会毒化之后所有请求
+    assert.strictEqual(client.sessionId, null);
+    const result = await client.callTool('query_catalog', {});
+    assert.deepStrictEqual(result, { ok: true });
+    assert.strictEqual(client.sessionId, 'session-2');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

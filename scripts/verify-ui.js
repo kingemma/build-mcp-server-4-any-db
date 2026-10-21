@@ -27,7 +27,8 @@ const SHOT_DIR = (process.argv.find((arg) => arg.startsWith('--shots=')) ?? '').
 
 /** 页面 key 与两种语言下的顶栏标题，用来判断页面渲染完成 */
 const PAGE_SHOTS = [
-  { route: 'welcome', title: { 'zh-CN': '欢迎', 'en-US': 'Welcome' } },
+  // 欢迎页的路由是 '/'，不是 '/welcome'：hash 必须显式给，否则匹配不到路由
+  { route: 'welcome', hash: '#/', title: { 'zh-CN': '欢迎', 'en-US': 'Welcome' } },
   { route: 'status', title: { 'zh-CN': '运行状态', 'en-US': 'Runtime' } },
   { route: 'connections', title: { 'zh-CN': '数据库连接', 'en-US': 'Connections' } },
   { route: 'schema', title: { 'zh-CN': 'Schema 浏览器', 'en-US': 'Schema Browser' } },
@@ -209,6 +210,11 @@ async function seedPermissions(cdp) {
   await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
   await waitFor('权限矩阵就绪', async () =>
     (await cdp.evaluate(`Boolean(document.querySelector('.add input'))`)) === true
+  );
+  // 整页刷新后 schema 是异步拉的：必须等库标签出来（applyDatabase 就位）再加角色，
+  // 否则 addRole 看到 applyDatabase 为空会直接返回 false，角色加不上、矩阵永远是空的
+  await waitFor('权限页库标签就绪', async () =>
+    (await cdp.evaluate(`document.querySelectorAll('.db-tab').length`)) > 0
   );
   await cdp.evaluate(`(() => {
     const input = document.querySelector('.add input');
@@ -593,7 +599,7 @@ async function capturePages(cdp, dir) {
     await switchLocale(cdp, locale);
     await seedPermissions(cdp);
     for (const page of PAGE_SHOTS) {
-      await cdp.evaluate(`location.hash = '#/${page.route}'; 'ok'`);
+      await cdp.evaluate(`location.hash = '${page.hash ?? `#/${page.route}`}'; 'ok'`);
       await waitFor(`${locale}/${page.route} 渲染`, async () =>
         (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
         page.title[locale]
@@ -603,6 +609,24 @@ async function capturePages(cdp, dir) {
       await cdp.screenshot(path.join(dir, locale, `${page.route}.png`));
       console.log(`截图 ${locale}/${page.route}.png`);
     }
+
+    // 使用向导是常驻入口，单独截一张打开态的抽屉图
+    await cdp.evaluate(`location.hash = '#/'; 'ok'`);
+    await waitFor(`${locale}/guide 欢迎页渲染`, async () =>
+      (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
+      PAGE_SHOTS[0].title[locale]
+    );
+    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
+    await waitFor(`${locale}/guide 抽屉打开`, async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await cdp.screenshot(path.join(dir, locale, 'guide.png'));
+    console.log(`截图 ${locale}/guide.png`);
+    await cdp.evaluate(`document.querySelector('.guide__foot button')?.click(); 'ok'`);
+    await waitFor(`${locale}/guide 抽屉收起`, async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
   }
 }
 
@@ -748,6 +772,80 @@ async function main() {
     );
     record('切回中文复原', zhTitle === '数据库连接', zhTitle);
 
+    // 使用向导：首访自动弹出，关闭持久化，悬浮按钮 / 顶栏可再次开启，步骤直达对应页
+    const guideIntro =
+      await cdp.evaluate(`document.querySelector('.guide__intro')?.textContent ?? ''`);
+    record('首访使用向导自动弹出', guideIntro.includes('连接'), guideIntro.slice(0, 60));
+
+    const guideClosed = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.trim() === '关闭向导');
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('使用向导关闭后从 DOM 卸载', async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
+    record('使用向导可关闭', guideClosed === 'ok', guideClosed);
+
+    // 关闭写进 localStorage：整页刷新后不再自动弹出
+    await cdp.evaluate(
+      `localStorage.setItem('mcpb.backendPort', '${backend.port}');
+       location.assign(location.pathname + '?guide=' + Date.now() + location.hash);
+       'ok'`
+    );
+    await waitFor('刷新后连接列表仍在', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
+    );
+    record(
+      '关闭后刷新不再自动弹出',
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
+
+    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
+    await waitFor('使用向导再次打开', async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
+    );
+    record('顶栏可再次打开使用向导', true);
+
+    const guideJumped = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.guide-step button')]
+        .find((item) => item.textContent.includes('去配置权限'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('向导步骤跳转到权限页并收起', async () =>
+      (await cdp.evaluate(`location.hash`)) === '#/permissions' &&
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
+    record('向导步骤直达对应页面', guideJumped === 'ok', await cdp.evaluate(`location.hash`));
+
+    // 回到连接页再继续：后面的启动用例操作的是连接列表
+    await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
+    await waitFor('回到连接页', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
+    );
+
+    // 右下角悬浮「使用向导」按钮是另一个入口
+    const fabExists = await cdp.evaluate(`!!document.querySelector('.guide-fab')`);
+    record('右下角悬浮使用向导按钮存在', fabExists === true);
+    await cdp.evaluate(`document.querySelector('.guide-fab')?.click(); 'ok'`);
+    await waitFor('悬浮按钮打开使用向导', async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
+    );
+    record('悬浮按钮可打开使用向导', true);
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.trim() === '关闭向导');
+      button?.click();
+      return 'ok';
+    })()`);
+    await waitFor('悬浮按钮测试后收起向导', async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
+
     const connectionsShot = path.join(workDir, 'connections.png');
     await cdp.screenshot(connectionsShot);
 
@@ -851,6 +949,36 @@ async function main() {
       'MCP 查询返回数据',
       queryText.includes('"events"'),
       queryText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 调用示例：示例查询点一下就填进编辑器，工具示例给出可复制的参数 JSON
+    const sampleInfo = await cdp.evaluate(`(() => {
+      const chips = [...document.querySelectorAll('.samples .chip--action')];
+      return {
+        count: chips.length,
+        queries: chips.map((chip) => chip.title),
+        text: document.querySelector('.samples')?.textContent ?? '',
+      };
+    })()`);
+    record(
+      'MCP 示例查询可点击',
+      sampleInfo.count >= 2 && sampleInfo.queries.every((item) => item.includes('(limit:')),
+      `${sampleInfo.count} 个 · ${sampleInfo.text.replace(/\s+/g, ' ').slice(0, 80)}`
+    );
+    // 点击后 Vue 在 nextTick 才把值写回 textarea，必须等值真的变成示例语句
+    await cdp.evaluate(`document.querySelector('.samples .chip--action')?.click(); 'ok'`);
+    await waitFor('点示例填入查询语句', async () =>
+      (await cdp.evaluate(`document.querySelector('.query textarea')?.value ?? ''`)) ===
+      sampleInfo.queries[0]
+    );
+    const applied = await cdp.evaluate(`document.querySelector('.query textarea')?.value`);
+    record('点示例填入查询语句', applied === sampleInfo.queries[0], applied.slice(0, 80));
+    const toolSampleText =
+      await cdp.evaluate(`document.querySelector('.tool-samples')?.textContent ?? ''`);
+    record(
+      'MCP 工具调用示例渲染',
+      toolSampleText.includes('execute_graphql') && toolSampleText.includes('"query"'),
+      toolSampleText.replace(/\s+/g, ' ').slice(0, 100)
     );
 
     const appShot = path.join(workDir, 'schema-app.png');

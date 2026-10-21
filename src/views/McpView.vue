@@ -28,6 +28,52 @@ const loadingTools = ref(false);
 const probing = ref(false);
 const querying = ref(false);
 
+/**
+ * 常见工具的调用示例：参数形态容易猜错，直接给出可复制的 JSON。
+ * execute_graphql 的入参实测是 { query, variables?, namespace? }。
+ */
+const TOOL_SAMPLES = [
+  { name: 'execute_graphql', args: '{ "query": "{ orders(limit: 5) { id } }" }' },
+  { name: 'query_catalog', args: '{ "database": "app" }' },
+  { name: 'get_current_config', args: '{ "section": "sources" }' },
+];
+
+/**
+ * 示例查询用当前库的真实表名 / 主键生成，点一下就能跑，不必自己拼。
+ * 表结构来自 Schema 发现，不会出现查无此表的示例。
+ */
+const samples = computed(() => {
+  const inDb = store.tables.filter((item) => item.database === store.activeDatabase);
+  const table = inDb[0] ?? store.tables[0];
+  if (!table?.name) return [];
+  const column = table.primaryKey ?? 'id';
+  return [
+    {
+      key: 'rows',
+      label: t('mcp.sampleRows', { table: table.name }),
+      query: `{ ${table.name}(limit: 5) { ${column} } }`,
+    },
+    {
+      key: 'one',
+      label: t('mcp.sampleOne', { table: table.name }),
+      query: `{ ${table.name}(limit: 1) { ${column} } }`,
+    },
+  ];
+});
+
+function applySample(sample) {
+  query.value = sample.query;
+}
+
+async function copyText(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    ElMessage.success(t('mcp.sampleCopied', { label }));
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
 /** GraphJin 的成功态是 data 非空；带 errors 就是失败 */
 const queryFailed = computed(
   () => Array.isArray(result.value?.errors) && result.value.errors.length > 0
@@ -178,6 +224,23 @@ watch(role, loadTools);
             </span>
           </div>
           <p v-else class="mono-dim">{{ t('mcp.toolsEmpty') }}</p>
+
+          <div v-if="TOOL_SAMPLES.length" class="tool-samples">
+            <div class="tool-samples__head">
+              <span class="eyebrow">{{ t('mcp.toolSampleTitle') }}</span>
+              <span class="mono-dim">{{ t('mcp.toolSampleHint') }}</span>
+            </div>
+            <div v-for="sample in TOOL_SAMPLES" :key="sample.name" class="tool-sample">
+              <div class="tool-sample__head">
+                <code class="mono">{{ sample.name }}</code>
+                <span
+                  class="chip chip--action"
+                  @click="copyText(sample.args, sample.name)"
+                >{{ t('mcp.copyArgs') }}</span>
+              </div>
+              <pre class="tool-sample__args">{{ sample.args }}</pre>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -205,6 +268,18 @@ watch(role, loadTools);
               {{ t('mcp.run') }}
             </el-button>
             <span class="eyebrow">{{ t('mcp.rawNote') }}</span>
+          </div>
+          <div v-if="samples.length" class="samples">
+            <span class="samples__label">{{ t('mcp.sampleLabel') }}</span>
+            <span
+              v-for="sample in samples"
+              :key="sample.key"
+              class="chip chip--action"
+              :title="sample.query"
+              @click="applySample(sample)"
+            >
+              {{ sample.label }}
+            </span>
           </div>
           <pre v-if="result" class="result" :class="{ 'result--error': queryFailed }">{{
             JSON.stringify(result, null, 2)
@@ -310,6 +385,65 @@ watch(role, loadTools);
   background: var(--ink-700);
   border: 1px solid var(--line);
   border-radius: 999px;
+}
+
+.chip--action {
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.chip--action:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.samples__label {
+  font-size: var(--fs-note);
+  color: var(--text-dim);
+}
+
+.tool-samples {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.tool-samples__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.tool-sample__head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tool-sample__args {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .query :deep(textarea) {

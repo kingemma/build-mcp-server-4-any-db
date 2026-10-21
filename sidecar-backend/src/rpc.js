@@ -73,7 +73,10 @@ class RpcRouter {
         };
       }
       // 不吞异常：把消息回给调用方，堆栈留在服务端日志
-      console.error(`[rpc] ${method} 失败: ${error.stack ?? error.message}`);
+      // fetch failed 的原因（ECONNREFUSED / terminated）只在 cause 里，必须一起打
+      const cause = error.cause ? `\n[cause] ${error.cause.stack ?? error.cause.message ?? error.cause}` : '';
+      const target = params?.baseUrl ? ` baseUrl=${params.baseUrl}` : '';
+      console.error(`[rpc] ${method} 失败:${target} ${error.stack ?? error.message}${cause}`);
       return {
         jsonrpc: '2.0',
         id,

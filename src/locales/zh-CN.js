@@ -110,6 +110,44 @@ export default {
     run: '通过 MCP 执行',
     rawNote: '走 execute_graphql，返回原始 JSON',
     queryRequired: '请先填写查询语句',
+    sampleLabel: '示例查询：',
+    sampleRows: '查 {table} 列表',
+    sampleOne: '查 {table} 单条',
+    sampleCopied: '{label} 已复制',
+    copyArgs: '复制参数',
+    toolSampleTitle: '调用示例',
+    toolSampleHint: '参数是 JSON 形态，点「复制参数」直接贴给 AI 客户端',
+  },
+
+  guide: {
+    open: '使用向导',
+    title: '使用向导',
+    intro: '四步把任意数据库接到 AI：连接 → 配权限 → 验证 → 接入。跟着步骤走，每步都能直达对应页面。',
+    close: '关闭向导',
+    reopenHint: '关闭后可点右下角「使用向导」或顶栏按钮再次打开',
+    tip: '注意：admin 是平台保留角色，不受限制规则约束；MCP 不透传用户标识，行过滤只在 HTTP 调用下生效。',
+    steps: {
+      connect: {
+        title: '连接数据库',
+        desc: '到「数据库连接」填连接名、类型和连接信息，点「测试连接」，通过后点「启动」拉起 GraphJin。没有现成的库可以先回欢迎页点「一键演示」。',
+        go: '去连接数据库',
+      },
+      permissions: {
+        title: '配置权限',
+        desc: '到「权限矩阵」按库配数据源访问档位（读 / 写 / 删、owner 列），再给角色配读规则（行过滤、列管控）。点「应用到 GraphJin」先看 diff，写入前会自动存快照。',
+        go: '去配置权限',
+      },
+      verify: {
+        title: '验证生效',
+        desc: '到「MCP Client」逐库探活、跑示例查询；换个受限角色再查一次，查不到或行数变少才是权限真的生效。',
+        go: '去验证',
+      },
+      connectAi: {
+        title: '接入 AI',
+        desc: '到「接入 AI」把 mcpServers 配置复制给 Claude Desktop、Claude Code 或 Cursor，回来点「自检」确认工具可用。',
+        go: '去接入 AI',
+      },
+    },
   },
 
   welcome: {
@@ -120,6 +158,7 @@ export default {
     tryDemo: '一键体验演示',
     tryDemoHint: '10 秒生成示例项目（orders / customers + analyst 只读角色），不碰你自己的数据库',
     goConnect: '接入 AI 客户端',
+    openGuide: '使用向导',
     steps: '三步走完',
     stepsHint: '点任意一步跳转',
     step1: '连接数据库',

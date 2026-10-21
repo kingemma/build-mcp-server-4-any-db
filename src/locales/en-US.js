@@ -110,6 +110,44 @@ export default {
     run: 'Run via MCP',
     rawNote: 'Runs execute_graphql and shows the raw JSON',
     queryRequired: 'Enter a query first',
+    sampleLabel: 'Sample queries:',
+    sampleRows: 'List {table}',
+    sampleOne: 'Fetch one {table}',
+    sampleCopied: '{label} copied',
+    copyArgs: 'Copy arguments',
+    toolSampleTitle: 'Call examples',
+    toolSampleHint: 'Arguments are JSON — copy and paste them straight into your AI client',
+  },
+
+  guide: {
+    open: 'Usage wizard',
+    title: 'Usage wizard',
+    intro: 'Four steps to wire any database into your AI: connect → set permissions → verify → plug in. Each step jumps straight to the right page.',
+    close: 'Close wizard',
+    reopenHint: 'Reopen anytime from the "Usage wizard" button in the bottom-right or the top bar',
+    tip: 'Note: admin is the reserved role and never gets restriction rules; MCP does not forward user identity, so row filters only apply to HTTP calls.',
+    steps: {
+      connect: {
+        title: 'Connect a database',
+        desc: 'On "Connections", fill in the name, type and connection info, hit "Test connection", then "Start" to launch GraphJin. No database at hand? Run the demo from the welcome page first.',
+        go: 'Go to connections',
+      },
+      permissions: {
+        title: 'Set permissions',
+        desc: 'On "Permission Matrix", set the source-level read / write / delete tiers (and owner column) per database, then add per-role read rules (row filters, column control). "Apply to GraphJin" shows a diff first and snapshots before writing.',
+        go: 'Go to permissions',
+      },
+      verify: {
+        title: 'Verify it works',
+        desc: 'On "MCP Client", probe every database and run a sample query; then retry as a restricted role — missing rows or tables are the proof that permissions bite.',
+        go: 'Go verify',
+      },
+      connectAi: {
+        title: 'Plug in your AI',
+        desc: 'On "Connect AI", copy the mcpServers config into Claude Desktop, Claude Code or Cursor, then run the self-check to confirm the tools respond.',
+        go: 'Go connect AI',
+      },
+    },
   },
 
   welcome: {
@@ -121,6 +159,7 @@ export default {
     tryDemoHint:
       'Builds a sample project (orders / customers + a read-only analyst role) in 10 seconds, without touching your own databases',
     goConnect: 'Connect an AI client',
+    openGuide: 'Usage wizard',
     steps: 'Three steps',
     stepsHint: 'Click any step to jump',
     step1: 'Connect a database',

@@ -94,6 +94,8 @@ class McpClient {
     this.requestId = 0;
     /** 请求串行队列：重连期间并发请求会互相覆盖 session，必须排队 */
     this.requestQueue = Promise.resolve();
+    /** 进行中的握手；并发握手会互相覆盖会话号，必须去重 */
+    this.handshaking = null;
   }
 
   get endpoint() {
@@ -145,27 +147,74 @@ class McpClient {
   }
 
   /**
-   * 服务重启后旧 Mcp-Session-Id 会返回 404 session not found。
-   * 这种情况清掉会话重新握手一次，其它错误原样抛出。
+   * 会话失效（404 session not found）或连接被对端关掉（fetch failed：空闲后
+   * keep-alive 套接字被回收、服务重启瞬间拒连）都是瞬时的，重新握手再试一次
+   * 就能好；其它错误原样抛出。
    *
    * @param {Error} error
-   * @returns {Promise<boolean>} 是否已重连
+   * @returns {boolean} 是否值得重连重试
    */
-  async #reconnectIfStale(error) {
-    const stale =
-      error instanceof McpProtocolError &&
-      error.code === 404 &&
-      /session not found/i.test(error.message);
-    if (!stale) return false;
-    this.sessionId = null;
-    await this.connect();
-    return true;
+  #isTransient(error) {
+    if (error instanceof McpProtocolError && error.code === 404) {
+      return /session not found/i.test(error.message);
+    }
+    return error instanceof TypeError && /fetch failed/i.test(error.message);
   }
 
   /**
-   * 发请求；session 失效时重连并重试一次。
+   * 握手：initialize 拿会话号，再发 notifications/initialized 才进入就绪态。
    *
-   * 串行执行：两个并发请求同时拿到 404 时，各自 initialize 会互相覆盖
+   * 并发握手必须去重：两个 initialize 交替执行时，后一个的会话号会盖掉前一个，
+   * notifications/initialized 与 tools/call 就落到不同会话上，服务端报
+   * "method xxx is invalid during session initialization"（实测）。
+   *
+   * @returns {Promise<*>} initialize 的 result
+   */
+  async #ensureSession() {
+    if (this.sessionId) return null;
+    if (!this.handshaking) {
+      this.handshaking = this.#shakeHands().finally(() => {
+        this.handshaking = null;
+      });
+    }
+    return this.handshaking;
+  }
+
+  async #shakeHands() {
+    try {
+      const result = await this.#send({
+        jsonrpc: '2.0',
+        id: this.#nextId(),
+        method: 'initialize',
+        params: {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: this.clientInfo,
+        },
+      });
+      await this.#send({
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
+        params: {},
+      });
+      return result;
+    } catch (error) {
+      // 半初始化的会话会毒化之后所有请求：失败就清掉会话号，下次重新握手
+      this.sessionId = null;
+      throw error;
+    }
+  }
+
+  /** 完成握手，之后才能调用业务方法 */
+  async connect() {
+    this.sessionId = null;
+    return this.#ensureSession();
+  }
+
+  /**
+   * 发请求；会话失效或连接被对端关掉时重连并重试一次。
+   *
+   * 串行执行：两个并发请求同时失败时，各自 initialize 会互相覆盖
    * Mcp-Session-Id，后重试的那个必然再失败（实测在"停止→启动"后必现）。
    *
    * @param {() => Object} buildPayload 每次调用都重建载荷，重试时 id 不会重复
@@ -173,10 +222,13 @@ class McpClient {
    */
   async #sendWithRecovery(buildPayload) {
     const run = async () => {
+      // 没有会话（刚建客户端、上次握手失败）先补一次握手，请求才能自愈
+      if (!this.sessionId) await this.#ensureSession();
       try {
         return await this.#send(buildPayload());
       } catch (error) {
-        if (!(await this.#reconnectIfStale(error))) throw error;
+        if (!this.#isTransient(error)) throw error;
+        await this.connect();
         return this.#send(buildPayload());
       }
     };
@@ -187,26 +239,6 @@ class McpClient {
       () => undefined
     );
     return task;
-  }
-
-  /** 完成握手，之后才能调用业务方法 */
-  async connect() {
-    const result = await this.#send({
-      jsonrpc: '2.0',
-      id: this.#nextId(),
-      method: 'initialize',
-      params: {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: this.clientInfo,
-      },
-    });
-    await this.#send({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-      params: {},
-    });
-    return result;
   }
 
   /** @returns {Promise<Array<Object>>} 当前角色可见的工具列表 */

@@ -86,6 +86,7 @@ onMounted(() => {
             {{ t('welcome.tryDemo') }}
           </el-button>
           <el-button @click="go('/connect')">{{ t('welcome.goConnect') }}</el-button>
+          <el-button @click="store.openGuide()">{{ t('welcome.openGuide') }}</el-button>
         </div>
         <p class="hero__hint">{{ t('welcome.tryDemoHint') }}</p>
       </div>
@@ -181,10 +182,17 @@ onMounted(() => {
   gap: var(--gutter);
 }
 
+.hero
+{
+  padding: 10px;
+}
+
+
 .hero__body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+
 }
 
 .hero__title {
