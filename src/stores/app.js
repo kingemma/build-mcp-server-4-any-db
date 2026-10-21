@@ -725,6 +725,39 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
+     * 一键演示：建示例项目并启动。
+     *
+     * 不碰用户自己的库：示例表 + analyst 只读角色（行过滤），直接就能看到权限生效。
+     *
+     * @returns {Promise<Object>} demo.bootstrap 的结果
+     */
+    async bootstrapDemo() {
+      this.isBusy = true;
+      try {
+        const report = await rpc('demo.bootstrap', {});
+        this.status = report?.status ?? null;
+        await Promise.all([
+          this.loadConnectedDatabases(),
+          this.loadSchema(),
+          this.loadConnections(),
+        ]);
+        return report;
+      } finally {
+        this.isBusy = false;
+      }
+    },
+
+    /**
+     * 一键体检：后端 / 二进制 / 实例 / 库 / 角色的红绿灯。
+     *
+     * @returns {Promise<Array<{id: string, status: 'ok'|'fail'|'skip', detail: string}>>}
+     */
+    async runDiagnostics() {
+      const data = await rpc('diagnostics.run', {});
+      return data?.checks ?? [];
+    },
+
+    /**
      * 拉内置类型与自定义模板。类型元数据在后端，避免前端硬编码一份会漂移的白名单。
      */
     async loadDbTypes() {

@@ -27,9 +27,12 @@ const SHOT_DIR = (process.argv.find((arg) => arg.startsWith('--shots=')) ?? '').
 
 /** 页面 key 与两种语言下的顶栏标题，用来判断页面渲染完成 */
 const PAGE_SHOTS = [
+  { route: 'welcome', title: { 'zh-CN': '欢迎', 'en-US': 'Welcome' } },
   { route: 'status', title: { 'zh-CN': '运行状态', 'en-US': 'Runtime' } },
   { route: 'connections', title: { 'zh-CN': '数据库连接', 'en-US': 'Connections' } },
   { route: 'schema', title: { 'zh-CN': 'Schema 浏览器', 'en-US': 'Schema Browser' } },
+  { route: 'mcp', title: { 'zh-CN': 'MCP Client', 'en-US': 'MCP Client' } },
+  { route: 'connect', title: { 'zh-CN': '接入 AI', 'en-US': 'Connect AI' } },
   { route: 'permissions', title: { 'zh-CN': '权限矩阵', 'en-US': 'Permission Matrix' } },
   { route: 'users', title: { 'zh-CN': '用户与组织', 'en-US': 'Users & Orgs' } },
   { route: 'policy', title: { 'zh-CN': '策略预览', 'en-US': 'Policy Preview' } },
@@ -806,6 +809,50 @@ async function main() {
     });
     record('切换库后只显示该库的表', true);
 
+    // MCP Client：按 MCP 协议逐个库探活，再跑一条真实查询
+    await cdp.evaluate(`location.hash = '#/mcp'; 'ok'`);
+    await waitFor('MCP Client 页面渲染', async () =>
+      (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
+      'MCP Client'
+    );
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.includes('测试全部库'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('库探活出结果', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.probes tbody tr').length`)) >= 2
+    );
+    const probeText = await cdp.evaluate(`document.querySelector('.probes').textContent`);
+    record(
+      'MCP Client 逐个库探活通过',
+      probeText.includes('可用') && !probeText.includes('失败'),
+      probeText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    await cdp.evaluate(`(() => {
+      const box = document.querySelector('.query textarea');
+      if (!box) return 'missing';
+      box.value = '{ events(limit: 1) { id kind } }';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.includes('通过 MCP 执行'));
+      if (!button) return 'no-button';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('MCP 查询返回结果', async () =>
+      (await cdp.evaluate(`document.querySelector('.result')?.textContent ?? ''`)).includes('"data"')
+    );
+    const queryText = await cdp.evaluate(`document.querySelector('.result').textContent`);
+    record(
+      'MCP 查询返回数据',
+      queryText.includes('"events"'),
+      queryText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
     const appShot = path.join(workDir, 'schema-app.png');
     await cdp.screenshot(appShot);
 
@@ -895,6 +942,64 @@ async function main() {
       '删除连接后 Schema 随之重置',
       remainingDatabases.length === 1 && remainingDatabases[0].includes('app'),
       remainingDatabases.join(', ')
+    );
+
+    // 欢迎页 → 接入向导 → 一键演示 → 一键体检（新用户冷启动路径）
+    await cdp.evaluate(`location.hash = '#/'; 'ok'`);
+    await waitFor('欢迎页渲染', async () =>
+      (await cdp.evaluate(`document.querySelector('.hero__title')?.textContent ?? ''`)).includes('MCP')
+    );
+    const stepsText = await cdp.evaluate(`document.querySelector('.steps')?.textContent ?? ''`);
+    record(
+      '欢迎页三步状态渲染',
+      stepsText.includes('已完成') && stepsText.includes('待完成'),
+      stepsText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    await cdp.evaluate(`location.hash = '#/connect'; 'ok'`);
+    await waitFor('接入向导渲染', async () =>
+      (await cdp.evaluate(`document.querySelector('.code')?.textContent.length ?? 0`)) > 20
+    );
+    const connectText = await cdp.evaluate(`document.querySelector('.stack')?.textContent ?? ''`);
+    record(
+      '接入向导给出可复制配置',
+      connectText.includes('Claude') && connectText.includes('mcpServers'),
+      connectText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    await cdp.evaluate(`location.hash = '#/'; 'ok'`);
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.hero__actions button')]
+        .find((item) => item.textContent.includes('一键体验演示'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('演示项目启动', async () =>
+      (await cdp.evaluate(`document.querySelector('.facts')?.textContent ?? ''`)).includes('orders')
+    );
+    const demoText = await cdp.evaluate(`document.querySelector('.facts').textContent`);
+    record(
+      '一键演示建好示例项目',
+      demoText.includes('analyst') && demoText.includes('orders'),
+      demoText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.includes('开始体检'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('体检出结果', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.checks .check').length`)) >= 5
+    );
+    const checkText = await cdp.evaluate(`document.querySelector('.checks').textContent`);
+    record(
+      '一键体检逐项出结果',
+      checkText.includes('正常') && !checkText.includes('异常'),
+      checkText.replace(/\s+/g, ' ').slice(0, 120)
     );
 
     console.log(`\n截图：${connectionsShot}`);

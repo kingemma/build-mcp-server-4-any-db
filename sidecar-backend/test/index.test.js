@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createRouter, startHttpServer } = require('../src/index');
+const { createRouter, startHttpServer, probeDatabases } = require('../src/index');
 const { ORIGIN_START, STATUS_CONNECTED, ConnectionStore } = require('../src/connections');
 const { UserStore } = require('../src/users');
 
@@ -335,4 +335,101 @@ test('connections.remove 删掉最后一个库时停止服务', async () => {
 
   assert.strictEqual(response.result.action, 'stopped');
   assert.deepStrictEqual(calls, { start: 0, stop: 1 });
+});
+
+/** 造 query_catalog 的卡片：表 + 每列的 id 形如 column:<db>:main.<table>.<column> */
+function catalogOf(database, tables) {
+  const cards = [];
+  for (const [table, columns] of Object.entries(tables)) {
+    cards.push({ kind: 'table', name: table });
+    for (const column of columns) {
+      cards.push({ kind: 'column', id: `column:${database}:main.${table}.${column}`, name: table });
+    }
+  }
+  return { cards };
+}
+
+/**
+ * 假 service：只实现 mcp.probe 用到的两个调用。
+ * execute_graphql 走 query 回调，便于模拟成功 / 报错。
+ */
+function fakeService({ catalogs, query }) {
+  return {
+    readConfig: async () => ({ sources: Object.keys(catalogs).map((name) => ({ name })) }),
+    mcp: {
+      callTool: async (name, args) => {
+        if (name === 'query_catalog') {
+          const catalog = catalogs[args.database];
+          if (catalog instanceof Error) throw catalog;
+          return catalog;
+        }
+        return query(args.query);
+      },
+    },
+  };
+}
+
+test('probeDatabases 对每个库跑一次真实查询', async () => {
+  const service = fakeService({
+    catalogs: {
+      app: catalogOf('app', { users: ['id', 'email'] }),
+      analytics: catalogOf('analytics', { events: ['id', 'kind'] }),
+    },
+    query: () => ({ data: { users: [] } }),
+  });
+
+  const out = await probeDatabases(service, 'admin');
+  assert.deepStrictEqual(
+    out.databases.map((row) => [row.database, row.ok, row.mode, row.table]),
+    [
+      ['app', true, 'query', 'users'],
+      ['analytics', true, 'query', 'events'],
+    ]
+  );
+});
+
+test('probeDatabases 遇到跨库重名表时只看 catalog，不误报通过', async () => {
+  const service = fakeService({
+    catalogs: {
+      app: catalogOf('app', { users: ['id'] }),
+      analytics: catalogOf('analytics', { users: ['id'] }),
+    },
+    query: () => ({ data: { users: [] } }),
+  });
+
+  const out = await probeDatabases(service, 'admin');
+  // 纯表名会落到默认库，查出来的是别人的表，所以只能算 catalog 可读
+  assert.deepStrictEqual(
+    out.databases.map((row) => [row.ok, row.mode, row.table]),
+    [
+      [true, 'catalog', null],
+      [true, 'catalog', null],
+    ]
+  );
+});
+
+test('probeDatabases 把查询报错记在该库上', async () => {
+  const service = fakeService({
+    catalogs: { app: catalogOf('app', { users: ['id'] }) },
+    query: () => ({ data: null, errors: [{ message: 'no such table' }] }),
+  });
+
+  const out = await probeDatabases(service, 'admin');
+  assert.strictEqual(out.databases[0].ok, false);
+  assert.strictEqual(out.databases[0].error, 'no such table');
+});
+
+test('probeDatabases 把 catalog 读不到记在该库上，不影响其它库', async () => {
+  const service = fakeService({
+    catalogs: {
+      app: new Error('database unreachable'),
+      analytics: catalogOf('analytics', { events: ['id'] }),
+    },
+    query: () => ({ data: { events: [] } }),
+  });
+
+  const out = await probeDatabases(service, 'admin');
+  assert.strictEqual(out.databases[0].ok, false);
+  assert.match(out.databases[0].error, /unreachable/);
+  assert.strictEqual(out.databases[1].ok, true);
 });

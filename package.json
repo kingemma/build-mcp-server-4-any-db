@@ -16,6 +16,7 @@
     "preview": "vite preview",
     "prepare:binaries": "node scripts/prepare-binaries.js",
     "fetch:binaries": "node scripts/fetch-binaries.js",
+    "check:binaries": "node scripts/check-binaries.js",
     "smoke:binaries": "node scripts/smoke-binaries.js",
     "demo:db": "node scripts/create-demo-db.js",
     "demo:orders": "node scripts/seed-demo-orders.js",
@@ -26,9 +27,9 @@
     "verify:ui": "node scripts/verify-ui.js",
     "electron:dev": "electron .",
     "electron:serve": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb"
+    "dist:win": "npm run check:binaries && npm run build && electron-builder --win nsis",
+    "dist:mac": "npm run check:binaries && npm run build && electron-builder --mac dmg zip",
+    "dist:linux": "npm run check:binaries && npm run build && electron-builder --linux AppImage deb"
   },
   "build": {
     "appId": "com.mcpbuilder.desktop",

@@ -13,6 +13,7 @@ const {
   upsertSourcesBlock,
   replaceRolesBlock,
   removeProjectSource,
+  readSourceConnections,
 } = require('../src/project');
 
 const BASE = { appName: 'Demo', port: 8080, sources: [] };
@@ -200,11 +201,9 @@ default_block: false
   assert.match(merged, /roles:\n {4}- name: admin/);
 });
 
-test('mergeSourceBlock: flow 风格的 sources 段直接拒绝', () => {
-  assert.throws(
-    () => mergeSourceBlock('sources: [{ name: app }]\n', { app: { type: 'sqlite' } }),
-    /flow 风格/
-  );
+test('mergeSourceBlock: 空 flow 数组按空块处理', () => {
+  const next = mergeSourceBlock('sources: []\n', { app: { type: 'sqlite', path: 'app.db' } });
+  assert.match(next, /sources:\n {2}- name: "app"/);
 });
 
 test('mergeSourceBlock: sources 段含 merge key 时拒绝合并', () => {
@@ -305,6 +304,38 @@ test('removeProjectSource: 删掉默认库时把 default 交给剩下的第一�
   removeProjectSource(file, 'app');
   // 少了默认库，GraphJin 就不知道该用哪个源，必须就近补上
   assert.match(fs.readFileSync(file, 'utf8'), /- name: "other"\n {4}default: true/);
+});
+
+test('mergeSourceBlock: 单行 flow 数组归一化成块格式后仍可读回', () => {
+  const text = [
+    'app_name: Demo',
+    'sources: [{ name: "app", type: "sqlite", path: "app.db" }]',
+    'system:',
+    '  x: 1',
+    '',
+  ].join('\n');
+
+  const next = mergeSourceBlock(text, {
+    app: { type: 'sqlite', path: 'app.db' },
+    extra: { type: 'sqlite', path: 'extra.db' },
+  });
+
+  assert.doesNotMatch(next, /sources: \[/);
+  assert.match(next, /sources:\n {2}- name: "app"/);
+  assert.match(next, /- name: "extra"/);
+  // 兄弟段原样保留
+  assert.match(next, /system:\n {2}x: 1/);
+  assert.deepStrictEqual(Object.keys(readSourceConnections(next)), ['app', 'extra']);
+});
+
+test('mergeSourceBlock: flow 条目里带嵌套结构时明确拒绝', () => {
+  const text = 'app_name: Demo\nsources: [{ name: "app", type: "sqlite", access: { read: true } }]\n';
+
+  // access 嵌套在文本级没法安全重排，宁可直接报错也不丢权限
+  assert.throws(
+    () => mergeSourceBlock(text, { app: { type: 'sqlite', path: 'app.db' } }),
+    /嵌套结构/
+  );
 });
 
 test('removeProjectSource: 库里没有这个名字时返回 false 且不改文件', () => {

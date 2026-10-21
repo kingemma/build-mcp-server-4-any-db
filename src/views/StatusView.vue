@@ -12,6 +12,9 @@ const isLoadingTools = ref(false);
 
 const endpoint = computed(() => store.clientConfig?.endpoint ?? '');
 
+/** legacy 配置迁移报告：只有项目是从 databases: 迁过来的才有 */
+const migration = computed(() => store.status?.migration ?? null);
+
 async function loadTools() {
   if (!store.isRunning) return;
   isLoadingTools.value = true;
@@ -97,6 +100,58 @@ onMounted(refreshAll);
           <RouterLink to="/connections">
             <el-button type="primary">{{ t('status.goConnections') }}</el-button>
           </RouterLink>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="migration" class="panel">
+      <div class="panel__head">
+        <span class="panel__title">{{ t('status.migration') }}</span>
+        <span class="pill" :class="migration.ok ? 'pill--on' : 'pill--warn'">
+          <span class="dot" />
+          {{ migration.ok ? t('status.migrationDone') : t('status.migrationFailed') }}
+        </span>
+      </div>
+      <div class="panel__body">
+        <p v-if="!migration.ok" class="alert">{{ migration.reason }}</p>
+        <div class="facts">
+          <div class="fact">
+            <span class="eyebrow">{{ t('status.migrationSources') }}</span>
+            <span class="fact__value">{{ (migration.sources ?? []).join(', ') || t('common.dash') }}</span>
+          </div>
+          <div class="fact">
+            <span class="eyebrow">{{ t('status.migrationConflicts') }}</span>
+            <span class="fact__value">{{ migration.conflicts?.length ?? 0 }}</span>
+          </div>
+        </div>
+
+        <table v-if="migration.conflicts?.length" class="conflicts">
+          <thead>
+            <tr>
+              <th>{{ t('status.migrationTarget') }}</th>
+              <th>{{ t('status.migrationDetail') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="conflict in migration.conflicts"
+              :key="`${conflict.database}-${conflict.role}-${conflict.table}-${conflict.reason}`"
+            >
+              <td class="mono">{{ conflict.database }} · {{ conflict.table }}</td>
+              <td>
+                {{ conflict.role }} · {{ conflict.reason }}
+                <span v-if="conflict.detail" class="conflict__detail">{{ conflict.detail }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div v-if="migration.backup" class="backup">
+          <span class="eyebrow">{{ t('status.migrationBackup') }}</span>
+          <code class="backup__path">{{ migration.backup }}</code>
+          <el-button size="small" @click="copy(migration.backup, t('status.migrationBackup'))">
+            {{ t('common.copy') }}
+          </el-button>
         </div>
       </div>
     </section>
@@ -295,6 +350,54 @@ onMounted(refreshAll);
   margin: 14px 0 0;
   font-size: var(--fs-note);
   color: var(--text-dim);
+}
+
+.conflicts {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+}
+
+.conflicts th {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.conflicts td {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  vertical-align: top;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.conflict__detail {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-note);
+  color: var(--text-dim);
+}
+
+.backup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.backup__path {
+  flex: 1;
+  min-width: 220px;
+  font-size: 12px;
+  color: var(--text-faint);
+  word-break: break-all;
 }
 
 code {

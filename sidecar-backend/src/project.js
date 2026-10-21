@@ -384,7 +384,8 @@ function mergeSourceBlock(text, sources) {
     : Object.entries(sources ?? {});
   if (provided.length === 0) return text;
 
-  const lines = text.split('\n');
+  // 手写的单行 flow 先归一化成块风格，后面只面对一种格式
+  const lines = normalizeFlowSources(text).split('\n');
   const block = findSourcesBlock(lines);
 
   for (const line of lines.slice(block.header, block.end)) {
@@ -478,7 +479,7 @@ function replaceRolesBlock(text, names) {
  */
 function removeProjectSource(file, name) {
   if (!fs.existsSync(file)) return false;
-  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  const lines = normalizeFlowSources(fs.readFileSync(file, 'utf8')).split('\n');
   const block = findSourcesBlock(lines);
   const entries = splitSourceEntries(lines, block);
   const target = entries.find((entry) => entry.name === name);
@@ -565,7 +566,8 @@ function ensureGatewayConfig(file) {
  * @returns {Object} { name: { type, host, port, dbname, user, password, path, schema, connection_string, default } }
  */
 function readSourceConnections(text) {
-  const lines = text.split('\n');
+  // 单行 flow 与块风格读同一份结果，避免两条解析路径
+  const lines = normalizeFlowSources(text).split('\n');
   const block = findSourcesBlock(lines);
   const entries = splitSourceEntries(lines, block);
   const result = {};
@@ -601,6 +603,107 @@ function readSourceConnections(text) {
   }
 
   return result;
+}
+
+/**
+ * 按顶层分隔符切分，跳过引号内与嵌套括号内的分隔符。
+ *
+ * @param {string} text
+ * @param {string} separator 单字符（, 或 :）
+ * @returns {string[]}
+ */
+function splitTopLevel(text, separator) {
+  const parts = [];
+  let current = '';
+  let depth = 0;
+  let quote = null;
+
+  for (const char of text) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '{' || char === '[') depth += 1;
+    if (char === '}' || char === ']') depth -= 1;
+    if (char === separator && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part !== '');
+}
+
+/**
+ * 解析单行 flow 数组 `[{ name: app, type: sqlite }]`。
+ *
+ * 只支持扁平对象：值必须是标量或带引号的字符串。`access` 这类嵌套结构在文本级
+ * 重排会丢权限，遇到直接报错，让用户改回块格式。
+ *
+ * @param {string} inline `sources:` 冒号后的内容
+ * @returns {Array<Object>}
+ */
+function parseFlowSources(inline) {
+  const text = inline.trim();
+  if (!text.startsWith('[') || !text.endsWith(']')) {
+    throw new Error('dev.yml 的 sources 必须是数组，平台无法安全合并');
+  }
+  const body = text.slice(1, -1).trim();
+  if (body === '') return [];
+
+  return splitTopLevel(body, ',').map((raw) => {
+    const item = raw.replace(/^\{/, '').replace(/\}$/, '').trim();
+    const fields = {};
+    for (const pair of splitTopLevel(item, ',')) {
+      const colon = pair.indexOf(':');
+      if (colon < 0) throw new Error(`sources 里的 flow 条目无法解析：${pair}`);
+      const key = pair.slice(0, colon).trim().replace(/^["']|["']$/g, '');
+      const value = pair.slice(colon + 1).trim();
+      if (value.startsWith('{') || value.startsWith('[')) {
+        throw new Error(
+          `dev.yml 的 sources 里 ${key} 是嵌套结构，平台无法安全合并，请改成块风格`
+        );
+      }
+      fields[key] = parseScalar(value);
+    }
+    return fields;
+  });
+}
+
+/**
+ * 把 `sources: [{...}]` 归一化成块格式，其余行原样保留。
+ *
+ * 归一化后 mergeSourceBlock / readSourceConnections 都只面对块风格，避免两套路径。
+ *
+ * @param {string} text dev.yml 内容
+ * @returns {string}
+ */
+function normalizeFlowSources(text) {
+  const lines = text.split('\n');
+  const header = lines.findIndex((line) => /^sources\s*:/.test(line));
+  if (header < 0) return text;
+  const inline = lines[header].slice(lines[header].indexOf(':') + 1).trim();
+  if (inline === '') return text;
+  // 空 flow 数组要还原成空块头部，否则条目会跟在 `sources: []` 后面变成非法 YAML
+  if (inline === '[]') {
+    return [...lines.slice(0, header), 'sources:', ...lines.slice(header + 1)].join('\n');
+  }
+
+  const rendered = ['sources:'];
+  for (const item of parseFlowSources(inline)) {
+    const { name, ...conn } = item;
+    if (!name) throw new Error('dev.yml 的 sources 有缺少 name 的条目，平台无法安全合并');
+    rendered.push(...renderSource(name, conn, 2).split('\n'));
+  }
+  return [...lines.slice(0, header), ...rendered, ...lines.slice(header + 1)].join('\n');
 }
 
 /**

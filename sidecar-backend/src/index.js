@@ -23,7 +23,9 @@ const {
 const { GraphJinService } = require('./graphjin');
 const { probeConnection } = require('./connection-probe');
 const { discoverSchema, listTables } = require('./schema');
-const { GraphJinSupervisor } = require('./supervisor');
+const { GraphJinSupervisor, resolveGraphJinBinary } = require('./supervisor');
+const { pickFreePort } = require('./graphjin-process');
+const { createDemoProject } = require('./demo');
 const {
   buildSourceAccessConfig,
   migrateLegacyRoleTables,
@@ -275,6 +277,163 @@ function sameProjectDir(left, right) {
   const normalize = (value) =>
     process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
   return normalize(left) === normalize(right);
+}
+
+/**
+ * MCP 调用使用的角色：端点只认 X-User-Role 头，配置类操作需要 admin。
+ *
+ * @param {Object} params RPC 参数
+ * @returns {string}
+ */
+function requireRole(params) {
+  const role = params?.role;
+  if (role === undefined || role === null || role === '') return 'admin';
+  if (typeof role !== 'string') throw RpcError.invalidParams('role 必须是字符串');
+  return role;
+}
+
+/** 表名 / 列名要能直接拼进 GraphQL 选择集 */
+const GRAPHQL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * 从 catalog 的 column 卡片里取出「表 → 列」。
+ *
+ * 卡片 id 形如 `column:analytics:main.events.id`，最后两段才是表名与列名。
+ *
+ * @param {Array<Object>} cards query_catalog 的 cards
+ * @returns {Map<string, string[]>}
+ */
+function columnsFromCards(cards) {
+  const columnsByTable = new Map();
+  for (const card of cards) {
+    if (card?.kind !== 'column' || typeof card.id !== 'string') continue;
+    const parts = card.id.split(':').pop().split('.');
+    const column = parts.pop();
+    const table = parts.pop();
+    if (!table || !column) continue;
+    if (!columnsByTable.has(table)) columnsByTable.set(table, []);
+    columnsByTable.get(table).push(column);
+  }
+  return columnsByTable;
+}
+
+/**
+ * 逐个库探活：先读 catalog，再用该库独有的第一张表跑一次最小查询。
+ *
+ * 表名跨库重名时，execute_graphql 的纯表名会落到默认库（实测：两库都有 users
+ * 时查询命中的是默认库那张），所以重名表不拿来验证，只保留 catalog 可读的结论，
+ * 免得把「另一个库的表」当成这个库通过。
+ *
+ * @param {Object} service GraphJinService
+ * @param {string} role 以哪个角色调用
+ * @returns {Promise<Object>} { role, databases: Array<Object> }
+ */
+async function probeDatabases(service, role) {
+  const config = await service.readConfig('sources');
+  const names = (config?.sources ?? []).map((source) => source?.name).filter(Boolean);
+
+  const entries = [];
+  for (const database of names) {
+    const started = Date.now();
+    try {
+      const catalog = await service.mcp.callTool('query_catalog', { database });
+      const cards = Array.isArray(catalog?.cards) ? catalog.cards : [];
+      const tables = [...new Set(cards.filter((c) => c.kind === 'table').map((c) => c.name))];
+      entries.push({
+        database,
+        tables,
+        columnsByTable: columnsFromCards(cards),
+        catalogMs: Date.now() - started,
+      });
+    } catch (error) {
+      entries.push({ database, error: error.message, catalogMs: Date.now() - started });
+    }
+  }
+
+  return { role, databases: await verifyEntries(service, entries) };
+}
+
+/** 每库结果的默认形状，字段固定，前端表格不用判空 */
+function emptyProbe(database, elapsedMs) {
+  return {
+    database,
+    ok: false,
+    mode: 'catalog',
+    tables: 0,
+    table: null,
+    column: null,
+    rows: null,
+    elapsedMs: elapsedMs ?? 0,
+    error: null,
+  };
+}
+
+/**
+ * 把 catalog 结果变成「每个库能不能真的查出数据」。
+ *
+ * @param {Object} service GraphJinService
+ * @param {Array<Object>} entries 每库的 tables / columnsByTable / error
+ * @returns {Promise<Array<Object>>}
+ */
+async function verifyEntries(service, entries) {
+  const counts = new Map();
+  for (const entry of entries) {
+    for (const table of entry.tables ?? []) counts.set(table, (counts.get(table) ?? 0) + 1);
+  }
+
+  const results = [];
+  for (const entry of entries) {
+    if (entry.error) {
+      results.push({ ...emptyProbe(entry.database, entry.catalogMs), error: entry.error });
+      continue;
+    }
+    const tables = entry.tables ?? [];
+    const sample = tables.find((table) => {
+      if (!GRAPHQL_NAME.test(table) || counts.get(table) !== 1) return false;
+      return (entry.columnsByTable?.get(table) ?? []).some((column) => GRAPHQL_NAME.test(column));
+    });
+
+    // 没有能唯一定位的表：catalog 读到了就算通过，但标明没跑查询
+    if (!sample) {
+      results.push({
+        ...emptyProbe(entry.database, entry.catalogMs),
+        ok: true,
+        mode: 'catalog',
+        tables: tables.length,
+      });
+      continue;
+    }
+
+    const column = entry.columnsByTable.get(sample).find((name) => GRAPHQL_NAME.test(name));
+    const started = Date.now();
+    try {
+      const result = await service.mcp.callTool('execute_graphql', {
+        query: `{ ${sample}(limit: 1) { ${column} } }`,
+      });
+      const errors = Array.isArray(result?.errors) ? result.errors : [];
+      if (errors.length > 0) throw new Error(errors[0]?.message ?? '查询返回错误');
+      const rows = Array.isArray(result?.data?.[sample]) ? result.data[sample].length : 0;
+      results.push({
+        ...emptyProbe(entry.database, Date.now() - started),
+        ok: true,
+        mode: 'query',
+        tables: tables.length,
+        table: sample,
+        column,
+        rows,
+      });
+    } catch (error) {
+      results.push({
+        ...emptyProbe(entry.database, Date.now() - started),
+        mode: 'query',
+        tables: tables.length,
+        table: sample,
+        column,
+        error: error.message,
+      });
+    }
+  }
+  return results;
 }
 
 /**
@@ -550,6 +709,107 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
     .register('graphjin.tools', async (params) => {
       const service = await getService(requireBaseUrl(params));
       return service.listTools();
+    })
+    // 内置 MCP 客户端：按 MCP 协议打当前实例，用来验证「配置里的库」真的可用
+    .register('mcp.tools', async (params) => {
+      const service = await getService(requireBaseUrl(params), requireRole(params));
+      const tools = await service.listTools();
+      return tools.map(({ name, description }) => ({ name, description: description ?? '' }));
+    })
+    .register('mcp.query', async (params) => {
+      const query = params?.query;
+      if (typeof query !== 'string' || query.trim() === '') {
+        throw RpcError.invalidParams('query 不能为空');
+      }
+      const role = requireRole(params);
+      const service = await getService(requireBaseUrl(params), role);
+      const started = Date.now();
+      // MCP 的 execute_graphql 不透传 X-User-Code：只验证角色级规则，行过滤不生效
+      const result = await service.mcp.callTool('execute_graphql', {
+        query,
+        ...(params?.variables && typeof params.variables === 'object'
+          ? { variables: params.variables }
+          : {}),
+      });
+      const errors = Array.isArray(result?.errors) ? result.errors : [];
+      return {
+        ok: errors.length === 0,
+        role,
+        elapsedMs: Date.now() - started,
+        result,
+      };
+    })
+    .register('mcp.probe', async (params) => {
+      const role = requireRole(params);
+      const service = await getService(requireBaseUrl(params), role);
+      return probeDatabases(service, role);
+    })
+    // 一键演示：示例库 + 预配只读角色，让用户不必准备环境就能看到权限生效
+    .register('demo.bootstrap', async (params) => {
+      const dataDir = path.dirname(dataFile('mcp-builder.db'));
+      const projectDir = path.resolve(
+        typeof params?.projectDir === 'string' && params.projectDir
+          ? params.projectDir
+          : path.join(dataDir, 'projects', 'demo')
+      );
+      // 一个后端只托管一个实例，切到演示项目前先停掉旧的
+      await services.stop();
+      const report = createDemoProject({ dir: projectDir, port: await pickFreePort() });
+      const status = await startService({ projectDir });
+      // 记录落盘：演示项目也要出现在「已保存连接」里，否则用户找不到入口
+      remember('demo', { type: 'sqlite', path: 'orders.db' }, {
+        projectDir,
+        appName: 'Demo Orders',
+        status: STATUS_CONNECTED,
+        origin: ORIGIN_START,
+      });
+      return { ...report, projectDir, status };
+    })
+    // 一键体检：后端 / 二进制 / 实例 / 库 / 角色逐项打红绿灯
+    .register('diagnostics.run', async () => {
+      const checks = [];
+      const add = (id, status, detail) => checks.push({ id, status, detail: detail ?? '' });
+
+      const binary = resolveGraphJinBinary();
+      add('binary', fs.existsSync(binary) ? 'ok' : 'fail', binary);
+
+      add('backend', 'ok', `pid ${process.pid} · ${path.dirname(dataFile('mcp-builder.db'))}`);
+
+      const status = services.status();
+      add(
+        'instance',
+        status.running ? 'ok' : 'fail',
+        status.running
+          ? `${status.baseUrl} · pid ${status.pid}`
+          : status.lastError ?? 'GraphJin 未启动'
+      );
+
+      if (!status.running) {
+        add('databases', 'skip', '实例未运行');
+        add('roles', 'skip', '实例未运行');
+        return { checks, generatedAt: new Date().toISOString() };
+      }
+
+      const service = await getService(status.baseUrl);
+      const probe = await probeDatabases(service, 'admin');
+      const failed = probe.databases.filter((row) => !row.ok);
+      add(
+        'databases',
+        failed.length === 0 ? 'ok' : 'fail',
+        failed.length === 0
+          ? `${probe.databases.length} 个库全部可用`
+          : failed.map((row) => `${row.database}: ${row.error}`).join('；')
+      );
+
+      try {
+        const roles = await service.readConfig('roles');
+        const names = (roles?.roles ?? []).map((role) => role?.name).filter(Boolean);
+        add('roles', names.includes('admin') ? 'ok' : 'fail', names.join(', ') || '（空）');
+      } catch (error) {
+        add('roles', 'fail', error.message);
+      }
+
+      return { checks, generatedAt: new Date().toISOString() };
     })
     .register('graphjin.stop', () => services.stop())
     .register('graphjin.status', () => services.status())
@@ -910,4 +1170,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createBackend, createRouter, startHttpServer, attachStdioTransport, emitReady };
+module.exports = {
+  createBackend,
+  createRouter,
+  startHttpServer,
+  attachStdioTransport,
+  emitReady,
+  // 探活逻辑单独导出，测试可以注入假 service，不必真起 GraphJin
+  probeDatabases,
+};
