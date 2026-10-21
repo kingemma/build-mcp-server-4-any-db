@@ -50,11 +50,12 @@
 | 一键演示 | 10 秒建示例项目并启动（orders / customers + analyst 只读角色），返回库 / 角色 / 表 / 端点，可跳到 Schema 与权限矩阵 |
 | 接入向导 | 客户端卡片（含配置文件位置）、配置 JSON 一键复制、`graphjin mcp add` 命令、自检 tools/list |
 | 自查诊断 | 二进制 / 后端 / 实例 / 库 / 角色的红绿灯结果 |
+| 使用向导 | 应用内抽屉式分步引导（连接 → 配权限 → 验证 → 接入 AI），每步可跳转对应页面；首访自动弹出，关闭写 localStorage 不再自动弹，右下角悬浮按钮与顶栏「使用向导」按钮随时再次打开 |
 | 运行状态 | 进程、端点、项目目录、重启次数、探活、停止、MCP 客户端配置复制；发生 legacy 迁移时展示迁移结果面板（成功/失败、迁移的库、冲突明细、备份文件路径可复制） |
 | 数据库连接 | 内置类型 + 自定义模板；三种录入方式；测试 / 启动 / 存模板；驱动未验证类型自动禁用测试与启动 |
 | 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除；「已连接」按当前运行实例现算（项目目录 + dev.yml 库名匹配），停止或换项目后回落为「已测试」；删除时同步从 dev.yml 摘掉该库，还有别的库则重启实例、删最后一个则停止服务 |
 | Schema 浏览器 | 顶部库选择，按库加载表 / 列 / 关系；结构与关系隔离 |
-| MCP Client | 按 MCP 协议连当前实例；「测试全部库」逐库读 catalog 再跑一次最小查询（跨库重名表降级为仅 catalog 校验），另可列工具、按角色执行 GraphQL 看原始返回 |
+| MCP Client | 按 MCP 协议连当前实例；「测试全部库」逐库读 catalog 再跑一次最小查询（跨库重名表降级为仅 catalog 校验），另可列工具、按角色执行 GraphQL 看原始返回；示例查询按当前库真实表名生成、点击填入，工具调用示例给出可复制的参数 JSON |
 | 权限矩阵 | 每个数据源一个独立标签页，角色清单、矩阵与未提交改动各自独立；角色 × 表的读规则（行过滤、列白名单 / 黑名单）；数据源级读/写/删档位、owner 列、仅管理员/全局屏蔽表；标签上有未提交改动提示；可移除本地角色 |
 | 策略回填 / 导入 | 加载时用生效策略补空格子（不覆盖本地改动）；「从生效策略导入」二次确认后覆盖 |
 | 写入历史 / 回滚 | 列出每份快照（时间、角色数、库、原因），可恢复到任意一份；回滚前自动再快照 |
@@ -72,16 +73,17 @@
 | 内容 | 位置 / 命令 |
 |:--|:--|
 | 中英文 README（介绍、截图、部署运行） | `README.md` / `README.en.md` |
+| 使用向导（从零到接入 AI 的完整走法） | `docs/GUIDE.md` |
 | 功能进度（本文件） | `docs/FEATURES.md` |
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
 | source 迁移设计与踩坑 | `docs/graphjin-source-migration.md` |
 | 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
-| 后端单测 | `cd sidecar-backend && npm test`（189 项） |
+| 后端单测 | `cd sidecar-backend && npm test`（191 项） |
 | 前端策略单测 | `npm run test:frontend`（8 项） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
 | legacy 迁移验证 | `cd sidecar-backend && npm run verify:migration`（12 项，含数据库不可达的项目） |
 | 二进制冒烟 | `npm run smoke:binaries` |
-| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（32 项：语言切换、窗口标题带项目名、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、MCP 逐库探活与查询、停止后连接状态回落、删库后 Schema 重置、本地角色删除、欢迎页 / 接入向导 / 一键演示 / 一键体检） |
+| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（42 项：语言切换、窗口标题带项目名、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、MCP 逐库探活与查询、MCP 调用示例、右下角悬浮按钮存在 / 可打开、使用向导自动弹出 / 关闭 / 再开 / 跳转、停止后连接状态回落、删库后 Schema 重置、本地角色删除、欢迎页 / 接入向导 / 一键演示 / 一键体检）；`--shots=docs/screenshots` 逐页产出 11 个页面 × 中英文截图（含使用向导打开态） |
 
 ## 未完成
 

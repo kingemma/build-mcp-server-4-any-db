@@ -2,7 +2,7 @@
 
 **Configure GraphJin visually and turn any database into an MCP server.**
 
-[中文](./README.md) · [Feature status](./docs/FEATURES.md)
+[中文](./README.md) · [Usage wizard (zh)](./docs/GUIDE.md) · [Feature status](./docs/FEATURES.md)
 
 MCP Server Build is a desktop tool: enter a database connection, and it starts GraphJin,
 discovers the schema, and writes your permissions into GraphJin's `sources` config
@@ -18,6 +18,7 @@ migration fails.
 
 ## Contents
 
+- [Usage wizard (zh)](./docs/GUIDE.md) — end-to-end walkthrough, from zero to a connected AI client
 - [Architecture](#architecture)
 - [Features](#features)
 - [Requirements](#requirements)
@@ -80,11 +81,21 @@ databases**; from there you can jump straight to the schema browser or the permi
 "Self-check" at the bottom reports the GraphJin binary, backend, running instance, database
 reachability and role configuration as red/green items.
 
+On first launch the app also opens the in-app **usage wizard** (connect → set permissions →
+verify → plug in your AI, each step jumping to the right page). Closing it stops the auto-open;
+the "Usage wizard" button in the bottom-right or the top bar brings it back anytime.
+
+![Welcome page](./docs/screenshots/en-US/welcome.png)
+
+![Usage wizard](./docs/screenshots/en-US/guide.png)
+
 ### Connect an AI client
 
 Pick Claude Desktop / Claude Code / Cursor, copy the config JSON or the `graphjin mcp add`
 command in one click, then run the self-check — it calls `tools/list` so you can see the tools
 are actually exposed.
+
+![Connect AI](./docs/screenshots/en-US/connect.png)
 
 ### Connections
 
@@ -122,11 +133,16 @@ The built-in MCP client talks to the running instance over the protocol itself
 **Test all databases** reads each source's catalog and then runs one minimal query against the
 first table unique to that database, reporting status, table count, sample table and elapsed time
 per database, with failures highlighted. The same page lists tools per role and runs hand-written
-GraphQL through `execute_graphql`, showing the raw response.
+GraphQL through `execute_graphql`, showing the raw response. Below the query box, sample queries
+generated from the active database's real table names fill the editor in one click, and the
+"Call examples" block shows copyable argument JSON for tools like `execute_graphql` — paste it
+straight into your AI client.
 
 Tables with the same name in several databases cannot be addressed by name alone (in practice the
 query lands on the default database), so those databases only get a catalog check labelled
 "catalog only" instead of a false pass.
+
+![MCP Client](./docs/screenshots/en-US/mcp.png)
 
 > MCP `execute_graphql` does not forward the user code, so row filters never apply — this page
 > verifies role-level rules only. Use the verification panel on the permission matrix page
@@ -502,7 +518,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (32 checks)
+npm run verify:ui        # real backend + headless Edge (42 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -627,7 +643,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe, status fallback, schema reset after delete, welcome / connect / demo / diagnostics (32)
+npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics (42)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

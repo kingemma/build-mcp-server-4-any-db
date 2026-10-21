@@ -2,7 +2,7 @@
 
 **可视化配置 GraphJin，把任意数据库变成 MCP Server。**
 
-[English](./README.en.md) · [功能进度](./docs/FEATURES.md)
+[English](./README.en.md) · [使用向导](./docs/GUIDE.md) · [功能进度](./docs/FEATURES.md)
 
 MCP Server Build 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
 权限写成 GraphJin 的 `sources` 配置（数据源级读 / 写 / 删档位 + 角色读规则）。最终产出的
@@ -16,6 +16,7 @@ YAML，也不需要理解 GraphJin 的配置细节。
 
 ## 目录
 
+- [使用向导](./docs/GUIDE.md) —— 从零到接入 AI 的完整走法
 - [架构](#架构)
 - [功能](#功能)
 - [环境要求](#环境要求)
@@ -72,10 +73,19 @@ YAML，也不需要理解 GraphJin 的配置细节。
 blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看表、跳到权限矩阵看规则。
 底部还有「一键体检」：GraphJin 二进制、后端、运行实例、库连通、角色配置逐项打红绿灯。
 
+首次进入会自动弹出**使用向导**（应用内分步指引：连接 → 配权限 → 验证 → 接入 AI，每步可直达
+对应页面）；关闭后不再自动弹出，右下角悬浮「使用向导」按钮或顶栏按钮可随时再次打开。
+
+![欢迎页](./docs/screenshots/zh-CN/welcome.png)
+
+![使用向导](./docs/screenshots/zh-CN/guide.png)
+
 ### 接入 AI 客户端
 
 选 Claude Desktop / Claude Code / Cursor 等客户端，一键复制配置 JSON 或 `graphjin mcp add`
 命令，最后跑一次自检调用 `tools/list`，确认端点通、工具真的暴露出来了。
+
+![接入 AI](./docs/screenshots/zh-CN/connect.png)
 
 ### 数据库连接
 
@@ -103,10 +113,14 @@ blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看�
 内置 MCP 客户端直连运行中的实例（`initialize` → `tools/list` → `tools/call`），用来验证
 `dev.yml` 里配置的每个库是否真的可用：「测试全部库」对每个 source 读一次 catalog，再用该库
 独有的第一张表跑一次最小查询，逐库给出状态、表数、取样表与耗时，任一库失败标红。同一页面
-还能按角色列出工具，并手写 GraphQL 走 `execute_graphql` 执行、看原始返回。
+还能按角色列出工具，并手写 GraphQL 走 `execute_graphql` 执行、看原始返回。查询框下方给
+出按当前库真实表名生成的示例查询，点一下填入；「调用示例」列出 `execute_graphql` 等工具的
+参数 JSON，可一键复制后直接贴给 AI 客户端。
 
 跨库重名的表没法用纯表名定位到具体库（实测会落到默认库），这类库只做 catalog 校验并标注
 「仅 catalog」，不会误报通过。
+
+![MCP Client](./docs/screenshots/zh-CN/mcp.png)
 
 > MCP 的 `execute_graphql` 不透传用户标识，行过滤不生效 —— 这里只验证角色级规则；
 > 行级权限请用「权限矩阵」页的验证面板（走 HTTP GraphQL）。
@@ -486,7 +500,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（32 项）
+npm run verify:ui        # 真实后端 + Edge headless（42 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -598,7 +612,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检（32 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检（42 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 
