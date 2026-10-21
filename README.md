@@ -118,6 +118,8 @@ are actually exposed.
   working driver in the bundled GraphJin version, so Test and Start are disabled and the
   UI points you at the postgres / mysql protocol instead.
 
+![Connections](./docs/screenshots/en-US/connections.png)
+
 ### Schema browser
 
 The top bar lists the databases the running instance actually loaded. Picking one loads

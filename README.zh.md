@@ -101,6 +101,9 @@ blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看�
 - 白名单里 `driverVerified=false` 的类型（ClickHouse / Redshift / BigQuery 等）在当前
   GraphJin 版本连接层未实现，测试与启动按钮会直接禁用，并提示改用 postgres / mysql 协议。
 
+![数据库连接](./docs/screenshots/zh-CN/connections.png)
+
+
 ### Schema 浏览器
 
 顶部列出运行中实例实际加载的数据库，切换后按库加载表、列与外键关系（`query_catalog`
