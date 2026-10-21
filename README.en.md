@@ -69,6 +69,23 @@ and the copyable MCP client configuration.
 
 ![Runtime](./docs/screenshots/en-US/status.png)
 
+### Welcome & one-click demo
+
+The app opens on a welcome page that says what this is in one line, then shows three steps
+(connect a database / set permissions / plug into your AI) with the completion state computed
+from real data — click any step to jump there. "Try the demo" builds a sample project in about
+10 seconds (`orders` / `customers` plus a read-only `analyst` role with the row filter
+`owner_code = current user`, writes and deletes blocked) **without touching your own
+databases**; from there you can jump straight to the schema browser or the permission matrix.
+"Self-check" at the bottom reports the GraphJin binary, backend, running instance, database
+reachability and role configuration as red/green items.
+
+### Connect an AI client
+
+Pick Claude Desktop / Claude Code / Cursor, copy the config JSON or the `graphjin mcp add`
+command in one click, then run the self-check — it calls `tools/list` so you can see the tools
+are actually exposed.
+
 ### Connections
 
 - Built-in drivers plus custom alias templates (TiDB / CockroachDB connect through the
@@ -97,6 +114,23 @@ its tables, columns and foreign keys only (`query_catalog` is filtered by
 `database_name`, so multi-database projects never bleed into each other).
 
 ![Schema browser](./docs/screenshots/en-US/schema.png)
+
+### MCP Client
+
+The built-in MCP client talks to the running instance over the protocol itself
+(`initialize` → `tools/list` → `tools/call`) to prove every database in `dev.yml` really works:
+**Test all databases** reads each source's catalog and then runs one minimal query against the
+first table unique to that database, reporting status, table count, sample table and elapsed time
+per database, with failures highlighted. The same page lists tools per role and runs hand-written
+GraphQL through `execute_graphql`, showing the raw response.
+
+Tables with the same name in several databases cannot be addressed by name alone (in practice the
+query lands on the default database), so those databases only get a catalog check labelled
+"catalog only" instead of a false pass.
+
+> MCP `execute_graphql` does not forward the user code, so row filters never apply — this page
+> verifies role-level rules only. Use the verification panel on the permission matrix page
+> (HTTP GraphQL) for row-level rules.
 
 ### Permission matrix
 
@@ -468,7 +502,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (26 checks)
+npm run verify:ui        # real backend + headless Edge (32 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -488,9 +522,12 @@ npm run dist:mac    # macOS dmg + zip (run on macOS)
 npm run dist:linux  # Linux AppImage + deb (run on Linux)
 ```
 
-All output lands in `release-final/`. The matrix in `.github/workflows/build.yml`
-packages on Windows / macOS 13 / macOS 14 / Ubuntu; CI has no signing certificates, so
-the artifacts are unsigned.
+All output lands in `release-final/`. Every `dist:*` script first runs `npm run
+check:binaries`, which fails fast when `binaries/graphjin-<triple>` for the current platform
+is missing (it points you at `fetch:binaries` + `prepare:binaries`), so you never ship an
+installer without GraphJin. The matrix in `.github/workflows/build.yml` packages on
+Windows / macOS 13 / macOS 14 / Ubuntu; CI has no signing certificates, so the artifacts are
+unsigned.
 
 To sign, set electron-builder's standard environment variables on the matching platform:
 
@@ -581,7 +618,7 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (175)
+npm test                 # backend unit tests (191)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
@@ -590,7 +627,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, status fallback, schema reset after delete (26)
+npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe, status fallback, schema reset after delete, welcome / connect / demo / diagnostics (32)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 
@@ -602,7 +639,7 @@ npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screens
 ```
 electron/              Electron main process, preload (injects the backend port)
 src/                   Vue 3 renderer
-  views/               six pages (lazy-loaded routes)
+  views/               ten pages (lazy-loaded routes)
   locales/             zh-CN / en-US copy
   stores/app.js        Pinia: service state, schema, permission matrix, snapshots
 sidecar-backend/       Node backend
@@ -628,10 +665,10 @@ binaries/              GraphJin binaries (extracted at build time)
   authenticated roles, so you have to use the "admin only" / "blocked" table classes;
 - `gj_security` needs an admin JWT, so the source of truth for policy is the MCP tool
   `get_current_config`;
-- `dev.yml` merging understands this project's output, flow maps, quoted keys and
-  GraphJin's rewritten file, but is not a general YAML parser: anchors / aliases / merge
-  keys inside `sources:` are rejected with an explicit error instead of silently
-  corrupting the file;
+- `dev.yml` merging understands this project's output, flat single-line flow arrays, quoted
+  keys and GraphJin's rewritten file, but is not a general YAML parser: anchors / aliases /
+  merge keys or nested flow values (e.g. `access: {...}`) inside `sources:` are rejected with
+  an explicit error instead of silently corrupting the file;
 - when databases are unreachable the migration cannot read columns and writes no grants
   (a `missing-columns` conflict); re-run the migration after the databases come back;
 - non-Windows coverage is currently the CI binary `version` smoke; the full UI smoke

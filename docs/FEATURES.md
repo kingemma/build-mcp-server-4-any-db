@@ -1,6 +1,6 @@
 # 功能进度
 
-> 更新于 2026-10-20。新增/完成功能时同步本表；实现细节见 `Plan.md`、
+> 更新于 2026-10-21。新增/完成功能时同步本表；实现细节见 `Plan.md`、
 > `docs/graphjin-3.21.14-baseline.md` 与 `docs/graphjin-source-migration.md`。
 
 ## 已完成
@@ -15,9 +15,9 @@
 | Linux 打包配置 | `npm run dist:linux` → AppImage + deb；GitHub Actions 在 ubuntu-latest 上产出 |
 | CI / CD | `.github/workflows/build.yml`：单测 + Web 构建 → 四平台矩阵打包并上传产物 |
 | 应用图标 | `build/icon.png`（1024×1024）打包时转 ico / icns，exe 与安装器共用；窗口 / 任务栏图标用 `electron/icon.png`（512×512） |
-| 二进制随包分发 | `extraResources` 打包 `binaries/graphjin-*` |
+| 二进制随包分发 | `extraResources` 打包 `binaries/graphjin-*`；三个 `dist:*` 打包前先跑 `check:binaries`，缺当前平台二进制直接报错，不会产出空壳安装包 |
 | 二进制管理 | `fetch:binaries` 下载 + sha256 校验，`prepare:binaries` 解压改名 |
-| 二进制冒烟 | `smoke:binaries` 真实执行 `graphjin version` 并核对版本，CI 三平台各跑一次 |
+| 二进制冒烟 | `smoke:binaries` 真实执行 `graphjin version` 并核对版本，CI 四个打包 job 各跑一次 |
 
 ### 后端
 
@@ -37,17 +37,24 @@
 | 用户 / 组织 | SQLite 存储；角色可同步到 GraphJin；组织有成员时拒绝删除，成员资料可改；成员可签发 MCP 令牌 |
 | 连接本地存储 | SQLite + AES-256-GCM；`name + project_dir` 唯一；摘要字段独立明文列 |
 | 连接自检 | 服务未运行时临时起单库实例跑 `validate_config`，用完即停；缺必填字段的配置前置拦截，不起进程 |
-| dev.yml 增量合并 | 只改 `sources:` 段；支持块/单行 flow/引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 显式拒绝 |
-| 测试 | `node:test` 共 183 项 |
+| dev.yml 增量合并 | 只改 `sources:` 段；支持块风格与扁平的单行 flow 数组（归一化后写回块格式，`sources: []` 也兼容）、引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 与 flow 里的嵌套结构（如 `access: {...}`）显式拒绝 |
+| 一键演示 | `demo.bootstrap`：建示例库（orders / customers + 数据）与 analyst 只读角色（行过滤 + 写删 blocked），直接启动，记录落进「已保存连接」 |
+| 一键体检 | `diagnostics.run`：二进制 / 后端 / 实例 / 库 / 角色逐项 ok / fail / skip |
+| 测试 | `node:test` 共 191 项 |
 
 ### 前端
 
 | 页面 / 能力 | 说明 |
 |:--|:--|
-| 运行状态 | 进程、端点、项目目录、重启次数、探活、停止、MCP 客户端配置复制 |
+| 欢迎页 | 价值主张 + 三步状态（连接 / 配权 / 接入，按当前数据自动判定），一键体验演示、一键体检入口 |
+| 一键演示 | 10 秒建示例项目并启动（orders / customers + analyst 只读角色），返回库 / 角色 / 表 / 端点，可跳到 Schema 与权限矩阵 |
+| 接入向导 | 客户端卡片（含配置文件位置）、配置 JSON 一键复制、`graphjin mcp add` 命令、自检 tools/list |
+| 自查诊断 | 二进制 / 后端 / 实例 / 库 / 角色的红绿灯结果 |
+| 运行状态 | 进程、端点、项目目录、重启次数、探活、停止、MCP 客户端配置复制；发生 legacy 迁移时展示迁移结果面板（成功/失败、迁移的库、冲突明细、备份文件路径可复制） |
 | 数据库连接 | 内置类型 + 自定义模板；三种录入方式；测试 / 启动 / 存模板；驱动未验证类型自动禁用测试与启动 |
 | 已保存连接 | 测试或启动成功后自动落盘；回填表单、一键启动、删除；「已连接」按当前运行实例现算（项目目录 + dev.yml 库名匹配），停止或换项目后回落为「已测试」；删除时同步从 dev.yml 摘掉该库，还有别的库则重启实例、删最后一个则停止服务 |
 | Schema 浏览器 | 顶部库选择，按库加载表 / 列 / 关系；结构与关系隔离 |
+| MCP Client | 按 MCP 协议连当前实例；「测试全部库」逐库读 catalog 再跑一次最小查询（跨库重名表降级为仅 catalog 校验），另可列工具、按角色执行 GraphQL 看原始返回 |
 | 权限矩阵 | 每个数据源一个独立标签页，角色清单、矩阵与未提交改动各自独立；角色 × 表的读规则（行过滤、列白名单 / 黑名单）；数据源级读/写/删档位、owner 列、仅管理员/全局屏蔽表；标签上有未提交改动提示；可移除本地角色 |
 | 策略回填 / 导入 | 加载时用生效策略补空格子（不覆盖本地改动）；「从生效策略导入」二次确认后覆盖 |
 | 写入历史 / 回滚 | 列出每份快照（时间、角色数、库、原因），可恢复到任意一份；回滚前自动再快照 |
@@ -57,7 +64,7 @@
 | 设置 | 后端端口、内置 GraphJin 版本、缓存平台、版本信息复制 |
 | 国际化 | `vue-i18n`，中文 / English，跟随系统 + 本地持久化；Element Plus 语言包同步 |
 | 视觉主题 | 深色侧栏 + 浅色内容区；提高正文 / 表格字号与对比度；统一 Element Plus 输入、按钮、弹窗、下拉与滚动条样式 |
-| 前端拆包 | 六个页面路由懒加载 + `element-plus` / `vue` vendor chunk；首页 JS 从 1.17 MB 降到约 39 kB |
+| 前端拆包 | 十个页面路由懒加载 + `element-plus` / `vue` vendor chunk；首页 JS 从 1.17 MB 降到约 53 kB |
 | 空状态与错误提示 | 未运行 / 无库 / 无表 / 解密失败均有明确文案 |
 
 ### 文档与验证
@@ -69,12 +76,12 @@
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
 | source 迁移设计与踩坑 | `docs/graphjin-source-migration.md` |
 | 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
-| 后端单测 | `cd sidecar-backend && npm test`（175 项） |
+| 后端单测 | `cd sidecar-backend && npm test`（189 项） |
 | 前端策略单测 | `npm run test:frontend`（8 项） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
 | legacy 迁移验证 | `cd sidecar-backend && npm run verify:migration`（12 项，含数据库不可达的项目） |
 | 二进制冒烟 | `npm run smoke:binaries` |
-| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（26 项：语言切换、窗口标题带项目名、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、停止后连接状态回落、删库后 Schema 重置、本地角色删除） |
+| UI 冒烟 + 截图 | `npm run build && npm run verify:ui`（32 项：语言切换、窗口标题带项目名、组织/成员与资料编辑、权限写入 / 验证 / 回滚、每库独立标签、MCP 逐库探活与查询、停止后连接状态回落、删库后 Schema 重置、本地角色删除、欢迎页 / 接入向导 / 一键演示 / 一键体检） |
 
 ## 未完成
 
@@ -92,10 +99,9 @@
 | 项 | 影响 | 备注 |
 |:--|:--|:--|
 | 连接测试多一次进程启停 | 未启动服务时约多 1–2s | 服务在跑时复用现成实例；缺必填字段的配置已前置拦截，真正需要连库的才起临时实例 |
-| dev.yml 合并不是通用 YAML 解析器 | 手写 anchors / merge keys 无法合并 | 已覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式；不支持的构造会明确报错并拒绝合并，不会改坏文件 |
+| dev.yml 合并不是通用 YAML 解析器 | 手写 anchors / merge keys 与嵌套 flow 无法合并 | 已覆盖项目生成格式、扁平 flow 数组、引号键与 GraphJin 回写格式；不支持的构造会明确报错并拒绝合并，不会改坏文件 |
 | 一个后端只托管一个实例 | 切换连接要停旧实例 | 设计取舍；避免多实例端口与 keystore 冲突 |
 | 库不可达时迁移不生成 grants | 该库的角色读不到数据 | catalog 为空拿不到列清单，记 `missing-columns` 冲突；宁可少授权也不退化成全列可读，库恢复后重跑迁移即可 |
-| 迁移结果只在 `graphjin.status` 的 `migration` 字段 | 界面上没有专门的迁移结果面板 | 成功 / 失败原因 / `.bak` 路径都在该字段里，失败时启动会直接报错 |
 
 ## 已知边界（非缺陷）
 

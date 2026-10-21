@@ -64,6 +64,19 @@ YAML，也不需要理解 GraphJin 的配置细节。
 
 ![运行状态](./docs/screenshots/zh-CN/status.png)
 
+### 欢迎页与一键演示
+
+打开应用先看到欢迎页：一句话讲清它做什么，下面按当前数据自动判定的三步状态（连接数据库 /
+配置权限 / 接入 AI），点任意一步跳过去。想先看效果就点「一键体验演示」—— 10 秒建一个示例项目
+（`orders` / `customers` 两张表 + `analyst` 只读角色，行过滤 `owner_code = 当前用户`，写删全部
+blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看表、跳到权限矩阵看规则。
+底部还有「一键体检」：GraphJin 二进制、后端、运行实例、库连通、角色配置逐项打红绿灯。
+
+### 接入 AI 客户端
+
+选 Claude Desktop / Claude Code / Cursor 等客户端，一键复制配置 JSON 或 `graphjin mcp add`
+命令，最后跑一次自检调用 `tools/list`，确认端点通、工具真的暴露出来了。
+
 ### 数据库连接
 
 - 内置驱动 + 自定义别名模板（TiDB / CockroachDB 这类兼容库以 postgres / mysql 协议接入）；
@@ -84,6 +97,19 @@ YAML，也不需要理解 GraphJin 的配置细节。
 带 `database_name` 过滤，多库数据不会串）。
 
 ![Schema 浏览器](./docs/screenshots/zh-CN/schema.png)
+
+### MCP Client
+
+内置 MCP 客户端直连运行中的实例（`initialize` → `tools/list` → `tools/call`），用来验证
+`dev.yml` 里配置的每个库是否真的可用：「测试全部库」对每个 source 读一次 catalog，再用该库
+独有的第一张表跑一次最小查询，逐库给出状态、表数、取样表与耗时，任一库失败标红。同一页面
+还能按角色列出工具，并手写 GraphQL 走 `execute_graphql` 执行、看原始返回。
+
+跨库重名的表没法用纯表名定位到具体库（实测会落到默认库），这类库只做 catalog 校验并标注
+「仅 catalog」，不会误报通过。
+
+> MCP 的 `execute_graphql` 不透传用户标识，行过滤不生效 —— 这里只验证角色级规则；
+> 行级权限请用「权限矩阵」页的验证面板（走 HTTP GraphQL）。
 
 ### 权限矩阵
 
@@ -460,7 +486,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（26 项）
+npm run verify:ui        # 真实后端 + Edge headless（32 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -479,7 +505,9 @@ npm run dist:mac    # macOS dmg + zip（需在 macOS 上执行）
 npm run dist:linux  # Linux AppImage + deb（需在 Linux 上执行）
 ```
 
-产物都在 `release-final/`。跨平台打包由 `.github/workflows/build.yml` 的矩阵在
+产物都在 `release-final/`。三个 `dist:*` 脚本会先跑 `npm run check:binaries`，确认当前平台的
+`binaries/graphjin-<triple>` 已就位（缺失时提示先跑 `fetch:binaries` + `prepare:binaries`），
+避免打出不含 GraphJin 的空壳安装包。跨平台打包由 `.github/workflows/build.yml` 的矩阵在
 Windows / macOS 13 / macOS 14 / Ubuntu 上完成；CI 没有签名证书，产物未签名。
 
 需要签名时在对应平台设置 electron-builder 的标准环境变量后再执行构建：
@@ -561,7 +589,7 @@ npm run smoke:binaries
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（175 项）
+npm test                 # 后端单测（191 项）
 
 npm run verify:e2e         # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 npm run verify:migration   # legacy 项目迁移：角色/列折算、写删降级、库不可达（12 项）
@@ -570,7 +598,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、停止后状态回落、删库后 Schema 重置（26 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检（32 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 
@@ -581,7 +609,7 @@ npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 electron/              Electron 主进程、preload（注入后端端口）
 src/                   Vue 3 前端
-  views/               6 个页面（路由懒加载）
+  views/               10 个页面（路由懒加载）
   locales/             zh-CN / en-US 文案
   stores/app.js        Pinia：服务状态、Schema、权限矩阵、写入快照
 sidecar-backend/       Node 后端
@@ -603,9 +631,9 @@ binaries/              GraphJin 二进制（构建期解压）
 - 角色之间没有「表可见性」：未列入 grants 的表对已认证角色完全可读，只能靠
   「仅管理员可读」/「全局屏蔽」两组表来收敛；
 - `gj_security` 需要 admin JWT，策略真相来源是 MCP 的 `get_current_config`；
-- `dev.yml` 合并覆盖项目生成格式、flow map、引号键与 GraphJin 回写格式，
-  但不是通用 YAML 解析器：`sources:` 段一旦出现 anchors / aliases / merge keys
-  会明确报错并拒绝合并，不会悄悄改坏文件；
+- `dev.yml` 合并覆盖项目生成格式、扁平的单行 flow 数组、引号键与 GraphJin 回写格式，
+  但不是通用 YAML 解析器：`sources:` 段一旦出现 anchors / aliases / merge keys 或
+  flow 里的嵌套结构（如 `access: {...}`）会明确报错并拒绝合并，不会悄悄改坏文件；
 - 库连不上时迁移拿不到列清单，不会生成 grants（记 `missing-columns` 冲突），
   库恢复后需要再跑一次迁移才能补上读授权；
 - 非 Windows 平台目前只有 CI 的二进制 `version` 冒烟，完整 UI 冒烟仍是 Windows 本地脚本。
