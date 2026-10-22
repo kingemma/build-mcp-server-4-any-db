@@ -212,6 +212,52 @@ function tempProject(yaml = SOURCES_YAML) {
   return dir;
 }
 
+const GRANTED_YAML = `sources:
+  - name: app
+    type: sqlite
+    path: app.db
+    access:
+      read: authenticated
+      grants:
+        - role: analyst
+          tables:
+            - name: orders
+              columns: ["id"]
+roles:
+  - name: admin
+  - name: analyst
+`;
+
+test('config.file: 实例未运行时从 dev.yml 读出权限与角色', async () => {
+  const dir = tempProject(GRANTED_YAML);
+  const router = createRouter({ store: new UserStore(':memory:') });
+
+  const response = await router.dispatch({
+    jsonrpc: '2.0', id: 1, method: 'config.file', params: { projectDir: dir },
+  });
+
+  // 形态要和 config.current 一致，前端 normalizeCurrentRoles 才能共用一条解析路径
+  assert.strictEqual(response.result.sources[0].name, 'app');
+  assert.strictEqual(response.result.sources[0].access.grants[0].role, 'analyst');
+  assert.deepStrictEqual(response.result.roles, [{ name: 'admin' }, { name: 'analyst' }]);
+});
+
+test('config.file: 缺参数 / 缺 dev.yml 时报明确错误', async () => {
+  const router = createRouter({ store: new UserStore(':memory:') });
+
+  const noParam = await router.dispatch({
+    jsonrpc: '2.0', id: 1, method: 'config.file', params: {},
+  });
+  assert.strictEqual(noParam.error.code, -32602);
+  assert.match(noParam.error.message, /projectDir/);
+
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcpb-empty-'));
+  const noFile = await router.dispatch({
+    jsonrpc: '2.0', id: 2, method: 'config.file', params: { projectDir: emptyDir },
+  });
+  assert.match(noFile.error.message, /dev\.yml/);
+});
+
 /**
  * 造一份「都已经启动成功过」的连接记录，再配一个假的 supervisor。
  * status 故意写成 connected，用来验证历史值不会冒充运行态。

@@ -8,8 +8,11 @@ import { useAppStore } from '../stores/app';
 const store = useAppStore();
 const { t } = useI18n();
 
-/** 角色候选：admin 恒在，其余来自当前库角色 / 生效策略 / 成员角色 */
-const roles = computed(() => [...new Set(['admin', ...store.roleNames])]);
+/**
+ * 角色候选只取 GraphJin 里真实存在的角色（admin 恒在）。
+ * 成员角色可能还没同步进 GraphJin，拿它试跑会把「角色不存在」显示成「没有权限」。
+ */
+const roles = computed(() => store.grantedRoles);
 const role = ref('admin');
 
 const tools = ref([]);
@@ -80,7 +83,11 @@ const queryFailed = computed(
 );
 
 async function loadTools() {
-  if (!store.isRunning) return;
+  if (!store.isRunning) {
+    // 实例不在了：留着上次的工具清单，用户会以为现在还能调
+    tools.value = [];
+    return;
+  }
   loadingTools.value = true;
   try {
     tools.value = await rpc('mcp.tools', { baseUrl: store.baseUrl, role: role.value });
@@ -131,7 +138,14 @@ async function run() {
 
 onMounted(loadTools);
 watch(() => store.isRunning, (running) => {
-  if (running) loadTools();
+  if (running) {
+    loadTools();
+    return;
+  }
+  // 停止后探活表 / 查询结果都是上一个实例的，必须一起清掉
+  tools.value = [];
+  probes.value = [];
+  result.value = null;
 });
 // 换角色等于换一套可见工具，顺手重拉
 watch(role, loadTools);

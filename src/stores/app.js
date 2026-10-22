@@ -24,6 +24,24 @@ const RESERVED_ROLES = new Set(['admin']);
 /** 使用引导「关闭后不再自动弹出」的持久化标记 */
 const GUIDE_DISMISSED_KEY = 'mcpb.guideDismissed';
 
+/**
+ * 把用户手填的多值文本拆成数组：逗号 / 顿号 / 换行都算分隔符。
+ * 用户不会去想「标准分隔符是什么」，所以都认。
+ *
+ * 入参可能是数组（下拉多选）也可能是字符串（手填框），统一成数组再拆 ——
+ * 字符串没有 flatMap，直接调用会 TypeError。
+ *
+ * @param {*} value
+ * @returns {string[]}
+ */
+function splitLoose(value) {
+  const source = Array.isArray(value) ? value : [String(value ?? '')];
+  return source
+    .flatMap((item) => String(item).split(/[,，、\n]/))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function emptyOperation() {
   // columnMode: allow = 白名单；block = 阻止列表（写库时转成补集白名单）
   return { enabled: false, filters: [], columnMode: 'allow', columns: [] };
@@ -87,6 +105,10 @@ export const useAppStore = defineStore('app', {
     snapshots: [],
     /** 本地组织与成员（SQLite，users.js） */
     organizations: [],
+    /** 业务本体论条目：术语 / 概念 / 规则 / 指标 */
+    ontology: [],
+    /** 本体论渲染出的业务语境文档，MCP 网关原样送给 AI */
+    ontologyRendered: '',
     users: [],
     /** Schema 页当前选中的库 */
     activeDatabase: '',
@@ -135,6 +157,17 @@ export const useAppStore = defineStore('app', {
       }
       return result;
     },
+    /**
+     * GraphJin 里真实存在的角色：MCP 试跑、引导卡判定只能用这份。
+     *
+     * 不能混进 users.role —— 那是本地成员角色，可能还没 users.syncRoles 同步进
+     * GraphJin。拿它去试跑，得到的是「没有权限」而不是「角色不存在」，会被误读成配置问题。
+     */
+    grantedRoles(state) {
+      return [
+        ...new Set(['admin', ...state.configRoles, ...Object.keys(state.policyRaw ?? {})]),
+      ].sort();
+    },
     /** 成员角色候选：当前库角色 + 生效策略角色 + 已在用的角色 */
     roleNames(state) {
       return [
@@ -180,6 +213,8 @@ export const useAppStore = defineStore('app', {
       const result = await rpcSafe('graphjin.status');
       if (result.ok) this.status = result.data;
       else this.lastError = result.error ?? '';
+      // 接入配置带的是运行中实例的端点，实例没了就不能继续算「已接入」
+      if (!this.isRunning) this.clientConfig = null;
     },
 
     /**
@@ -227,6 +262,7 @@ export const useAppStore = defineStore('app', {
         this.hasLoadedPolicy = false;
         this.applyDatabase = '';
         this.snapshots = [];
+        this.clientConfig = null;
         // 「已连接」由后端按运行态现算，停止后必须重新拉一次才会回落成已测试
         await this.loadConnections();
       } finally {
@@ -492,10 +528,14 @@ export const useAppStore = defineStore('app', {
 
     /**
      * 读取当前生效策略，供预览面板做 diff。
+     *
+     * 运行中走 config.current（GraphJin 现算，唯一真相来源）；停止时改读 dev.yml
+     * —— 否则「这一步配过没有」在服务停着时完全无从判断，只能猜。
      */
     async loadCurrentPolicy() {
-      if (!this.isRunning) return;
-      const result = await rpcSafe('config.current', { baseUrl: this.baseUrl });
+      const result = this.isRunning
+        ? await rpcSafe('config.current', { baseUrl: this.baseUrl })
+        : await rpcSafe('config.file', { projectDir: this.status?.projectDir ?? null });
       if (!result.ok) {
         this.lastError = result.error ?? '';
         return;
@@ -760,6 +800,8 @@ export const useAppStore = defineStore('app', {
           this.loadConnectedDatabases(),
           this.loadSchema(),
           this.loadConnections(),
+          // 演示是换了实例，接入配置必须跟着换，否则欢迎页第三步会停在旧端点上
+          this.loadClientConfig(),
         ]);
         return report;
       } finally {
@@ -868,6 +910,45 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
+     * 业务本体论：AI 查数据之前的语境。维护在这里，经 MCP 网关送给客户端。
+     *
+     * @returns {Promise<{entries: Array<Object>, rendered: string}>}
+     */
+    async loadOntology() {
+      const result = await rpcSafe('ontology.list');
+      if (result.ok) {
+        this.ontology = result.data.entries ?? [];
+        this.ontologyRendered = result.data.rendered ?? '';
+      } else {
+        this.lastError = result.error ?? '';
+      }
+      return result;
+    },
+
+    /**
+     * @param {Object} entry 条目；带 id 为更新，否则按同库同名同类覆盖。
+     *   aliases 收字符串（视图里是手填框），tables 收数组（视图里是下拉多选）
+     * @returns {Promise<Object>} 保存后的条目
+     */
+    async saveOntology(entry) {
+      const saved = await rpc('ontology.save', {
+        ...entry,
+        aliases: splitLoose(entry.aliases),
+        tables: Array.isArray(entry.tables) ? entry.tables : splitLoose(entry.tables),
+      });
+      await this.loadOntology();
+      return saved;
+    },
+
+    /**
+     * @param {number} id
+     */
+    async removeOntology(id) {
+      await rpc('ontology.remove', { id });
+      await this.loadOntology();
+    },
+
+    /**
      * 用已保存的连接直接启动。
      *
      * 启动前先验证连接：库可能已经下线（密码改了、服务停了、网络断了），
@@ -935,9 +1016,18 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    async loadClientConfig() {
-      if (!this.isRunning) return;
-      const result = await rpcSafe('mcp.clientConfig', { baseUrl: this.baseUrl });
+    async loadClientConfig({ gateway = false, token = null } = {}) {
+      if (!this.isRunning) {
+        this.clientConfig = null;
+        return;
+      }
+      // 网关挂在平台自己的端口上；只有这条路带得上业务本体论（见 mcp-gateway.js）
+      const gatewayUrl = gateway ? `http://127.0.0.1:${this.port}/api/v1/mcp` : null;
+      const result = await rpcSafe('mcp.clientConfig', {
+        baseUrl: this.baseUrl,
+        ...(gatewayUrl ? { gatewayUrl } : {}),
+        ...(token ? { token } : {}),
+      });
       if (result.ok) this.clientConfig = result.data;
     },
   },

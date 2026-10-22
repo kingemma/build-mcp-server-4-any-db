@@ -156,6 +156,34 @@ query lands on the default database), so those databases only get a catalog chec
 > verifies role-level rules only. Use the verification panel on the permission matrix page
 > (HTTP GraphQL) for row-level rules.
 
+### Business ontology
+
+A schema says which tables exist and how they join; it never says what the business is. This page
+maintains the context the AI needs before it queries data, in four layers, all written by a human
+and handed over verbatim. **Each database has its own set** — the same word can mean entirely
+different things in an orders database and an events database:
+
+- **Terms** — how the words people actually say map to the schema ("buyer" is `customers`,
+  "GMV" is the sum of paid order amounts);
+- **Concepts** — business entities, their meaning and boundaries, possibly spanning tables;
+- **Rules** — invariants and state machines with a severity (note / warning / enforced), which
+  decide whether the AI should perform an operation at all;
+- **Metrics** — named aggregations and their exact formulas, so one question gets one number.
+
+"Tables" is a multi-select dropdown whose candidates come from the currently selected database's
+schema — no typing table names. The preview at the bottom shows exactly what the AI will receive,
+and deliberately contains only what a schema cannot tell it: no table structure, columns or
+foreign keys, because the AI gets those from `query_catalog` anyway.
+
+What you maintain is grouped per database and delivered to AI clients through the **MCP gateway**:
+it ships as instructions with the handshake (no tool call needed), and the `business_ontology`
+tool can read it again on demand, filtered by kind or by database. Clients that connect straight
+to GraphJin do not see it — turn on "Deliver through the platform gateway" on the Connect AI
+page, which is also the only way row filters work because identity comes from the token. With
+nothing maintained the gateway stays a plain proxy, so existing clients are unaffected.
+
+![Business Ontology](./docs/screenshots/en-US/ontology.png)
+
 ### Permission matrix
 
 The page is split into one tab per database: **each database keeps its own role list, matrix and
@@ -526,7 +554,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (42 checks)
+npm run verify:ui        # real backend + headless Edge (65 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -642,7 +670,7 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (191)
+npm test                 # backend unit tests (220)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
@@ -651,7 +679,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics (42)
+npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml (65)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

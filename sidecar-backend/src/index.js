@@ -43,8 +43,14 @@ const {
   validateConnectionFields,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
+const { OntologyStore } = require('./ontology');
 const { SnapshotStore, buildRollbackPatch, accessForWrite } = require('./snapshots');
-const { readSourceConnections, removeProjectSource } = require('./project');
+const {
+  readSourceConnections,
+  readSourceAccess,
+  readProjectRoles,
+  removeProjectSource,
+} = require('./project');
 const { dataFile } = require('./paths');
 const { executeGraphql } = require('./graphql-http');
 const { createMcpGateway } = require('./mcp-gateway');
@@ -446,9 +452,10 @@ async function verifyEntries(service, entries) {
  * @param {ConnectionStore} [options.connections] 本地连接记录；缺省时连接类方法会报错
  * @param {GraphJinSupervisor} [options.supervisor] 进程编排，缺省时自建一个
  * @param {SnapshotStore} [options.snapshots] 权限快照；缺省时写入不回滚
+ * @param {OntologyStore} [options.ontology] 业务本体论；缺省时本体论方法报错
  * @returns {RpcRouter}
  */
-function createRouter({ store, connections = null, supervisor = null, snapshots = null, jwtSecret = null }) {
+function createRouter({ store, connections = null, supervisor = null, snapshots = null, jwtSecret = null, ontology = null }) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
 
@@ -462,6 +469,12 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
   const snapshotStore = () => {
     if (!snapshots) throw RpcError.invalidParams('快照存储未初始化');
     return snapshots;
+  };
+
+  /** 本体论存储：没有装配时只是「没有业务语境」，不影响其它能力 */
+  const ontologyStore = () => {
+    if (!ontology) throw RpcError.invalidParams('本体论存储未初始化');
+    return ontology;
   };
 
   /**
@@ -678,6 +691,17 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
       return connectionStore().get(id);
     })
+    // 业务本体论：AI 查数据之前的语境。四类条目见 ontology.js
+    .register('ontology.list', (params) => {
+      const kind = params?.kind ?? null;
+      return { entries: ontologyStore().list({ kind }), rendered: ontologyStore().render() };
+    })
+    .register('ontology.save', (params) => ontologyStore().save(params ?? {}))
+    .register('ontology.remove', (params) => {
+      const id = params?.id;
+      if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
+      return { removed: ontologyStore().remove(id) };
+    })
     // 删记录；如果这个库正被运行实例加载，连带从 dev.yml 移除并按需要停/重启，
     // 否则 Schema 页与权限矩阵会一直显示一个「已经不存在」的库
     .register('connections.remove', async (params) => {
@@ -837,6 +861,24 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
     .register('config.current', async (params) => {
       const service = await getService(requireBaseUrl(params));
       return service.readConfig(params?.section ?? 'all');
+    })
+    // 离线读配置：实例没跑时 config.current 没有 baseUrl 可用，而「配过没有」这件事
+    // 必须能回答。真相来源是 GraphJin 回写进 dev.yml 的 sources[].access。
+    .register('config.file', (params) => {
+      const projectDir = params?.projectDir;
+      if (typeof projectDir !== 'string' || projectDir === '') {
+        throw RpcError.invalidParams('projectDir 不能为空');
+      }
+      const devYaml = path.join(path.resolve(projectDir), 'dev.yml');
+      if (!fs.existsSync(devYaml)) {
+        throw RpcError.invalidParams(`项目目录缺少 dev.yml：${devYaml}`);
+      }
+      const text = fs.readFileSync(devYaml, 'utf8');
+      const accesses = readSourceAccess(text);
+      return {
+        sources: Object.entries(accesses).map(([name, access]) => ({ name, access })),
+        roles: readProjectRoles(text).map((name) => ({ name })),
+      };
     })
     // 权限编排（source 模式：source 级 read/write/delete + 角色级 grants）
     .register('permissions.build', (params) => {
@@ -1130,12 +1172,23 @@ async function createBackend({ dbPath } = {}) {
   const store = new UserStore(resolvedDbPath);
   // 两张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
   const connections = new ConnectionStore(resolvedDbPath);
+  const ontology = new OntologyStore(resolvedDbPath);
   const snapshots = new SnapshotStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
-  const router = createRouter({ store, connections, supervisor, snapshots, jwtSecret });
+  const router = createRouter({ store, connections, supervisor, snapshots, jwtSecret, ontology });
   const gateway = createMcpGateway({
     secret: jwtSecret,
     resolveTarget: () => supervisor.status().baseUrl ?? null,
+    // 本体论注入：没有维护任何条目时返回 null，网关保持纯透传，不影响既有客户端
+    ontology: () => {
+      const entries = ontology.list();
+      if (entries.length === 0) return null;
+      return {
+        document: ontology.render(),
+        entries,
+        render: (filter) => ontology.render(filter),
+      };
+    },
   });
   const server = await startHttpServer({ router, port: 0, gateway });
 
@@ -1150,6 +1203,7 @@ async function createBackend({ dbPath } = {}) {
       await new Promise((resolve) => server.close(resolve));
       store.close();
       connections.close();
+      ontology.close();
       snapshots.close();
     },
   };

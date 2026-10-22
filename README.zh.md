@@ -131,6 +131,28 @@ blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看�
 > MCP 的 `execute_graphql` 不透传用户标识，行过滤不生效 —— 这里只验证角色级规则；
 > 行级权限请用「权限矩阵」页的验证面板（走 HTTP GraphQL）。
 
+### 业务本体论
+
+Schema 只说得出「有哪些表、怎么连」，说不出「这是什么生意」。这一页维护 AI 查数据之前
+需要的语境，分四层，都是人类手写、平台原样转交。**每个库各有自己的一套**——同一个词在
+订单库和事件库里可以是两回事：
+
+- **术语**：用户嘴里的词与 schema 的对应（「买家」= `customers`、「GMV」= 已支付订单金额合计）；
+- **概念**：业务实体及其含义与边界，可跨多张表；
+- **业务规则**：不变量与状态机，带强度（说明 / 提醒 / 强制），决定 AI 该不该做某个操作；
+- **指标口径**：命名聚合及其计算式，同一问题从此同一个数。
+
+「关联表」是下拉复选，候选来自当前所选库的 Schema，不用手填表名。页面下方有「送给 AI 的
+语境」实时预览，只放 schema 里读不到的东西——表结构、列、外键一概不写（那些 AI 用
+`query_catalog` 自己拿）。
+
+维护的内容按库分组，经 **MCP 网关**送给 AI 客户端：握手时作为 instructions 随上下文一起
+下发（无需模型主动调用），需要时也可以调 `business_ontology` 工具再读一遍，可按类别或按库
+只取一节。直连 GraphJin 的客户端拿不到 —— 在「接入 AI」页打开「经平台网关下发」即可，行过滤
+要生效也必须走这条路（身份来自令牌）。没有维护任何条目时网关保持纯透传，不影响既有客户端。
+
+![业务本体论](./docs/screenshots/zh-CN/ontology.png)
+
 ### 权限矩阵
 
 顶部按数据源分成标签页：**每个库一套独立的角色清单、矩阵和未提交改动**，切换标签不会串数据；标签上的小圆点表示该库有未提交改动。写入只作用于当前标签的库，确认弹窗会写明目标库名。
@@ -506,7 +528,7 @@ npm run dev
 npm test                 # 前端策略单测 + 后端单测
 npm run smoke:binaries   # GraphJin 二进制冒烟
 npm run build            # 前端生产构建
-npm run verify:ui        # 真实后端 + Edge headless（42 项）
+npm run verify:ui        # 真实后端 + Edge headless（65 项）
 ```
 
 完整的端到端验证（会真实拉起 GraphJin、建库、写权限并回滚）：
@@ -609,7 +631,7 @@ npm run smoke:binaries
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（191 项）
+npm test                 # 后端单测（220 项）
 
 npm run verify:e2e         # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 npm run verify:migration   # legacy 项目迁移：角色/列折算、写删降级、库不可达（12 项）
@@ -618,7 +640,7 @@ cd ..
 npm run test:frontend    # 前端策略归一化 / diff（8 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检（42 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检、停止后按 dev.yml 判定权限（65 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 

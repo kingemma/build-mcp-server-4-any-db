@@ -14,6 +14,8 @@ const {
   replaceRolesBlock,
   removeProjectSource,
   readSourceConnections,
+  readSourceAccess,
+  readProjectRoles,
 } = require('../src/project');
 
 const BASE = { appName: 'Demo', port: 8080, sources: [] };
@@ -344,4 +346,109 @@ test('removeProjectSource: 库里没有这个名字时返回 false 且不改文�
 
   assert.strictEqual(removeProjectSource(file, 'nope'), false);
   assert.strictEqual(fs.readFileSync(file, 'utf8'), before);
+});
+
+/** GraphJin 回写的真实形态：access → grants[].role → tables[].name → columns / filter */
+const GRANTED_DEV_YAML = `app_name: Demo Orders
+mode: dev
+sources:
+  - name: "demo"
+    kind: database
+    type: "sqlite"
+    path: "orders.db"
+    default: true
+    access:
+      read: "authenticated"
+      write: "blocked"
+      delete: "blocked"
+      missing_namespace_column: block
+      public_tables: []
+      admin_tables: ["secrets", "audit"]
+      blocked_tables:
+        - archived
+      grants:
+        - role: "analyst"
+          tables:
+            - name: "orders"
+              columns: ["id", "owner_code", "amount"]
+              filter: "{ owner_code: { _eq: $user_code } }"
+            - name: "customers"
+              columns: ["id", "name"]
+              filter: "{ owner_code: { _eq: $user_code } }"
+  - name: "plain"
+    kind: database
+    type: "postgres"
+    host: db
+roles:
+  - name: "admin"
+  - name: "analyst"
+default_block: false
+`;
+
+test('readSourceAccess: 读出 source 级档位与角色 grants', () => {
+  const access = readSourceAccess(GRANTED_DEV_YAML);
+
+  assert.deepStrictEqual(Object.keys(access), ['demo', 'plain']);
+  assert.strictEqual(access.demo.read, 'authenticated');
+  assert.strictEqual(access.demo.write, 'blocked');
+  assert.strictEqual(access.demo.missing_namespace_column, 'block');
+  // 表分类是字符串数组，flow 与块两种写法都要认
+  assert.deepStrictEqual(access.demo.public_tables, []);
+  assert.deepStrictEqual(access.demo.admin_tables, ['secrets', 'audit']);
+  assert.deepStrictEqual(access.demo.blocked_tables, ['archived']);
+  assert.strictEqual(access.demo.grants.length, 1);
+
+  const grant = access.demo.grants[0];
+  assert.strictEqual(grant.role, 'analyst');
+  assert.deepStrictEqual(grant.tables.map((table) => table.name), ['orders', 'customers']);
+  assert.deepStrictEqual(grant.tables[0].columns, ['id', 'owner_code', 'amount']);
+  assert.strictEqual(grant.tables[0].filter, '{ owner_code: { _eq: $user_code } }');
+
+  // 没有 access 段的库不能凭空造出 grants
+  assert.deepStrictEqual(access.plain, { grants: [] });
+});
+
+test('readSourceAccess: 缩进宽度不影响解析', () => {
+  const yaml = `sources:
+    - name: app
+        type: sqlite
+        access:
+            read: authenticated
+            grants:
+                - role: viewer
+                    tables:
+                        - name: orders
+                            columns: ["id"]
+`;
+  const access = readSourceAccess(yaml);
+
+  assert.strictEqual(access.app.read, 'authenticated');
+  assert.strictEqual(access.app.grants[0].role, 'viewer');
+  assert.deepStrictEqual(access.app.grants[0].tables[0].columns, ['id']);
+});
+
+test('readSourceAccess: 空 grants 保持空数组', () => {
+  const yaml = 'sources:\n  - name: app\n    access:\n      read: authenticated\n      grants: []\n';
+  assert.deepStrictEqual(readSourceAccess(yaml).app, { grants: [], read: 'authenticated' });
+});
+
+test('readSourceAccess: 读不懂的结构直接报错，不猜', () => {
+  // grants 下出现非 role 项
+  const wrongItem = 'sources:\n  - name: app\n    access:\n      grants:\n        - name: notarole\n';
+  assert.throws(() => readSourceAccess(wrongItem), /列表项/);
+
+  // access 下出现未知嵌套键
+  const nested = 'sources:\n  - name: app\n    access:\n      custom:\n        deep: true\n';
+  assert.throws(() => readSourceAccess(nested), /未知的嵌套键/);
+
+  // columns 不是数组
+  const notArray =
+    'sources:\n  - name: app\n    access:\n      grants:\n        - role: v\n          tables:\n            - name: t\n              columns: id\n';
+  assert.throws(() => readSourceAccess(notArray), /期望数组/);
+});
+
+test('readProjectRoles: 读出顶层角色名单', () => {
+  assert.deepStrictEqual(readProjectRoles(GRANTED_DEV_YAML), ['admin', 'analyst']);
+  assert.deepStrictEqual(readProjectRoles('sources:\n  - name: app\n'), []);
+  assert.deepStrictEqual(readProjectRoles('roles: []\n'), []);
 });

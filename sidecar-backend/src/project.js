@@ -606,6 +606,199 @@ function readSourceConnections(text) {
 }
 
 /**
+ * 取行首缩进宽度。
+ *
+ * @param {string} line
+ * @returns {number}
+ */
+function indentOf(line) {
+  return /^ */.exec(line)[0].length;
+}
+
+/**
+ * 从 dev.yml 的 sources 段读出每个库的 access（含角色 grants）。
+ *
+ * 实例没跑时 config.current 没有 baseUrl 可用，权限页与欢迎页要判断「配过没有」，
+ * 只能读 GraphJin 回写到磁盘的这份配置。
+ *
+ * @param {string} text dev.yml 内容
+ * @returns {Object} { name: { read?, write?, delete?, owner_column?, grants: Array } }
+ */
+function readSourceAccess(text) {
+  const lines = normalizeFlowSources(text).split('\n');
+  const block = findSourcesBlock(lines);
+  const entries = splitSourceEntries(lines, block);
+  const result = {};
+
+  for (const entry of entries) {
+    if (!entry.name) continue;
+    result[entry.name] = parseAccessBlock(entry.lines);
+  }
+
+  return result;
+}
+
+/** access 下「字符串数组」的键：表分类与列白名单 */
+const ACCESS_LIST_KEYS = new Set([
+  'grants',
+  'public_tables',
+  'admin_tables',
+  'blocked_tables',
+  'columns',
+]);
+
+/**
+ * 找标量字段该挂到哪个对象上：栈里最深的那个已打开对象。
+ *
+ * @param {Array<Object>} stack
+ * @param {string} key 仅用于报错信息
+ * @returns {Object}
+ */
+function accessTargetOf(stack, key) {
+  for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
+    if (stack[depth].item) return stack[depth].item;
+  }
+  throw new Error(`dev.yml 的 access 段里 ${key} 找不到所属对象`);
+}
+
+/**
+ * 解析单个 source 条目里的 access 段。
+ *
+ * 用缩进栈而不是写死层级宽度：GraphJin 回写与手写项目的缩进可能是 2 或 4 空格。
+ * 只认 access → grants[].role → tables[].name 这一条路（外加表分类这类字符串数组），
+ * 其余形态直接报错 —— 猜错会让「没配权限」显示成「已配置」，比报错更难查。
+ *
+ * @param {string[]} entryLines 条目原文（第一行是 `- name: ...`）
+ * @returns {Object} access
+ */
+function parseAccessBlock(entryLines) {
+  const access = { grants: [] };
+  const start = entryLines.findIndex((line) => /^\s+access\s*:\s*$/.test(line));
+  if (start < 0) return access;
+
+  const accessIndent = indentOf(entryLines[start]);
+  /** 每层容器一项：item 指向该层刚打开的对象，标量字段挂到最深的 item 上 */
+  const stack = [{ kind: 'access', indent: accessIndent, item: access, items: [] }];
+
+  for (let i = start + 1; i < entryLines.length; i += 1) {
+    const body = entryLines[i].trim();
+    if (body === '' || body.startsWith('#')) continue;
+
+    const indent = indentOf(entryLines[i]);
+    if (indent <= accessIndent) break;
+
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop();
+    const parent = stack[stack.length - 1];
+
+    const listItem = /^-\s+(.+)$/.exec(body);
+    if (listItem) {
+      const rest = listItem[1].trim();
+      const pair = /^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/.exec(rest);
+
+      if (parent.kind === 'grants') {
+        if (!pair || pair[1] !== 'role') {
+          throw new Error(`dev.yml 的 access 段出现无法解析的列表项：${body}`);
+        }
+        const grant = { role: parseScalar(pair[2]), tables: [] };
+        parent.items.push(grant);
+        parent.item = grant;
+        continue;
+      }
+      if (parent.kind === 'tables') {
+        if (!pair || pair[1] !== 'name') {
+          throw new Error(`dev.yml 的 access 段出现无法解析的列表项：${body}`);
+        }
+        const table = { name: parseScalar(pair[2]), columns: [] };
+        parent.items.push(table);
+        parent.item = table;
+        continue;
+      }
+      if (parent.kind === 'scalars' && !pair) {
+        parent.items.push(parseScalar(rest));
+        continue;
+      }
+      throw new Error(`dev.yml 的 access 段出现无法解析的列表项：${body}`);
+    }
+
+    const field = /^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/.exec(body);
+    if (!field) throw new Error(`dev.yml 的 access 段出现无法解析的行：${body}`);
+    const [, key, raw] = field;
+    const value = raw.replace(/\s+#.*$/, '').trim();
+
+    if (value === '' || value === '[]') {
+      const empty = value === '[]';
+      if (key === 'grants') {
+        if (!empty) stack.push({ kind: 'grants', indent, item: null, items: access.grants });
+        continue;
+      }
+      if (key === 'tables') {
+        if (parent.kind !== 'grants' || !parent.item) {
+          throw new Error('dev.yml 的 access 段里 tables 不在某个 role 下');
+        }
+        if (!empty) stack.push({ kind: 'tables', indent, item: null, items: parent.item.tables });
+        continue;
+      }
+      if (ACCESS_LIST_KEYS.has(key)) {
+        const target = accessTargetOf(stack, key);
+        target[key] = [];
+        if (!empty) stack.push({ kind: 'scalars', indent, item: null, items: target[key] });
+        continue;
+      }
+      throw new Error(`dev.yml 的 access 段出现未知的嵌套键：${key}`);
+    }
+
+    if (key === 'grants') {
+      throw new Error('dev.yml 的 access 段里 grants 用了 flow 风格，平台无法解析');
+    }
+
+    const target = accessTargetOf(stack, key);
+    target[key] = ACCESS_LIST_KEYS.has(key) ? parseFlowList(value) : parseScalar(value);
+  }
+
+  return access;
+}
+
+/**
+ * 解析单行 flow 数组，如 `columns: ["id", "name"]`。
+ *
+ * @param {string} raw
+ * @returns {Array}
+ */
+function parseFlowList(raw) {
+  const text = raw.trim();
+  if (!text.startsWith('[') || !text.endsWith(']')) {
+    throw new Error(`dev.yml 的 access 段期望数组，实际是：${text}`);
+  }
+  return splitTopLevel(text.slice(1, -1), ',').map((item) => parseScalar(item));
+}
+
+/**
+ * 读 dev.yml 顶层的 roles 名单。
+ *
+ * 实例停止时 grantedRoles 也要有内容，否则 MCP 页的角色下拉只剩 admin。
+ *
+ * @param {string} text dev.yml 内容
+ * @returns {string[]}
+ */
+function readProjectRoles(text) {
+  const lines = text.split('\n');
+  const header = lines.findIndex((line) => /^roles\s*:/.test(line));
+  if (header < 0) return [];
+  const inline = lines[header].slice(lines[header].indexOf(':') + 1).trim();
+  if (inline === '[]') return [];
+
+  const names = [];
+  for (let i = header + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    if (indentOf(line) === 0) break;
+    const match = /^\s*-\s+name\s*:\s*(.+)$/.exec(line);
+    if (match) names.push(unquote(match[1].replace(/\s+#.*$/, '')));
+  }
+  return names;
+}
+
+/**
  * 按顶层分隔符切分，跳过引号内与嵌套括号内的分隔符。
  *
  * @param {string} text
@@ -734,5 +927,7 @@ module.exports = {
   upsertSourcesBlock,
   replaceRolesBlock,
   readSourceConnections,
+  readSourceAccess,
+  readProjectRoles,
   parseScalar,
 };

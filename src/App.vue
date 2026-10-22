@@ -115,9 +115,9 @@ onBeforeUnmount(() => {
           <h1 class="topbar__title">{{ pageTitle }}</h1>
         </div>
         <div class="topbar__meta no-drag">
-          <el-button size="small" class="guide-open-btn" @click="store.openGuide()">
+          <!-- <el-button size="small" class="guide-open-btn" @click="store.openGuide()">
             {{ t('guide.open') }}
-          </el-button>
+          </el-button> -->
           <el-select v-model="locale" size="small" class="locale" :aria-label="t('app.language')">
             <el-option
               v-for="item in SUPPORTED_LOCALES"

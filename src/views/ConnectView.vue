@@ -11,6 +11,9 @@ const { t } = useI18n();
 const selected = ref('');
 const tools = ref([]);
 const isChecking = ref(false);
+/** 经平台网关下发：只有这条路带得上业务本体论，且行过滤用的用户标识随令牌注入 */
+const viaGateway = ref(false);
+const token = ref('');
 
 const clients = computed(() => store.clients);
 const endpoint = computed(() => store.clientConfig?.endpoint ?? '');
@@ -55,6 +58,14 @@ onMounted(async () => {
   await store.loadClientConfig();
   await store.loadClients();
 });
+
+/** 直连 / 网关、填不填令牌，都会改变下发给客户端的配置 */
+async function reloadConfig() {
+  await store.loadClientConfig({
+    gateway: viaGateway.value,
+    token: token.value.trim() || null,
+  });
+}
 </script>
 
 <template>
@@ -66,6 +77,21 @@ onMounted(async () => {
       </div>
       <div class="panel__body">
         <p class="note">{{ t('connect.hint') }}</p>
+
+        <label class="switch">
+          <el-switch v-model="viaGateway" size="small" @change="reloadConfig" />
+          <span class="switch__label">{{ t('connect.viaGateway') }}</span>
+        </label>
+        <p class="note">{{ t('connect.gatewayHint') }}</p>
+        <div v-if="viaGateway" class="token">
+          <el-input
+            v-model="token"
+            size="small"
+            :placeholder="t('connect.tokenPlaceholder')"
+            @input="reloadConfig"
+          />
+          <span class="note">{{ t('connect.tokenHint') }}</span>
+        </div>
 
         <p class="eyebrow">{{ t('connect.pickClient') }}</p>
         <div class="clients">
@@ -156,6 +182,24 @@ onMounted(async () => {
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   margin: 10px 0 16px;
+}
+
+.switch {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 6px;
+}
+
+.switch__label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.token {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
 }
 
 .client {

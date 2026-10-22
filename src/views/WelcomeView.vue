@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useI18n } from 'vue-i18n';
@@ -15,31 +15,57 @@ const checks = ref([]);
 const isChecking = ref(false);
 
 /**
+ * 步骤 2 的判定依据分三层：生效配置 → 历史快照 → 未知。
+ *
+ * 停止态读不到 config.current，但 dev.yml 里留着 GraphJin 回写的 access，
+ * 后端 config.file 能读出来（store.loadCurrentPolicy 会自动走这条）。
+ * 文件也读不出来时退回历史快照；连快照都没有，只能说「看不到」，
+ * 不能断言「没做」—— 那会让人白重做一遍。
+ */
+const policyState = computed(() => {
+  if (Object.keys(store.policyRaw ?? {}).length > 0) return 'done';
+  if (store.isRunning || store.hasLoadedPolicy) return 'todo';
+  return store.snapshots.length > 0 ? 'done' : 'unknown';
+});
+
+/**
  * 三步状态自己算：用户不该为了知道自己进行到哪一步而点进每一页。
+ *
+ * 每张卡都取「真的发生了」的证据，不拿间接信号凑数：
+ * - 连接：已落盘的连接，或实例正在跑（跑起来就一定带着一份可用连接）
+ * - 权限：生效配置里真的有 grants；建了角色但没配规则不算完成
+ * - 接入：配置只在实例运行时才有效，停了就不是「已完成」
  */
 const steps = computed(() => [
   {
     key: '1',
-    done: store.connections.length > 0 || store.isRunning,
+    state: store.isRunning || store.connections.length > 0 ? 'done' : 'todo',
     route: '/connections',
     label: t('welcome.step1'),
     hint: t('welcome.step1Hint'),
   },
   {
     key: '2',
-    done: store.roleNames.length > 0,
+    state: policyState.value,
     route: '/permissions',
     label: t('welcome.step2'),
     hint: t('welcome.step2Hint'),
   },
   {
     key: '3',
-    done: Boolean(store.clientConfig?.endpoint),
+    state: store.isRunning && Boolean(store.clientConfig?.endpoint) ? 'done' : 'todo',
     route: '/connect',
     label: t('welcome.step3'),
     hint: t('welcome.step3Hint'),
   },
 ]);
+
+/** 三态配色：unknown 走灰底 + 虚线边框，和「待完成」的实线灰分开 */
+const STATE_PILL = {
+  done: ['pill--on'],
+  todo: ['pill--idle'],
+  unknown: ['pill--idle', 'step__pill--unknown'],
+};
 
 async function runDemo() {
   isDemoLoading.value = true;
@@ -68,10 +94,32 @@ function go(route) {
   router.push(route);
 }
 
-onMounted(() => {
-  // 第三步的完成标记取自接入配置，进来就顺手拉一次
-  if (store.isRunning) store.loadClientConfig();
-});
+/**
+ * 三张卡要用的 state 平时由各页面自己加载，直接落在欢迎页（尤其是刷新）时还是空的，
+ * 卡片会全部显示「待完成」。这里进来就把判定依据补齐。
+ *
+ * 冷启动时 App.vue 的 refreshBackend() 还没回来，isRunning 仍是 false：
+ * 所以必须 watch 运行态再补一次，不能只在 onMounted 里做判断。
+ */
+async function syncProgress() {
+  // 运行态是别的页面改的（启动 / 停止都发生在连接页、状态页），进来先对齐一次，
+  // 否则卡片会照着上一页残留的状态渲染
+  await store.refreshStatus();
+  const tasks = [
+    store.loadConnections(),
+    // 停止态读不到生效配置，快照是最后一道离线证据
+    store.loadSnapshots(),
+    store.ensureSchemaLoaded(),
+  ];
+  if (store.isRunning) tasks.push(store.loadClientConfig());
+  // 停止时 ensureSchemaLoaded 直接返回，权限判定得单独从 dev.yml 读一次
+  else tasks.push(store.loadCurrentPolicy());
+  // 单个请求失败不该让另外两张卡跟着空掉
+  await Promise.allSettled(tasks);
+}
+
+onMounted(syncProgress);
+watch(() => store.isRunning, syncProgress);
 </script>
 
 <template>
@@ -99,8 +147,8 @@ onMounted(() => {
       </div>
       <div class="panel__body steps">
         <div v-for="step in steps" :key="step.key" class="step" @click="go(step.route)">
-          <span class="pill" :class="step.done ? 'pill--on' : 'pill--idle'">
-            <span class="dot" />{{ step.done ? t('welcome.done') : t('welcome.todo') }}
+          <span class="pill" :class="STATE_PILL[step.state]">
+            <span class="dot" />{{ t(`welcome.${step.state}`) }}
           </span>
           <div class="step__text">
             <strong class="step__label">{{ step.key }}. {{ step.label }}</strong>
@@ -247,6 +295,11 @@ onMounted(() => {
 .step__label {
   font-size: 15px;
   color: var(--ink);
+}
+
+/* 「未确认」与「待完成」同底色，用虚线边框说明前者是看不到、后者是没做 */
+.step__pill--unknown {
+  border-style: dashed;
 }
 
 .step__hint {

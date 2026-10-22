@@ -19,6 +19,8 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { DatabaseSync } = require('node:sqlite');
 
+const { parseSseMessages } = require(path.join(__dirname, '..', 'sidecar-backend', 'src', 'mcp-client'));
+
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 
@@ -35,6 +37,7 @@ const PAGE_SHOTS = [
   { route: 'mcp', title: { 'zh-CN': 'MCP Client', 'en-US': 'MCP Client' } },
   { route: 'connect', title: { 'zh-CN': '接入 AI', 'en-US': 'Connect AI' } },
   { route: 'permissions', title: { 'zh-CN': '权限矩阵', 'en-US': 'Permission Matrix' } },
+  { route: 'ontology', title: { 'zh-CN': '业务本体论', 'en-US': 'Business Ontology' } },
   { route: 'users', title: { 'zh-CN': '用户与组织', 'en-US': 'Users & Orgs' } },
   { route: 'policy', title: { 'zh-CN': '策略预览', 'en-US': 'Policy Preview' } },
   { route: 'settings', title: { 'zh-CN': '设置', 'en-US': 'Settings' } },
@@ -630,6 +633,54 @@ async function capturePages(cdp, dir) {
   }
 }
 
+/**
+ * 平台网关的最小 MCP 客户端：只发 JSON-RPC、读 SSE 帧。
+ *
+ * 用来验证「本体论真的送到了客户端」——这一段绕开前端，直接以 AI 客户端的
+ * 身份走网关，和 Claude Desktop 拿到的配置是同一条路。
+ *
+ * @param {string} baseUrl 网关地址，形如 http://127.0.0.1:1234
+ * @param {string} token Bearer 令牌
+ */
+function makeGatewayClient(baseUrl, token) {
+  let sessionId = null;
+  let nextId = 1;
+  return async (method, params = {}) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      Authorization: `Bearer ${token}`,
+    };
+    if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+    const response = await fetch(`${baseUrl}/api/v1/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
+    });
+    const incoming = response.headers.get('mcp-session-id');
+    if (incoming) sessionId = incoming;
+    const frames = parseSseMessages(await response.text());
+    return frames[0] ?? null;
+  };
+}
+
+/**
+ * 关掉可能还开着的下拉。
+ *
+ * Element Plus 的下拉 teleport 到 body，旧下拉只是隐藏、仍在 DOM 里，
+ * 直接按文本找 option 会点到上一个下拉的残留项，界面毫无反应。
+ */
+async function closeDropdowns(cdp) {
+  await cdp.evaluate(
+    `document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+     'ok'`
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
+
+/** 只取可见的下拉项 */
+const VISIBLE_OPTIONS = `[...document.querySelectorAll('.el-select-dropdown__item')].filter((item) => item.offsetParent !== null)`;
+
 function killTree(child) {
   if (!child?.pid) return;
   try {
@@ -657,7 +708,11 @@ async function main() {
   }
 
   const appDb = new DatabaseSync(path.join(projectDir, 'app.db'));
-  appDb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);');
+  // 两张表：本体论的「关联表」是多选，只有一张表时根本验不了多选
+  appDb.exec(`
+    CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
+    CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), amount REAL);
+  `);
   appDb.close();
   const analyticsDb = new DatabaseSync(path.join(projectDir, 'analytics.db'));
   analyticsDb.exec(`
@@ -683,6 +738,8 @@ async function main() {
   // 直接用后端的存储层写。keystore key 与连接库都在同一个数据目录，加密payload
   // 用同一把 key，UI 拿到的 readable 才是 true、启动按钮才可用。
   const { ConnectionStore } = require(path.join(ROOT, 'sidecar-backend', 'src', 'connections.js'));
+  const { loadSecret, signToken } = require(path.join(ROOT, 'sidecar-backend', 'src', 'jwt'));
+  const { dataFile } = require(path.join(ROOT, 'sidecar-backend', 'src', 'paths'));
   const seedStore = new ConnectionStore(process.env.MCP_BUILDER_DB);
   seedStore.save({
     name: 'broken',
@@ -694,6 +751,36 @@ async function main() {
     origin: 'test',
   });
   seedStore.close();
+
+  // 造几条本体论条目：两个库各一套，供「本体论页渲染」与「网关送达」两处断言使用
+  const { OntologyStore } = require(path.join(ROOT, 'sidecar-backend', 'src', 'ontology.js'));
+  const ontologySeed = new OntologyStore(process.env.MCP_BUILDER_DB);
+  ontologySeed.save({
+    database: 'app',
+    kind: 'term',
+    name: '买家',
+    aliases: ['客户', 'customer'],
+    definition: '平台的付费主体，一个买家可有多个订单',
+    tables: ['app.main.customers'],
+  });
+  ontologySeed.save({
+    database: 'analytics',
+    kind: 'term',
+    name: '事件',
+    aliases: ['行为'],
+    definition: '用户在系统里留下的一条记录',
+    tables: ['analytics.main.events'],
+  });
+  ontologySeed.save({
+    database: 'analytics',
+    kind: 'metric',
+    name: 'GMV',
+    aliases: ['成交总额'],
+    definition: '已支付订单的金额合计',
+    expression: 'sum(amount) where status = "paid"',
+    tables: ['analytics.main.orders'],
+  });
+  ontologySeed.close();
   const profileDir = path.join(workDir, 'edge-profile');
   const debugPort = 9333;
   const edge = spawn(
@@ -820,6 +907,29 @@ async function main() {
     );
     record('切回中文复原', zhTitle === '数据库连接', zhTitle);
 
+    // 菜单顺序必须与使用向导的五步一致：动线在导航上看得见，用户才不用猜下一步
+    const navOrder = await cdp.evaluate(
+      `[...document.querySelectorAll('.nav__item .nav__title')].map((item) => item.textContent.trim())`
+    );
+    record(
+      '菜单顺序与使用向导一致',
+      JSON.stringify(navOrder) ===
+        JSON.stringify([
+          '欢迎',
+          '数据库连接',
+          '权限矩阵',
+          'MCP Client',
+          '业务本体论',
+          '接入 AI',
+          'Schema 浏览器',
+          '运行状态',
+          '用户与组织',
+          '策略预览',
+          '设置',
+        ]),
+      navOrder.join(' → ')
+    );
+
     // 使用向导：首访自动弹出，关闭持久化，悬浮按钮 / 顶栏可再次开启，步骤直达对应页
     const guideIntro =
       await cdp.evaluate(`document.querySelector('.guide__intro')?.textContent ?? ''`);
@@ -869,6 +979,35 @@ async function main() {
       (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
     );
     record('向导步骤直达对应页面', guideJumped === 'ok', await cdp.evaluate(`location.hash`));
+
+    // 本体论是接入 AI 前的那一步：序号、按钮、跳转目标都要对
+    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
+    await waitFor('向导再次打开', async () =>
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
+    );
+    const guideSteps = await cdp.evaluate(
+      `[...document.querySelectorAll('.guide-step')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim())`
+    );
+    record(
+      '本体论是接入 AI 前的一步',
+      guideSteps.length === 5 &&
+        guideSteps[3].includes('讲清业务') &&
+        guideSteps[3].includes('4') &&
+        guideSteps[4].includes('接入 AI'),
+      `${guideSteps.length} 步：${guideSteps.map((item) => item.slice(0, 12)).join(' / ')}`
+    );
+    const ontologyJumped = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.guide-step button')]
+        .find((item) => item.textContent.includes('去维护本体论'));
+      if (!button) return 'missing';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('本体论步骤跳转到本体论页', async () =>
+      (await cdp.evaluate(`location.hash`)) === '#/ontology' &&
+      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
+    );
+    record('本体论步骤直达本体论页', ontologyJumped === 'ok', await cdp.evaluate(`location.hash`));
 
     // 回到连接页再继续：后面的启动用例操作的是连接列表
     await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
@@ -1066,6 +1205,52 @@ async function main() {
       stoppedText.includes('已连接') ? '仍显示已连接' : ''
     );
 
+    // 停止态读不到生效配置（config.current 需要 baseUrl）：步骤 2 只能靠历史快照判断，
+    // 连快照都没有时必须显示「未确认」，不能武断写成「待完成」
+    await cdp.evaluate(`location.hash = '#/'; 'ok'`);
+    await waitFor('停止后欢迎页渲染', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.step').length`)) === 3
+    );
+    const stepPill = async (index) =>
+      (
+        await cdp.evaluate(
+          `document.querySelectorAll('.step')[${index}]?.querySelector('.pill')?.textContent ?? ''`
+        )
+      ).trim();
+    // 上面的回滚把 grants 清空了，所以步骤 2 的真实状态是「待完成」。
+    // 旧实现靠历史快照兜底会说「已完成」，这条断言顺带证明读的是 dev.yml 而不是快照。
+    await waitFor('停止后步骤 2 按 dev.yml 判定', async () => (await stepPill(1)) === '待完成');
+    const stoppedStatus = await rpc('graphjin.status');
+    // 接入配置跟着实例失效：停了就不该还标着已完成
+    await waitFor('停止后步骤 3 回落', async () => (await stepPill(2)) === '待完成', 8_000);
+    const stoppedStep3 = await stepPill(2);
+    const railText = await cdp.evaluate(
+      `document.querySelector('.rail__foot')?.textContent?.trim() ?? ''`
+    );
+    record(
+      '停止后步骤 3 回落为待完成',
+      stoppedStep3 === '待完成',
+      `${stoppedStep3} · 运行态 ${stoppedStatus.running} · 侧栏 ${railText} · 步骤2 ${await stepPill(1)}`
+    );
+    record('停止后步骤 2 以 dev.yml 为准', (await stepPill(1)) === '待完成', await stepPill(1));
+
+    // 停止态判定的真相来源是 GraphJin 回写进 dev.yml 的 access。这里直接打接口，
+    // 排除「其实靠快照兜底」的可能
+    const fileConfig = await rpc('config.file', { projectDir: stoppedStatus.projectDir });
+    record(
+      '停止后仍能从 dev.yml 读出数据源与角色',
+      fileConfig.sources.length > 0 && fileConfig.roles.length > 0,
+      `${fileConfig.sources.map((item) => item.name).join(',')} · 角色 ${fileConfig.roles
+        .map((item) => item.name)
+        .join(',')}`
+    );
+
+    // 下面的步骤还在连接页上点「启动」，断言完必须回到原页面
+    await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
+    await waitFor('回到连接页', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) > 0
+    );
+
     // 删掉运行中实例正在用的库：实例要重启，Schema 页随之少一个库
     await cdp.evaluate(`(() => {
       const row = [...document.querySelectorAll('.conns tbody tr')]
@@ -1143,6 +1328,220 @@ async function main() {
       connectText.replace(/\s+/g, ' ').slice(0, 100)
     );
 
+    // 业务本体论：按库维护 + 经网关送达 AI 客户端，两头都要验
+    await cdp.evaluate(`location.hash = '#/ontology'; 'ok'`);
+    await waitFor('本体论页渲染', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.entries tbody tr').length`)) > 0
+    );
+    // 显式选 app 库，避免依赖默认值
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`document.querySelector('.picker .el-select input, .picker .el-select')?.click(); 'ok'`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await cdp.evaluate(`(() => {
+      const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === 'app');
+      option?.click();
+      return option ? 'ok' : 'missing';
+    })()`);
+    await waitFor('app 库条目渲染', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('买家')
+    );
+    const appText = await cdp.evaluate(`document.querySelector('.entries').textContent`);
+    record(
+      '本体论页展示所选库的条目',
+      appText.includes('买家') && appText.includes('客户') && !appText.includes('事件'),
+      appText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    // 切到另一个库：条目必须整套换掉，不能串
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`document.querySelector('.picker .el-select input, .picker .el-select')?.click(); 'ok'`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await cdp.evaluate(`(() => {
+      const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === 'analytics');
+      option?.click();
+      return option ? 'ok' : 'missing';
+    })()`);
+    await waitFor('切到 analytics 库后条目整套更换', async () => {
+      const text = await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`);
+      return text.includes('事件') && !text.includes('买家');
+    });
+    record('每个库有自己的一套本体论', true);
+
+    // 指标在另一个标签页：切过去才能看到，顺带验标签切换
+    await cdp.evaluate(`(() => {
+      const tab = [...document.querySelectorAll('.kind')].find((item) => item.textContent.includes('指标'));
+      tab?.click();
+      return 'ok';
+    })()`);
+    await waitFor('指标标签展示 GMV', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('GMV')
+    );
+    const metricText = await cdp.evaluate(`document.querySelector('.entries').textContent`);
+    record(
+      '指标口径带计算式展示',
+      metricText.includes('GMV') && metricText.includes('sum(amount)'),
+      metricText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    // 关联表：下拉多选的候选来自当前库的 Schema。回到 app —— analytics 在前面被删掉后
+    // 实例里已经没有它的表了，拿它验下拉会永远空
+    // 先切回「术语」标签，再切库：切库会重置表单，顺序反了表单的类别会停在「指标」
+    await cdp.evaluate(`(() => {
+      const tab = [...document.querySelectorAll('.kind')].find((item) => item.textContent.includes('术语'));
+      tab?.click();
+      return 'ok';
+    })()`);
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`document.querySelector('.picker .el-select input, .picker .el-select')?.click(); 'ok'`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await cdp.evaluate(`(() => {
+      const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === 'app');
+      option?.click();
+      return option ? 'ok' : 'missing';
+    })()`);
+    await waitFor('切回 app 库', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('买家')
+    );
+
+    const tablesField = await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.textContent.includes('关联表'));
+      return field ? field.textContent : 'missing';
+    })()`);
+    // 提示语只报数量，具体表名在下拉里（下面两项分别验）
+    record(
+      '关联表候选来自当前库的 Schema',
+      tablesField.includes('候选来自当前库的 Schema') && tablesField.includes('共 2 张表'),
+      tablesField.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 从下拉里连续勾两张表：多选必须是「累加」，不能后勾的顶掉先勾的
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.querySelector('.field__label')?.textContent.trim() === '关联表');
+      field?.querySelector('input')?.click();
+      return 'ok';
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const optionText = await cdp.evaluate(`(() => ${VISIBLE_OPTIONS}.map((item) => item.textContent.trim()).join(' | '))()`);
+    record(
+      '关联表下拉列出当前库的表',
+      optionText.includes('users') && optionText.includes('orders'),
+      optionText.slice(0, 120)
+    );
+    for (const table of ['users', 'orders']) {
+      await cdp.evaluate(`(() => {
+        const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === '${table}');
+        option?.click();
+        return option ? 'ok' : 'missing';
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await closeDropdowns(cdp);
+    const tagText = await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.querySelector('.field__label')?.textContent.trim() === '关联表');
+      return field?.textContent ?? '';
+    })()`);
+    record(
+      '关联表多选累加写入表单',
+      tagText.includes('users') && tagText.includes('orders'),
+      tagText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 新增一条术语：按标签精确定位字段（表单里现在有多个下拉，靠文本包含会认错）
+    await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.querySelector('.field__label')?.textContent.trim() === '名称');
+      const input = field?.querySelector('input');
+      if (!input) return 'no-name-input';
+      input.value = '会话';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    })()`);
+    await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.querySelector('.field__label')?.textContent.trim() === '含义');
+      const box = field?.querySelector('textarea');
+      if (!box) return 'no-definition-input';
+      box.value = '一次连续的访问，跨多个事件';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    })()`);
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.actions button')]
+        .find((item) => item.textContent.trim() === '保存');
+      button?.click();
+      return 'ok';
+    })()`);
+    await waitFor('新术语进入列表与预览', async () => {
+      const list = await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`);
+      const preview = await cdp.evaluate(`document.querySelector('.rendered')?.textContent ?? ''`);
+      return list.includes('会话') && preview.includes('会话');
+    });
+    record('新增术语同步到列表与预览', true);
+
+    // 两张表都要跟着条目落库：只存一张说明多选在保存环节被截断了
+    const savedRow = await cdp.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.entries tbody tr')]
+        .find((item) => item.textContent.includes('会话'));
+      return row ? row.textContent : 'missing';
+    })()`);
+    record(
+      '多选的关联表全部落库',
+      savedRow.includes('users') && savedRow.includes('orders'),
+      savedRow.replace(/\s+/g, ' ').slice(0, 140)
+    );
+
+    // 关键一段：以 AI 客户端的身份走网关，证明本体论真的送到了模型手里
+    const secret = loadSecret(dataFile('jwt.secret'));
+    const gatewayToken = signToken({ sub: '1', role: 'admin' }, secret, 300);
+    const gatewayClient = makeGatewayClient(`http://127.0.0.1:${backend.port}`, gatewayToken);
+
+    const handshake = await gatewayClient('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'verify-ui', version: '0.1.0' },
+    });
+    const instructions = handshake?.result?.instructions ?? '';
+    record(
+      '网关握手即下发业务语境',
+      instructions.includes('业务本体论') && instructions.includes('买家') && instructions.includes('事件'),
+      instructions.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    const listed = await gatewayClient('tools/list');
+    const toolNames = (listed?.result?.tools ?? []).map((tool) => tool.name);
+    record(
+      '网关追加本体论工具且不丢上游工具',
+      toolNames.includes('business_ontology') && toolNames.includes('query_catalog'),
+      toolNames.join(', ')
+    );
+
+    const ontologyCall = await gatewayClient('tools/call', {
+      name: 'business_ontology',
+      arguments: {},
+    });
+    const ontologyText = ontologyCall?.result?.content?.[0]?.text ?? '';
+    record(
+      '本体论工具返回全部库的内容',
+      ontologyText.includes('买家') && ontologyText.includes('事件'),
+      ontologyText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 按库只取一节：别的库的内容不该出现
+    const analyticsOnly = await gatewayClient('tools/call', {
+      name: 'business_ontology',
+      arguments: { database: 'analytics' },
+    });
+    const analyticsText = analyticsOnly?.result?.content?.[0]?.text ?? '';
+    record(
+      '本体论工具可按库取一节',
+      analyticsText.includes('事件') && !analyticsText.includes('买家'),
+      analyticsText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
     await cdp.evaluate(`location.hash = '#/'; 'ok'`);
     await cdp.evaluate(`(() => {
       const button = [...document.querySelectorAll('.hero__actions button')]
@@ -1161,6 +1560,18 @@ async function main() {
       demoText.replace(/\s+/g, ' ').slice(0, 100)
     );
 
+    // 离线读配置的完整验收：演示项目 dev.yml 里有一份真实的 analyst grants
+    const demoStatus = await rpc('graphjin.status');
+    const demoFile = await rpc('config.file', { projectDir: demoStatus.projectDir });
+    const demoGrants = demoFile.sources.flatMap((item) => item.access?.grants ?? []);
+    record(
+      '离线读出的 grants 与演示配置一致',
+      demoGrants.length === 1 &&
+        demoGrants[0].role === 'analyst' &&
+        demoGrants[0].tables.length === 2,
+      demoGrants.map((grant) => `${grant.role}:${grant.tables.map((table) => table.name).join('+')}`).join(',')
+    );
+
     await cdp.evaluate(`(() => {
       const button = [...document.querySelectorAll('button')]
         .find((item) => item.textContent.includes('开始体检'));
@@ -1177,6 +1588,20 @@ async function main() {
       checkText.includes('正常') && !checkText.includes('异常'),
       checkText.replace(/\s+/g, ' ').slice(0, 120)
     );
+
+    // 冷启动：刷新后没有任何页面帮忙加载 state，三张卡必须自己把判定依据补齐。
+    // 只靠 onMounted 判断 isRunning 会输给 App.vue 的异步 refreshBackend，卡片会全变「待完成」。
+    await cdp.evaluate(`location.hash = '#/'; 'ok'`);
+    await cdp.evaluate(`location.reload(); 'ok'`);
+    await waitFor('刷新后欢迎页重新渲染', async () =>
+      (await cdp.evaluate(`document.querySelector('.hero__title')?.textContent ?? ''`)).includes('MCP')
+    );
+    const doneSteps = async () => {
+      const text = await cdp.evaluate(`document.querySelector('.steps')?.textContent ?? ''`);
+      return (text.match(/已完成/g) ?? []).length;
+    };
+    await waitFor('刷新后按真实数据回填三步状态', async () => (await doneSteps()) === 3);
+    record('刷新后三步状态仍为已完成', (await doneSteps()) === 3, `${await doneSteps()} / 3`);
 
     console.log(`\n截图：${connectionsShot}`);
     console.log(`      ${analyticsShot}`);

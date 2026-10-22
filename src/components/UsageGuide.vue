@@ -14,11 +14,17 @@ const visible = computed({
   set: (value) => (value ? store.openGuide() : store.closeGuide()),
 });
 
-/** 步骤顺序就是用户动线：连接 → 配权限 → 验证 → 接入 AI */
+/**
+ * 步骤顺序就是用户动线：连接 → 配权限 → 验证 → 本体论 → 接入 AI。
+ *
+ * 本体论排在接入之前：AI 客户端一旦接上就会开始问业务问题，语境得先就位，
+ * 否则前几步做得再对，AI 也只是个会查表的东西。
+ */
 const STEPS = [
   { key: 'connect', path: '/connections' },
   { key: 'permissions', path: '/permissions' },
   { key: 'verify', path: '/mcp' },
+  { key: 'ontology', path: '/ontology' },
   { key: 'connectAi', path: '/connect' },
 ];
 
