@@ -111,13 +111,18 @@ export default {
     run: 'Run via MCP',
     rawNote: 'Runs execute_graphql and shows the raw JSON',
     queryRequired: 'Enter a query first',
+    queryUnwrapped: 'Extracted the query field from the pasted arguments and ran it',
+    queryJsonOnly:
+      'That is a JSON tool argument, not a GraphQL statement: paste the { ... } statement itself, or { "query": "..." }',
+    copyFailed: 'Copy failed — please select the text and copy it manually',
     sampleLabel: 'Sample queries:',
     sampleRows: 'List {table}',
     sampleOne: 'Fetch one {table}',
     sampleCopied: '{label} copied',
     copyArgs: 'Copy arguments',
     toolSampleTitle: 'Call examples',
-    toolSampleHint: 'Arguments are JSON — copy and paste them straight into your AI client',
+    toolSampleHint:
+      'Arguments are JSON — copy them into your AI client; the Run box on this page wants the GraphQL statement itself',
   },
 
   ontology: {
@@ -191,7 +196,7 @@ export default {
     title: 'Usage wizard',
     intro: 'Five steps to wire any database into your AI: connect → set permissions → verify → explain the business → plug in. Each step jumps straight to the right page.',
     close: 'Close wizard',
-    reopenHint: 'Reopen anytime from the "Usage wizard" button in the bottom-right or the top bar',
+    reopenHint: 'Reopen anytime from the "Usage wizard" button in the bottom-right corner',
     tip: 'Note: admin is the reserved role and never gets restriction rules; MCP does not forward user identity, so row filters only apply to HTTP calls.',
     steps: {
       connect: {

@@ -554,7 +554,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (65 checks)
+npm run verify:ui        # real backend + headless Edge (67 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -670,7 +670,7 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (220)
+npm test                 # backend unit tests (223)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
@@ -679,7 +679,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml (65)
+npm run verify:ui        # real backend + headless Edge: locales, window title, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping (67)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

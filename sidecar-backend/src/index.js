@@ -136,6 +136,38 @@ async function applySourceAccess(service, projectDir, database, access) {
 }
 
 /**
+ * 把入参里的 query 归一成 GraphQL 语句本体。
+ *
+ * 前端输入框既接受语句本体，也接受从调用示例复制来的 JSON 参数（`{ "query": "..." }`）——
+ * 用户分不清这两者很正常。粘了 JSON 就替他把 query 取出来；是 JSON 却取不到 query，
+ * 说明粘错了东西，这时候必须说清楚，不能把 JSON 扔给 GraphJin，
+ * 换回来一句没人看得懂的「unexpected token 'query'」。
+ *
+ * @param {*} raw params.query
+ * @returns {string} GraphQL 语句本体
+ */
+function requireGraphqlQuery(raw) {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw RpcError.invalidParams('query 不能为空');
+  }
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) return trimmed;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    // 语句本体同样以 { 开头，解析失败就按原样交给 GraphJin 判断
+    return trimmed;
+  }
+  if (parsed && typeof parsed.query === 'string' && parsed.query.trim() !== '') {
+    return parsed.query.trim();
+  }
+  throw RpcError.invalidParams(
+    'query 看起来是 JSON 参数而不是 GraphQL 语句：请粘贴 { ... } 语句本体，或 { "query": "..." } 形式的参数'
+  );
+}
+
+/**
  * 把 GraphJin 形态的 grants 数组折成 { role: { table: rule } }。
  *
  * @param {Array<Object>|Object|null} grants
@@ -746,16 +778,12 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       return tools.map(({ name, description }) => ({ name, description: description ?? '' }));
     })
     .register('mcp.query', async (params) => {
-      const query = params?.query;
-      if (typeof query !== 'string' || query.trim() === '') {
-        throw RpcError.invalidParams('query 不能为空');
-      }
       const role = requireRole(params);
       const service = await getService(requireBaseUrl(params), role);
       const started = Date.now();
       // MCP 的 execute_graphql 不透传 X-User-Code：只验证角色级规则，行过滤不生效
       const result = await service.mcp.callTool('execute_graphql', {
-        query,
+        query: requireGraphqlQuery(params?.query),
         ...(params?.variables && typeof params.variables === 'object'
           ? { variables: params.variables }
           : {}),
@@ -1237,4 +1265,6 @@ module.exports = {
   emitReady,
   // 探活逻辑单独导出，测试可以注入假 service，不必真起 GraphJin
   probeDatabases,
+  // 入参归一同理：前端被绕过时后端仍要把「粘错东西」说清楚
+  requireGraphqlQuery,
 };

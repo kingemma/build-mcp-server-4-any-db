@@ -185,7 +185,7 @@ export const useAppStore = defineStore('app', {
       this.guideOpen = true;
     },
 
-    /** 关闭即视为「不再自动弹出」；顶栏按钮仍可再次打开 */
+    /** 关闭即视为「不再自动弹出」；右下角悬浮按钮仍可再次打开 */
     closeGuide() {
       this.guideOpen = false;
       localStorage.setItem(GUIDE_DISMISSED_KEY, '1');

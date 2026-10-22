@@ -614,15 +614,16 @@ async function capturePages(cdp, dir) {
     }
 
     // 使用向导是常驻入口，单独截一张打开态的抽屉图
+    // 顶栏入口在 App.vue 里被注释掉了，用右下角悬浮按钮打开
     await cdp.evaluate(`location.hash = '#/'; 'ok'`);
     await waitFor(`${locale}/guide 欢迎页渲染`, async () =>
       (await cdp.evaluate(`document.querySelector('.topbar__title')?.textContent.trim()`)) ===
       PAGE_SHOTS[0].title[locale]
     );
-    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
-    await waitFor(`${locale}/guide 抽屉打开`, async () =>
-      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
-    );
+    await waitFor(`${locale}/guide 抽屉打开`, async () => {
+      await cdp.evaluate(`document.querySelector('.guide-fab')?.click(); 'ok'`);
+      return (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null;
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
     await cdp.screenshot(path.join(dir, locale, 'guide.png'));
     console.log(`截图 ${locale}/guide.png`);
@@ -930,7 +931,7 @@ async function main() {
       navOrder.join(' → ')
     );
 
-    // 使用向导：首访自动弹出，关闭持久化，悬浮按钮 / 顶栏可再次开启，步骤直达对应页
+    // 使用向导：首访自动弹出，关闭持久化，悬浮按钮可再次开启，步骤直达对应页
     const guideIntro =
       await cdp.evaluate(`document.querySelector('.guide__intro')?.textContent ?? ''`);
     record('首访使用向导自动弹出', guideIntro.includes('连接'), guideIntro.slice(0, 60));
@@ -961,11 +962,14 @@ async function main() {
       (await cdp.evaluate(`document.querySelector('.guide__intro')`)) === null
     );
 
-    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
-    await waitFor('使用向导再次打开', async () =>
-      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
-    );
-    record('顶栏可再次打开使用向导', true);
+    // 刷新后（向导已被关过、不再自动弹出）仍能重新打开。
+    // 顶栏那个入口在 App.vue 里被注释掉了，现在唯一入口是右下角悬浮按钮；
+    // 轮询里重复点击是安全的：openGuide 幂等，早于 Vue 绑定完成的点击不会被吞掉
+    await waitFor('刷新后可再次打开使用向导', async () => {
+      await cdp.evaluate(`document.querySelector('.guide-fab')?.click(); 'ok'`);
+      return (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null;
+    });
+    record('刷新后可再次打开使用向导', true);
 
     const guideJumped = await cdp.evaluate(`(() => {
       const button = [...document.querySelectorAll('.guide-step button')]
@@ -981,10 +985,11 @@ async function main() {
     record('向导步骤直达对应页面', guideJumped === 'ok', await cdp.evaluate(`location.hash`));
 
     // 本体论是接入 AI 前的那一步：序号、按钮、跳转目标都要对
-    await cdp.evaluate(`document.querySelector('.guide-open-btn')?.click(); 'ok'`);
-    await waitFor('向导再次打开', async () =>
-      (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null
-    );
+    // 顶栏入口在 App.vue 里被注释掉了，改用右下角悬浮按钮
+    await waitFor('向导再次打开', async () => {
+      await cdp.evaluate(`document.querySelector('.guide-fab')?.click(); 'ok'`);
+      return (await cdp.evaluate(`document.querySelector('.guide__intro')`)) !== null;
+    });
     const guideSteps = await cdp.evaluate(
       `[...document.querySelectorAll('.guide-step')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim())`
     );
@@ -1166,6 +1171,47 @@ async function main() {
       'MCP 工具调用示例渲染',
       toolSampleText.includes('execute_graphql') && toolSampleText.includes('"query"'),
       toolSampleText.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    // Run 输入框粘「调用示例」的 JSON 参数：平台替用户取出 query，而不是把 JSON 扔给 GraphJin
+    await cdp.evaluate(`(() => {
+      const box = document.querySelector('.query textarea');
+      if (!box) return 'missing';
+      box.value = '{ "query": "{ events(limit: 1) { id } }" }';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      const button = [...document.querySelectorAll('button')]
+        .find((item) => item.textContent.includes('通过 MCP 执行'));
+      if (!button) return 'no-button';
+      button.click();
+      return 'ok';
+    })()`);
+    await waitFor('粘 JSON 参数也能跑出结果', async () => {
+      const text = await cdp.evaluate(`document.querySelector('.result')?.textContent ?? ''`);
+      return text.includes('"data"') && !text.includes('unexpected token');
+    });
+    const jsonArgText = await cdp.evaluate(`document.querySelector('.result')?.textContent ?? ''`);
+    record(
+      'Run 输入框粘 JSON 参数自动解包',
+      jsonArgText.includes('"data"') && !jsonArgText.includes('unexpected token'),
+      jsonArgText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 后端同样要防：粘成别的 JSON（没有 query 字段）时给明确错误，别透传 GraphJin 的语法错误
+    const mcpStatus = await rpc('graphjin.status');
+    let wrongJsonMessage = '';
+    try {
+      await rpc('mcp.query', {
+        baseUrl: mcpStatus.baseUrl,
+        role: 'admin',
+        query: '{ "database": "app" }',
+      });
+    } catch (error) {
+      wrongJsonMessage = error.message;
+    }
+    record(
+      'mcp.query 对粘错的 JSON 给出明确错误',
+      /JSON 参数/.test(wrongJsonMessage),
+      wrongJsonMessage.slice(0, 120)
     );
 
     const appShot = path.join(workDir, 'schema-app.png');

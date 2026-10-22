@@ -68,13 +68,57 @@ function applySample(sample) {
   query.value = sample.query;
 }
 
+/**
+ * 复制优先走 async clipboard；Electron 窗口失焦 / 非安全上下文会直接拒绝，
+ * 这时候降级到隐藏 textarea + execCommand，两条都失败才提示用户。
+ */
 async function copyText(text, label) {
+  let copied = false;
   try {
     await navigator.clipboard.writeText(text);
-    ElMessage.success(t('mcp.sampleCopied', { label }));
-  } catch (error) {
-    ElMessage.error(error.message);
+    copied = true;
+  } catch {
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      copied = document.execCommand('copy');
+      document.body.removeChild(area);
+    } catch {
+      copied = false;
+    }
   }
+  if (copied) ElMessage.success(t('mcp.sampleCopied', { label }));
+  else ElMessage.error(t('mcp.copyFailed'));
+}
+
+/**
+ * Run 输入框允许两种内容：GraphQL 语句本体，或从「调用示例」复制来的 JSON 参数。
+ *
+ * 页面上两处都叫「示例」，用户粘错一段太正常。粘了 JSON 就替他把 query 取出来并说明，
+ * 否则 GraphJin 只会回一句「unexpected token 'query'」，没人知道是粘错了东西。
+ *
+ * @param {string} text 输入框原文
+ * @returns {{query: string, unwrapped: boolean, isJson: boolean}}
+ */
+function normalizeQueryInput(text) {
+  const trimmed = text.trim();
+  // 语句本体同样以 { 开头，先按 JSON 试一次，失败就按 GraphQL 交出去
+  if (!trimmed.startsWith('{')) return { query: trimmed, unwrapped: false, isJson: false };
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { query: trimmed, unwrapped: false, isJson: false };
+  }
+  if (parsed && typeof parsed.query === 'string' && parsed.query.trim() !== '') {
+    return { query: parsed.query.trim(), unwrapped: true, isJson: true };
+  }
+  return { query: trimmed, unwrapped: false, isJson: true };
 }
 
 /** GraphJin 的成功态是 data 非空；带 errors 就是失败 */
@@ -116,8 +160,16 @@ async function probeAll() {
 }
 
 async function run() {
-  if (query.value.trim() === '') {
+  const input = query.value.trim();
+  if (input === '') {
     ElMessage.warning(t('mcp.queryRequired'));
+    return;
+  }
+  const normalized = normalizeQueryInput(input);
+  // 粘成 JSON 参数时明确告知，别让用户以为粘对了；粘成别的 JSON 就是真粘错了
+  if (normalized.unwrapped) ElMessage.success(t('mcp.queryUnwrapped'));
+  else if (normalized.isJson) {
+    ElMessage.error(t('mcp.queryJsonOnly'));
     return;
   }
   querying.value = true;
@@ -125,7 +177,7 @@ async function run() {
     const data = await rpc('mcp.query', {
       baseUrl: store.baseUrl,
       role: role.value,
-      query: query.value,
+      query: normalized.query,
     });
     result.value = data?.result ?? null;
     elapsed.value = data?.elapsedMs ?? 0;

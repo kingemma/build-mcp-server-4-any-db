@@ -7,7 +7,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createRouter, startHttpServer, probeDatabases } = require('../src/index');
+const {
+  createRouter,
+  startHttpServer,
+  probeDatabases,
+  requireGraphqlQuery,
+} = require('../src/index');
 const { ORIGIN_START, STATUS_CONNECTED, ConnectionStore } = require('../src/connections');
 const { UserStore } = require('../src/users');
 
@@ -227,6 +232,23 @@ roles:
   - name: admin
   - name: analyst
 `;
+
+test('requireGraphqlQuery: 语句本体原样通过', () => {
+  assert.strictEqual(requireGraphqlQuery('{ orders(limit: 5) { id } }'), '{ orders(limit: 5) { id } }');
+  assert.strictEqual(requireGraphqlQuery('  { items(limit: 1) { id } }  '), '{ items(limit: 1) { id } }');
+});
+
+test('requireGraphqlQuery: 粘成调用示例的 JSON 参数时取出 query', () => {
+  const pasted = '{ "query": "{ orders(limit: 5) { id } }" }';
+  assert.strictEqual(requireGraphqlQuery(pasted), '{ orders(limit: 5) { id } }');
+});
+
+test('requireGraphqlQuery: 空值与粘错的 JSON 都给明确错误', () => {
+  assert.throws(() => requireGraphqlQuery(''), /query 不能为空/);
+  assert.throws(() => requireGraphqlQuery(null), /query 不能为空/);
+  // 是 JSON 但没有 query 字段：粘错了东西，说清楚而不是透传 GraphJin 的语法错误
+  assert.throws(() => requireGraphqlQuery('{ "database": "app" }'), /JSON 参数而不是 GraphQL 语句/);
+});
 
 test('config.file: 实例未运行时从 dev.yml 读出权限与角色', async () => {
   const dir = tempProject(GRANTED_YAML);

@@ -111,13 +111,17 @@ export default {
     run: '通过 MCP 执行',
     rawNote: '走 execute_graphql，返回原始 JSON',
     queryRequired: '请先填写查询语句',
+    queryUnwrapped: '已自动取出参数里的 query 字段并执行',
+    queryJsonOnly:
+      '这是工具调用参数（JSON），不是 GraphQL 语句：请粘贴 { ... } 语句本体，或 { "query": "..." } 形式的参数',
+    copyFailed: '复制失败，请手动选中文本复制',
     sampleLabel: '示例查询：',
     sampleRows: '查 {table} 列表',
     sampleOne: '查 {table} 单条',
     sampleCopied: '{label} 已复制',
     copyArgs: '复制参数',
     toolSampleTitle: '调用示例',
-    toolSampleHint: '参数是 JSON 形态，点「复制参数」直接贴给 AI 客户端',
+    toolSampleHint: '参数是 JSON 形态，点「复制参数」贴给 AI 客户端；本页 Run 输入框要的是 GraphQL 语句本体',
   },
 
   ontology: {
@@ -191,7 +195,7 @@ export default {
     title: '使用向导',
     intro: '五步把任意数据库接到 AI：连接 → 配权限 → 验证 → 讲清业务 → 接入。跟着步骤走，每步都能直达对应页面。',
     close: '关闭向导',
-    reopenHint: '关闭后可点右下角「使用向导」或顶栏按钮再次打开',
+    reopenHint: '关闭后可点右下角「使用向导」悬浮按钮再次打开',
     tip: '注意：admin 是平台保留角色，不受限制规则约束；MCP 不透传用户标识，行过滤只在 HTTP 调用下生效。',
     steps: {
       connect: {
