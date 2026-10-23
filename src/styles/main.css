@@ -77,11 +77,14 @@
   box-sizing: border-box;
 }
 
+/* 应用外壳占满窗口且自身不滚：滚动只发生在 App.vue 的 .content 里，
+   否则内容一长就把侧栏一起卷走（侧栏应该是钉住的） */
 html,
 body,
 #app {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {

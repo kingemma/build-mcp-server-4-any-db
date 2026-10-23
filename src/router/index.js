@@ -14,25 +14,26 @@ const UsersView = () => import('../views/UsersView.vue');
 const PolicyView = () => import('../views/PolicyView.vue');
 const SettingsView = () => import('../views/SettingsView.vue');
 
-// meta 只存 i18n key：切换语言时导航与顶栏标题要跟着变
+// meta 只存 i18n key 与图标名：切换语言时导航与顶栏标题要跟着变。
+// icon 对应 components/NavIcon.vue 里的键，侧栏折叠成图标后靠它区分页面。
 //
 // 顺序就是用户动线，与「使用向导」的五步严格一致：欢迎页之后依次是
 // 连接数据库 → 配置权限 → 验证生效 → 讲清业务 → 接入 AI。
 // 导航直接由这个数组生成（App.vue 的 navItems），所以改这里的顺序就等于改菜单顺序。
 // 向导覆盖不到的运维类页面（运行状态 / 用户与组织 / 策略预览 / 设置）排在动线之后。
 export const routes = [
-  { path: '/', name: 'welcome', component: WelcomeView, meta: { titleKey: 'nav.welcome.title', hintKey: 'nav.welcome.hint' } },
-  { path: '/connections', name: 'connections', component: ConnectionsView, meta: { titleKey: 'nav.connections.title', hintKey: 'nav.connections.hint' } },
-  { path: '/permissions', name: 'permissions', component: PermissionsView, meta: { titleKey: 'nav.permissions.title', hintKey: 'nav.permissions.hint' } },
-  { path: '/mcp', name: 'mcp', component: McpView, meta: { titleKey: 'nav.mcp.title', hintKey: 'nav.mcp.hint' } },
-  { path: '/ontology', name: 'ontology', component: OntologyView, meta: { titleKey: 'nav.ontology.title', hintKey: 'nav.ontology.hint' } },
-  { path: '/connect', name: 'connect', component: ConnectView, meta: { titleKey: 'nav.connect.title', hintKey: 'nav.connect.hint' } },
+  { path: '/', name: 'welcome', component: WelcomeView, meta: { titleKey: 'nav.welcome.title', hintKey: 'nav.welcome.hint', icon: 'home' } },
+  { path: '/connections', name: 'connections', component: ConnectionsView, meta: { titleKey: 'nav.connections.title', hintKey: 'nav.connections.hint', icon: 'database' } },
+  { path: '/permissions', name: 'permissions', component: PermissionsView, meta: { titleKey: 'nav.permissions.title', hintKey: 'nav.permissions.hint', icon: 'grid' } },
+  { path: '/mcp', name: 'mcp', component: McpView, meta: { titleKey: 'nav.mcp.title', hintKey: 'nav.mcp.hint', icon: 'terminal' } },
+  { path: '/ontology', name: 'ontology', component: OntologyView, meta: { titleKey: 'nav.ontology.title', hintKey: 'nav.ontology.hint', icon: 'book' } },
+  { path: '/connect', name: 'connect', component: ConnectView, meta: { titleKey: 'nav.connect.title', hintKey: 'nav.connect.hint', icon: 'link' } },
   // 以下不是向导步骤，归到动线之后；Schema 放在这组最前——连接完最常看的就是它
-  { path: '/schema', name: 'schema', component: SchemaView, meta: { titleKey: 'nav.schema.title', hintKey: 'nav.schema.hint' } },
-  { path: '/status', name: 'status', component: StatusView, meta: { titleKey: 'nav.status.title', hintKey: 'nav.status.hint' } },
-  { path: '/users', name: 'users', component: UsersView, meta: { titleKey: 'nav.users.title', hintKey: 'nav.users.hint' } },
-  { path: '/policy', name: 'policy', component: PolicyView, meta: { titleKey: 'nav.policy.title', hintKey: 'nav.policy.hint' } },
-  { path: '/settings', name: 'settings', component: SettingsView, meta: { titleKey: 'nav.settings.title', hintKey: 'nav.settings.hint' } },
+  { path: '/schema', name: 'schema', component: SchemaView, meta: { titleKey: 'nav.schema.title', hintKey: 'nav.schema.hint', icon: 'table' } },
+  { path: '/status', name: 'status', component: StatusView, meta: { titleKey: 'nav.status.title', hintKey: 'nav.status.hint', icon: 'pulse' } },
+  { path: '/users', name: 'users', component: UsersView, meta: { titleKey: 'nav.users.title', hintKey: 'nav.users.hint', icon: 'users' } },
+  { path: '/policy', name: 'policy', component: PolicyView, meta: { titleKey: 'nav.policy.title', hintKey: 'nav.policy.hint', icon: 'file-check' } },
+  { path: '/settings', name: 'settings', component: SettingsView, meta: { titleKey: 'nav.settings.title', hintKey: 'nav.settings.hint', icon: 'sliders' } },
 ];
 
 // 桌面端用 file:// 加载打包产物，history 模式在 file:// 下无法工作，故统一走 hash

@@ -24,6 +24,9 @@ const RESERVED_ROLES = new Set(['admin']);
 /** 使用引导「关闭后不再自动弹出」的持久化标记 */
 const GUIDE_DISMISSED_KEY = 'mcpb.guideDismissed';
 
+/** 侧栏折叠状态的持久化标记：没写过就是首次进入，按默认折叠处理 */
+const RAIL_COLLAPSED_KEY = 'mcpb.railCollapsed';
+
 /**
  * 把用户手填的多值文本拆成数组：逗号 / 顿号 / 换行都算分隔符。
  * 用户不会去想「标准分隔符是什么」，所以都认。
@@ -68,6 +71,8 @@ export const useAppStore = defineStore('app', {
     isBusy: false,
     /** 使用引导抽屉是否打开；关闭后写 localStorage，不再自动弹出 */
     guideOpen: false,
+    /** 侧栏是否折叠为「图标 + tooltip」：首次进入折叠，之后跟随用户选择 */
+    railCollapsed: localStorage.getItem(RAIL_COLLAPSED_KEY) !== '0',
     status: null,
     tables: [],
     schema: null,
@@ -194,6 +199,12 @@ export const useAppStore = defineStore('app', {
     /** 首次进入自动弹出，被关过就静默 */
     autoOpenGuide() {
       if (!localStorage.getItem(GUIDE_DISMISSED_KEY)) this.guideOpen = true;
+    },
+
+    /** 折叠 / 展开侧栏；选择写进 localStorage，下次启动沿用 */
+    toggleRail() {
+      this.railCollapsed = !this.railCollapsed;
+      localStorage.setItem(RAIL_COLLAPSED_KEY, this.railCollapsed ? '1' : '0');
     },
 
     /**

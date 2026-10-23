@@ -948,6 +948,88 @@ async function main() {
     );
     record('使用向导可关闭', guideClosed === 'ok', guideClosed);
 
+    // 布局：窗口本身不滚，滚动只发生在 .content —— 否则内容一长侧栏就跟着被卷走。
+    // 首访（localStorage 里没有折叠标记）侧栏是折叠态：64px，只有图标。
+    const layout = await cdp.evaluate(`(() => {
+      const rail = document.querySelector('.rail');
+      const content = document.querySelector('.content');
+      const title = document.querySelector('.nav__item .nav__title');
+      const icon = document.querySelector('.nav__item .nav-icon');
+      return {
+        windowScroll:
+          document.documentElement.scrollHeight > document.documentElement.clientHeight + 1 ||
+          document.body.scrollHeight > document.body.clientHeight + 1,
+        contentScrolls: content.scrollHeight > content.clientHeight,
+        railWidth: Math.round(rail.getBoundingClientRect().width),
+        collapsed: rail.classList.contains('rail--collapsed'),
+        titleWidth: Math.round(title.getBoundingClientRect().width),
+        iconWidth: Math.round(icon.getBoundingClientRect().width),
+      };
+    })()`);
+    record(
+      '窗口不出整体滚动条',
+      layout.windowScroll === false,
+      `窗口滚动 ${layout.windowScroll} · 内容区可滚 ${layout.contentScrolls}`
+    );
+    record(
+      '侧栏默认折叠成图标',
+      layout.collapsed && layout.railWidth <= 72 && layout.titleWidth === 0 && layout.iconWidth > 0,
+      `宽 ${layout.railWidth}px · 折叠 ${layout.collapsed} · 标题 ${layout.titleWidth}px · 图标 ${layout.iconWidth}px`
+    );
+
+    // 折叠态没有文字，靠 tooltip 补上下文：鼠标移到图标上要弹出「标题 · 副标题」
+    const iconCenter = await cdp.evaluate(`(() => {
+      const box = document.querySelector('.nav__item').getBoundingClientRect();
+      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+    })()`);
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: iconCenter.x,
+      y: iconCenter.y,
+      button: 'none',
+    });
+    let tooltipText = '';
+    await waitFor('折叠态 tooltip 弹出', async () => {
+      tooltipText = await cdp.evaluate(
+        `[...document.querySelectorAll('.el-popper')]
+          .map((item) => item.textContent.replace(/\\s+/g, ' ').trim())
+          .join(' | ')`
+      );
+      return tooltipText.includes('欢迎');
+    }, 6_000).catch(() => false);
+    record('折叠态图标带 tooltip', tooltipText.includes('欢迎'), tooltipText.slice(0, 60));
+    // 移开鼠标，别让 popper 挡住后面的操作
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 700, y: 420, button: 'none' });
+
+    // 底部按钮展开：文案回来、侧栏变宽；选择写进 localStorage，下次启动沿用。
+    // 宽度是 grid-template-columns 的过渡动画（0.16s）：等它稳定再断言，只看 class 会读到中间帧
+    await cdp.evaluate(`document.querySelector('.rail__toggle')?.click(); 'ok'`);
+    await waitFor(
+      '侧栏展开',
+      async () =>
+        (await cdp.evaluate(`document.querySelector('.rail').getBoundingClientRect().width`)) > 200
+    );
+    const expandedRail = await cdp.evaluate(`(() => {
+      const title = document.querySelector('.nav__item .nav__title');
+      return {
+        width: Math.round(document.querySelector('.rail').getBoundingClientRect().width),
+        titleWidth: Math.round(title.getBoundingClientRect().width),
+        remembered: localStorage.getItem('mcpb.railCollapsed'),
+      };
+    })()`);
+    record(
+      '侧栏可展开且记住选择',
+      expandedRail.width > 200 && expandedRail.titleWidth > 0 && expandedRail.remembered === '0',
+      `宽 ${expandedRail.width}px · 标题 ${expandedRail.titleWidth}px · localStorage ${expandedRail.remembered}`
+    );
+    // 收回折叠态：后面的断言与截图按用户首访看到的布局跑
+    await cdp.evaluate(`document.querySelector('.rail__toggle')?.click(); 'ok'`);
+    await waitFor(
+      '侧栏收回折叠态',
+      async () =>
+        (await cdp.evaluate(`document.querySelector('.rail').getBoundingClientRect().width`)) <= 72
+    );
+
     // 关闭写进 localStorage：整页刷新后不再自动弹出
     await cdp.evaluate(
       `localStorage.setItem('mcpb.backendPort', '${backend.port}');

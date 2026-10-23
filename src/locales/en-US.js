@@ -14,6 +14,7 @@ export default {
     down: 'graphjin down',
     port: ':{port}',
     language: 'Language',
+    toggleRail: 'Collapse or expand the sidebar',
   },
 
   nav: {

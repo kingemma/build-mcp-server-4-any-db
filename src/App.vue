@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
+import NavIcon from './components/NavIcon.vue';
 import UsageGuide from './components/UsageGuide.vue';
 import { routes } from './router';
 import { ELEMENT_LOCALES, SUPPORTED_LOCALES } from './locales';
@@ -75,37 +76,81 @@ onBeforeUnmount(() => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <div class="shell" :class="{ 'shell--titlebar': hasTitlebarOverlay }">
+    <div
+      class="shell"
+      :class="{
+        'shell--titlebar': hasTitlebarOverlay,
+        'shell--rail-collapsed': store.railCollapsed,
+      }"
+    >
     <!-- 自绘标题栏：系统按钮画在这条 40px 带上，整条可拖动窗口 -->
     <div v-if="hasTitlebarOverlay" class="titlebar">
       <span class="titlebar__project">{{ projectName }}</span>
     </div>
-    <aside class="rail">
+    <aside class="rail" :class="{ 'rail--collapsed': store.railCollapsed }">
       <div class="brand">
         <div class="brand__mark">◈</div>
-        <div>
+        <div v-show="!store.railCollapsed" class="brand__text">
           <div class="brand__name">MCP Server Build</div>
           <div class="brand__tag serif">any database, one console</div>
         </div>
       </div>
 
       <nav class="nav">
-        <RouterLink
+        <el-tooltip
           v-for="item in navItems"
           :key="item.path"
-          :to="item.path"
-          class="nav__item"
-          active-class="nav__item--active"
+          placement="right"
+          :offset="10"
+          :show-after="120"
+          :disabled="!store.railCollapsed"
+          :content="`${navTitle(item)} · ${navHint(item)}`"
         >
-          <span class="nav__title">{{ navTitle(item) }}</span>
-          <span class="nav__hint">{{ navHint(item) }}</span>
-        </RouterLink>
+          <RouterLink
+            :to="item.path"
+            class="nav__item"
+            active-class="nav__item--active"
+            :aria-label="navTitle(item)"
+          >
+            <NavIcon :name="item.meta.icon" />
+            <span class="nav__text">
+              <span class="nav__title">{{ navTitle(item) }}</span>
+              <span class="nav__hint">{{ navHint(item) }}</span>
+            </span>
+          </RouterLink>
+        </el-tooltip>
       </nav>
 
       <div class="rail__foot">
         <span class="dot" :class="store.isRunning ? 'dot--on' : 'dot--off'" />
-        <span class="mono-dim">{{ store.isRunning ? t('app.live') : t('app.down') }}</span>
+        <span v-show="!store.railCollapsed" class="mono-dim">
+          {{ store.isRunning ? t('app.live') : t('app.down') }}
+        </span>
       </div>
+
+      <button
+        class="rail__toggle"
+        type="button"
+        :aria-label="t('app.toggleRail')"
+        :title="t('app.toggleRail')"
+        :aria-expanded="!store.railCollapsed"
+        @click="store.toggleRail()"
+      >
+        <svg
+          class="rail__toggle-icon"
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m15 6-6 6 6 6" />
+        </svg>
+      </button>
     </aside>
 
     <main class="stage">
@@ -161,7 +206,15 @@ onBeforeUnmount(() => {
   z-index: 1;
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
+  /* 行高必须锁成容器高度：留成 auto 会被内容撑高，overflow 就落到窗口上，
+     侧栏跟着整页一起滚（.content 自己的 overflow 永远不触发） */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  transition: grid-template-columns 0.16s ease;
+}
+
+.shell--rail-collapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
 }
 
 /* 40px 与 electron/main.js 的 TITLEBAR_HEIGHT 一致 */
@@ -203,11 +256,19 @@ onBeforeUnmount(() => {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 30px;
-  padding: 24px 14px;
+  gap: 26px;
+  min-height: 0;
+  padding: 24px 14px 16px;
+  overflow: hidden;
   background: linear-gradient(180deg, #ffffff 0%, var(--rail-bg) 56%, #f1f7ff 100%);
   border-right: 1px solid var(--rail-line);
   color: var(--rail-text);
+}
+
+/* 折叠态只有 64px：左右不留内边距，图标自己居中 */
+.rail--collapsed {
+  gap: 18px;
+  padding: 24px 0 16px;
 }
 
 .brand {
@@ -215,6 +276,16 @@ onBeforeUnmount(() => {
   gap: 11px;
   align-items: center;
   padding: 0 8px;
+  min-width: 0;
+}
+
+.rail--collapsed .brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.brand__text {
+  min-width: 0;
 }
 
 .brand__mark {
@@ -243,17 +314,26 @@ onBeforeUnmount(() => {
   color: var(--rail-faint);
 }
 
+/* 菜单区自己滚：窗口矮到放不下 11 项时，只有这里出滚动条，brand 与底部状态钉住 */
 .nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.rail--collapsed .nav {
+  align-items: center;
+  gap: 6px;
 }
 
 .nav__item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
   border-radius: 8px;
   color: var(--rail-dim);
   text-decoration: none;
@@ -271,15 +351,37 @@ onBeforeUnmount(() => {
   color: var(--accent-strong);
 }
 
+/* 折叠态：42×42 方块只放图标。文案用 CSS 藏起来而不是 v-if ——
+   UI 冒烟的「菜单顺序」断言读的就是 .nav__title 的文字 */
+.rail--collapsed .nav__item {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  justify-content: center;
+}
+
+.rail--collapsed .nav__text {
+  display: none;
+}
+
+.nav__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
 .nav__title {
   font-size: 13.5px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .nav__hint {
   font-size: 11px;
   color: var(--rail-faint);
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .nav__item--active .nav__hint {
@@ -297,6 +399,46 @@ onBeforeUnmount(() => {
   color: var(--rail-dim);
 }
 
+.rail--collapsed .rail__foot {
+  justify-content: center;
+  margin: 0 10px;
+  padding: 14px 0 4px;
+}
+
+/* 折叠 / 展开按钮：折叠态在底部居中，展开态靠左 */
+.rail__toggle {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--rail-dim);
+  background: transparent;
+  border: 1px solid var(--rail-line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.rail__toggle:hover {
+  color: var(--accent-strong);
+  background: var(--rail-bg-soft);
+  border-color: var(--accent-soft);
+}
+
+.rail--collapsed .rail__toggle {
+  margin: 0 auto;
+}
+
+/* 折叠时箭头指向右侧，展开时指回左侧 */
+.rail__toggle-icon {
+  transition: transform 0.16s ease;
+}
+
+.rail--collapsed .rail__toggle-icon {
+  transform: rotate(180deg);
+}
+
 .dot--on {
   background: #16a34a;
   box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.14);
@@ -310,6 +452,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  /* 滚动交给 .content，舞台本身不滚 */
+  overflow: hidden;
 }
 
 .topbar {
@@ -396,6 +541,11 @@ onBeforeUnmount(() => {
 @media (max-width: 1100px) {
   .shell {
     grid-template-columns: 216px minmax(0, 1fr);
+  }
+
+  /* 窄窗口只压缩展开态；折叠态保持 64px，否则图标会被挤掉 */
+  .shell--rail-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr);
   }
 
   .topbar,

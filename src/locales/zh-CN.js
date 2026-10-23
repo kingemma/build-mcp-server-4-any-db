@@ -14,6 +14,7 @@ export default {
     down: 'graphjin down',
     port: ':{port}',
     language: '语言',
+    toggleRail: '折叠或展开侧栏',
   },
 
   nav: {
