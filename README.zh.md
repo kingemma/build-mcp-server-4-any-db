@@ -664,13 +664,13 @@ npm run smoke:binaries
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（223 项）
+npm test                 # 后端单测（353 项）
 
 npm run verify:e2e         # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 npm run verify:migration   # legacy 项目迁移：角色/列折算、写删降级、库不可达（12 项）
 
 cd ..
-npm run test:frontend    # 前端策略归一化 / diff（8 项）
+npm run test:frontend    # 策略归一化 / diff + 中英文语言包 key 一致（12 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
 npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、侧栏钉住/默认折叠/tooltip/展开并记住、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检、停止后按 dev.yml 判定权限、粘成 JSON 参数自动解包、本体论一致性体检报出腐烂引用、从 schema 起草候选、样例评测跑通结构与覆盖、强制规则编译报出无处可挂的冲突、握手只下发目录、按说法检索与对象画像（76 项）

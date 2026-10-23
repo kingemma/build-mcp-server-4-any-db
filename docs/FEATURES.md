@@ -40,7 +40,7 @@
 | dev.yml 增量合并 | 只改 `sources:` 段；支持块风格与扁平的单行 flow 数组（归一化后写回块格式，`sources: []` 也兼容）、引号键，兼容本项目 2 空格与 GraphJin 回写的 4 空格缩进；anchors / aliases / merge keys 与 flow 里的嵌套结构（如 `access: {...}`）显式拒绝 |
 | 一键演示 | `demo.bootstrap`：建示例库（orders / customers + 数据）与 analyst 只读角色（行过滤 + 写删 blocked），直接启动，记录落进「已保存连接」 |
 | 一键体检 | `diagnostics.run`：二进制 / 后端 / 实例 / 库 / 角色逐项 ok / fail / skip |
-| 测试 | `node:test` 共 223 项 |
+| 测试 | `node:test` 共 353 项 |
 
 ### 前端
 
@@ -81,8 +81,8 @@
 | GraphJin 实测基线 | `docs/graphjin-3.21.14-baseline.md` |
 | source 迁移设计与踩坑 | `docs/graphjin-source-migration.md` |
 | 本地测试数据库 | `docs/docker-compose-4-test-db-connection.yml`：MySQL / PostgreSQL / MongoDB / SQL Server，Oracle 注释可选 |
-| 后端单测 | `cd sidecar-backend && npm test`（209 项） |
-| 前端策略单测 | `npm run test:frontend`（8 项） |
+| 后端单测 | `cd sidecar-backend && npm test`（353 项） |
+| 前端单测 | `npm run test:frontend`（12 项：策略归一化 / diff、中英文语言包 key 一致） |
 | 真机全链路 | `cd sidecar-backend && npm run verify:e2e`（24 项，含快照回滚） |
 | legacy 迁移验证 | `cd sidecar-backend && npm run verify:migration`（12 项，含数据库不可达的项目） |
 | 二进制冒烟 | `npm run smoke:binaries` |

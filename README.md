@@ -722,13 +722,13 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (223)
+npm test                 # backend unit tests (353)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
 
 cd ..
-npm run test:frontend    # frontend policy normalization / diff (8)
+npm run test:frontend    # policy normalization / diff + i18n key parity (12)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
 npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles (76)
