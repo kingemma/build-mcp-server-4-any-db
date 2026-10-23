@@ -44,6 +44,11 @@ const {
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
 const { OntologyStore } = require('./ontology');
+const { lintOntology, buildTableIndex } = require('./ontology-lint');
+const { proposeEntries, summarizeValues } = require('./ontology-scaffold');
+const { evaluateExamples } = require('./ontology-eval');
+const { compileRules } = require('./ontology-rules');
+const { createOntologyProvider } = require('./ontology-delivery');
 const { SnapshotStore, buildRollbackPatch, accessForWrite } = require('./snapshots');
 const {
   readSourceConnections,
@@ -334,6 +339,23 @@ function requireRole(params) {
 const GRAPHQL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * 校验一个要拼进查询的标识符。
+ *
+ * 值域扫描直接拼 `{ <表>(limit: N) { <列> } }`，不校验就等于把注入面开在
+ * 「扫一列」这个小功能上。宁可拒掉带点号/引号的表名，让用户先去 Schema 页看。
+ *
+ * @param {*} value
+ * @param {string} field
+ * @returns {string}
+ */
+function requireGraphqlIdent(value, field) {
+  if (typeof value !== 'string' || !GRAPHQL_NAME.test(value)) {
+    throw RpcError.invalidParams(`${field} 必须是合法的 GraphQL 名称（字母/数字/下划线）`);
+  }
+  return value;
+}
+
+/**
  * 从 catalog 的 column 卡片里取出「表 → 列」。
  *
  * 卡片 id 形如 `column:analytics:main.events.id`，最后两段才是表名与列名。
@@ -507,6 +529,31 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
   const ontologyStore = () => {
     if (!ontology) throw RpcError.invalidParams('本体论存储未初始化');
     return ontology;
+  };
+
+  /**
+   * 体检用的 schema 来源。
+   *
+   * 优先级：调用方给的（页面已经有一份，省一次 catalog 翻页）→ 运行中的实例 → 没有。
+   * 拿不到不算错：lint 会跳过需要 schema 的规则，并在 skipped 里说明为什么跳过——
+   * 静默少查几项比少查本身更危险，用户会把「没报错」读成「没问题」。
+   *
+   * @param {Object} [params]
+   * @returns {Promise<{schema: Object|null, source: string}>}
+   */
+  const resolveLintSchema = async (params) => {
+    const provided = params?.schema;
+    if (provided && Array.isArray(provided.tables)) return { schema: provided, source: 'provided' };
+
+    const baseUrl = services.status?.()?.baseUrl ?? null;
+    if (!baseUrl) return { schema: null, source: 'none' };
+
+    try {
+      const service = await getService(baseUrl);
+      return { schema: await discoverSchema(service.mcp, {}), source: 'discovered' };
+    } catch {
+      return { schema: null, source: 'unavailable' };
+    }
   };
 
   /**
@@ -723,16 +770,152 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
       return connectionStore().get(id);
     })
-    // 业务本体论：AI 查数据之前的语境。四类条目见 ontology.js
+    // 业务本体论：AI 查数据之前的语境。六类条目见 ontology.js
     .register('ontology.list', (params) => {
       const kind = params?.kind ?? null;
-      return { entries: ontologyStore().list({ kind }), rendered: ontologyStore().render() };
+      // 按库过滤是 store 早就支持的能力（ontology.js:132-137），之前 RPC 层丢掉了：
+      // 页面自己在前端筛，别的调用方拿不到同样的语义
+      const database = typeof params?.database === 'string' ? params.database : null;
+      return {
+        entries: ontologyStore().list({ kind, database }),
+        rendered: ontologyStore().render({ database }),
+      };
     })
     .register('ontology.save', (params) => ontologyStore().save(params ?? {}))
     .register('ontology.remove', (params) => {
       const id = params?.id;
       if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
       return { removed: ontologyStore().remove(id) };
+    })
+    // 体检：条目与 schema 对账。拿不到 schema 时只跳过需要 schema 的规则，
+    // 其余照跑——否则「先启动实例才能体检」会让这个功能在半数场景下不可用
+    .register('ontology.lint', async (params) => {
+      const { schema, source } = await resolveLintSchema(params);
+      return lintOntology(ontologyStore().list(), { schema, schemaSource: source });
+    })
+    // 起草助手：把「库里已经有、本体论还没覆盖」的东西列出来。
+    // 只产出候选，不落库——定义得人来写，自动生成的空定义只会稀释真正的知识
+    .register('ontology.propose', async (params) => {
+      const { schema, source } = await resolveLintSchema(params);
+      const proposed = proposeEntries({
+        schema,
+        entries: ontologyStore().list(),
+        database: typeof params?.database === 'string' && params.database !== '' ? params.database : null,
+      });
+      return { ...proposed, schemaSource: source };
+    })
+    // 值域扫描：只取一列的前若干行，去重后建议字典。
+    // 用 admin 身份读：平台自己发现 schema 也是 admin；扫描本身只回低基数列的取值，
+    // 且必须由人逐列触发，不做后台遍历
+    .register('ontology.scanValues', async (params) => {
+      const baseUrl = requireBaseUrl(params);
+      const table = requireGraphqlIdent(params?.table, 'table');
+      const column = requireGraphqlIdent(params?.column, 'column');
+      const requested = Number(params?.limit);
+      const limit = Math.min(Math.max(Number.isFinite(requested) ? Math.trunc(requested) : 200, 1), 500);
+
+      const service = await getService(baseUrl);
+      const result = await service.mcp.callTool('execute_graphql', {
+        query: `{ ${table}(limit: ${limit}) { ${column} } }`,
+      });
+      const errors = Array.isArray(result?.errors) ? result.errors : [];
+      if (errors.length > 0) {
+        throw RpcError.invalidParams(`扫描失败：${errors[0]?.message ?? '查询返回错误'}`);
+      }
+
+      const rows = Array.isArray(result?.data?.[table]) ? result.data[table] : [];
+      return { table, column, limit, ...summarizeValues(rows, column) };
+    })
+    // 样例评测：确定性的三项核对（可执行 / 结构 / 覆盖）。
+    // 不调模型：平台没有模型，假装评测模型只会产出无法解释的分数
+    .register('ontology.eval', async (params) => {
+      const { schema, source } = await resolveLintSchema(params);
+      const index = schema ? buildTableIndex(schema) : null;
+      const database =
+        typeof params?.database === 'string' && params.database !== '' ? params.database : null;
+      const baseUrl =
+        typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null;
+
+      let service = null;
+      let note = '没有传实例地址：只做了结构与覆盖检查';
+      if (baseUrl) {
+        try {
+          service = await getService(baseUrl);
+          note = '';
+        } catch (error) {
+          note = `连不上实例：只做了结构与覆盖检查（${error.message}）`;
+        }
+      }
+
+      const runQuery = service
+        ? async (query) => {
+            const result = await service.mcp.callTool('execute_graphql', { query });
+            const errors = Array.isArray(result?.errors) ? result.errors : [];
+            if (errors.length > 0) throw new Error(errors[0]?.message ?? '查询返回错误');
+          }
+        : null;
+
+      return {
+        ...(await evaluateExamples({
+          entries: ontologyStore().list(),
+          index,
+          database,
+          runQuery,
+          note,
+        })),
+        schemaSource: source,
+      };
+    })
+    // 把强制规则编译成权限补丁。只算、不写：写由 permissions.apply 负责（它自带快照）
+    .register('ontology.compileRules', async (params) => {
+      const database = params?.database;
+      if (typeof database !== 'string' || database === '') {
+        throw RpcError.invalidParams('database 不能为空');
+      }
+
+      // 现状从哪来：运行中的实例优先；停着时读 dev.yml，与「停止后按 dev.yml 判定权限」一致
+      const baseUrl =
+        typeof params?.baseUrl === 'string' && params.baseUrl !== '' ? params.baseUrl : null;
+      let access = null;
+      let accessSource = 'none';
+      if (baseUrl) {
+        try {
+          const service = await getService(baseUrl);
+          const config = await service.readConfig('sources');
+          const found = (config?.sources ?? []).find((source) => source?.name === database);
+          if (found) {
+            access = found.access ?? {};
+            accessSource = 'instance';
+          }
+        } catch {
+          accessSource = 'unavailable';
+        }
+      }
+      if (access === null) {
+        const projectDir = params?.projectDir ?? services.status?.()?.projectDir ?? null;
+        if (projectDir) {
+          try {
+            const devYaml = path.join(path.resolve(projectDir), 'dev.yml');
+            if (fs.existsSync(devYaml)) {
+              const accesses = readSourceAccess(fs.readFileSync(devYaml, 'utf8'));
+              if (accesses[database]) {
+                access = accesses[database];
+                accessSource = 'dev.yml';
+              }
+            }
+          } catch {
+            // 读不到就按「现状为空」编译：补丁会从默认档位起步，应用前有 diff 可看
+          }
+        }
+      }
+
+      const report = compileRules({
+        rules: ontologyStore().list(),
+        database,
+        access: access ?? {},
+        roles: Array.isArray(params?.roles) ? params.roles : [],
+      });
+      return { ...report, accessSource };
     })
     // 删记录；如果这个库正被运行实例加载，连带从 dev.yml 移除并按需要停/重启，
     // 否则 Schema 页与权限矩阵会一直显示一个「已经不存在」的库
@@ -941,7 +1124,9 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
         snapshot = snapshots.save({
           ...snapshotScope(params),
           database,
-          reason: 'before-apply',
+          // 来源写在 reason 里：回滚时能分清「手改矩阵」和「应用规则补丁」，
+          // 否则历史里全是 before-apply，等于没有审计
+          reason: typeof params?.reason === 'string' && params.reason !== '' ? params.reason : 'before-apply',
           roles: current?.roles ?? [],
           sources: current?.sources ?? [],
         });
@@ -1204,19 +1389,18 @@ async function createBackend({ dbPath } = {}) {
   const snapshots = new SnapshotStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
   const router = createRouter({ store, connections, supervisor, snapshots, jwtSecret, ontology });
+  // 本体论的取用按角色过滤：被屏蔽 / 仅管理员可见的表，它的语义也不该送出去。
+  // 项目目录每次现取——实例可能被重启到别的目录，缓存的路径会变成别人的配置。
+  const ontologyProvider = createOntologyProvider({
+    store: ontology,
+    projectDir: () => supervisor.status?.().projectDir ?? null,
+  });
+
   const gateway = createMcpGateway({
     secret: jwtSecret,
     resolveTarget: () => supervisor.status().baseUrl ?? null,
-    // 本体论注入：没有维护任何条目时返回 null，网关保持纯透传，不影响既有客户端
-    ontology: () => {
-      const entries = ontology.list();
-      if (entries.length === 0) return null;
-      return {
-        document: ontology.render(),
-        entries,
-        render: (filter) => ontology.render(filter),
-      };
-    },
+    // 没有维护条目、或该角色看不到任何条目时返回 null，网关保持纯透传
+    ontology: ontologyProvider,
   });
   const server = await startHttpServer({ router, port: 0, gateway });
 

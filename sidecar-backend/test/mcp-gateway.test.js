@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const test = require('node:test');
 
-const { createMcpGateway, ONTOLOGY_TOOL_NAME } = require('../src/mcp-gateway');
+const { createMcpGateway, ONTOLOGY_TOOL_NAME, DESCRIBE_TOOL_NAME } = require('../src/mcp-gateway');
 const { parseSseMessages } = require('../src/mcp-client');
 const { signToken } = require('../src/jwt');
 
@@ -12,9 +12,35 @@ const SECRET = 'gateway-test-secret-0123456789';
 
 const ONTOLOGY = {
   document: '# 业务本体论\n\n## 数据库 app\n\n## 术语表\n- **买家** — 平台的付费主体',
+  // 握手只给目录；目录里不该出现具体条目的正文（那是 D6 的核心）
+  catalog: '# 业务本体论（目录）\n\n## 库 app\n术语 2\n\n## 库 analytics\n指标 1',
+  databases: ['app', 'analytics'],
   entries: [
-    { id: 1, database: 'app', kind: 'term', name: '买家', definition: '平台的付费主体' },
-    { id: 2, database: 'analytics', kind: 'metric', name: 'GMV', definition: '已支付金额合计' },
+    {
+      id: 1,
+      database: 'app',
+      kind: 'term',
+      name: '买家',
+      aliases: ['客户'],
+      definition: '平台的付费主体',
+      tables: ['app.main.customers'],
+    },
+    {
+      id: 2,
+      database: 'analytics',
+      kind: 'metric',
+      name: 'GMV',
+      definition: '已支付金额合计',
+      tables: ['app.main.orders'],
+    },
+    {
+      id: 3,
+      database: 'app',
+      kind: 'concept',
+      name: '客户',
+      definition: '会复购的人',
+      tables: ['app.main.customers'],
+    },
   ],
   render: ({ kind = null, database = null } = {}) => {
     const picked = ONTOLOGY.entries.filter(
@@ -23,6 +49,7 @@ const ONTOLOGY = {
     if (picked.length === 0) return '';
     return `# 业务本体论\n${picked.map((entry) => `- ${entry.name}`).join('\n')}`;
   },
+  renderEntries: (list) => `# 业务本体论\n${list.map((entry) => `- ${entry.name}`).join('\n')}`,
 };
 
 /** 让假上游按 JSON-RPC 方法返回对应结果，方便验证合并逻辑 */
@@ -39,7 +66,12 @@ function startRpcUpstream() {
       }
       const results = {
         initialize: { protocolVersion: '2025-06-18', serverInfo: { name: 'graphjin' }, capabilities: {} },
-        'tools/list': { tools: [{ name: 'execute_graphql', description: 'run graphql' }] },
+        'tools/list': {
+          tools: [
+            { name: 'execute_graphql', description: 'run graphql' },
+            { name: 'ask_graphjin_agent', description: 'Ask GraphJin to answer a question' },
+          ],
+        },
       };
       const payload = JSON.stringify({
         jsonrpc: '2.0',
@@ -286,12 +318,15 @@ test('网关：没有维护本体论时完全透传，不追加工具', async ()
   }
 });
 
-test('网关：initialize 合并 instructions，模型不调用也能拿到业务语境', async () => {
+test('网关：initialize 只下发目录，不下发全文', async () => {
   const ctx = await setupWithOntology();
   try {
     const message = await ctx.call('initialize', {});
     assert.match(message.result.instructions, /业务本体论/);
-    assert.match(message.result.instructions, /买家/);
+    // 目录带库名与计数
+    assert.match(message.result.instructions, /库 app/);
+    // 但全文的细节不进握手：那才是每次会话都要付的固定成本
+    assert.ok(!message.result.instructions.includes('平台的付费主体'));
     // 上游原有字段不能被抹掉
     assert.equal(message.result.serverInfo.name, 'graphjin');
   } finally {
@@ -299,15 +334,44 @@ test('网关：initialize 合并 instructions，模型不调用也能拿到业�
   }
 });
 
-test('网关：tools/list 追加本体论工具，上游工具一个不少', async () => {
+test('网关：tools/list 追加两个平台工具，上游工具一个不少', async () => {
   const ctx = await setupWithOntology();
   try {
     const message = await ctx.call('tools/list');
     const names = message.result.tools.map((tool) => tool.name);
-    assert.deepEqual(names, ['execute_graphql', ONTOLOGY_TOOL_NAME]);
+    assert.deepEqual(names, [
+      'execute_graphql',
+      'ask_graphjin_agent',
+      ONTOLOGY_TOOL_NAME,
+      DESCRIBE_TOOL_NAME,
+    ]);
     const injected = message.result.tools.find((tool) => tool.name === ONTOLOGY_TOOL_NAME);
     assert.match(injected.description, /business ontology/i);
     assert.ok(injected.inputSchema.properties.kind);
+    // 检索是新增的第三档：不带它，模型只能拉全文或什么都不拉
+    assert.ok(injected.inputSchema.properties.query);
+    // 类别白名单是「工具描述 = 实际行为」的唯一来源，加一类忘了改这里，模型就看不到它
+    assert.deepEqual(injected.inputSchema.properties.kind.enum, [
+      'term',
+      'concept',
+      'relation',
+      'rule',
+      'metric',
+      'example',
+    ]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：上游 agent 工具的描述被补上「看不到本体论」', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/list');
+    const agent = message.result.tools.find((tool) => tool.name === 'ask_graphjin_agent');
+    // 不移除它（有客户端就是冲它来的），但必须让模型知道它看不到平台注入的语境
+    assert.match(agent.description, /does not see the platform/);
+    assert.match(agent.description, /Ask GraphJin/);
   } finally {
     await ctx.close();
   }
@@ -319,7 +383,7 @@ test('网关：本体论工具由平台自己答，不转发上游', async () =>
     const message = await ctx.call('tools/call', { name: ONTOLOGY_TOOL_NAME, arguments: {} });
     assert.equal(message.result.isError, false);
     assert.match(message.result.content[0].text, /业务本体论/);
-    assert.equal(message.result.structuredContent.count, 2);
+    assert.equal(message.result.structuredContent.count, 3);
   } finally {
     await ctx.close();
   }
@@ -367,6 +431,185 @@ test('网关：GraphJin 不在线时本体论工具仍答得出来', async () =>
   }
 });
 
+/**
+ * 参数非法必须是「工具错误」，不能是 HTTP 502。
+ *
+ * 之前 render() 对未知 kind 直接抛 OntologyError，异常冒到 index.js 的网关兜底，
+ * 客户端收到的是一句「MCP 网关转发失败」——而模型真正需要的是「可用的类别是这些」。
+ * setupWithOntology 的 call() 内部断言了 HTTP 200，所以这条测试同时锁住了传输层。
+ */
+test('网关：未知类别返回工具错误，并列出可用类别', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { kind: 'tables' },
+    });
+    assert.equal(message.result.isError, true);
+    assert.match(message.result.content[0].text, /未知类别/);
+    assert.deepEqual(message.result.structuredContent.availableKinds, [
+      'term',
+      'concept',
+      'relation',
+      'rule',
+      'metric',
+      'example',
+    ]);
+  } finally {
+    await ctx.close();
+  }
+});
+
+/**
+ * 空答案不能是空字符串。
+ *
+ * 空文本对模型的含义是「这里没有任何约束」，正好诱导它违反本来存在的规则；
+ * 所以必须说清「问的是哪个库」「哪些库有本体论」「结构该去哪拿」。
+ */
+test('网关：问一个没维护本体论的库，答出「没有」与「哪些有」', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { database: 'nope' },
+    });
+    assert.equal(message.result.isError, false);
+    const text = message.result.content[0].text;
+    assert.ok(text.length > 0, '空结果不能回空字符串');
+    assert.match(text, /nope/);
+    assert.match(text, /app/);
+    assert.match(text, /query_catalog/);
+    assert.equal(message.result.structuredContent.count, 0);
+    assert.deepEqual(message.result.structuredContent.maintainedDatabases, ['app', 'analytics']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：有效类别但没有条目时，也要说清过滤条件', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { kind: 'rule' },
+    });
+    assert.equal(message.result.isError, false);
+    const text = message.result.content[0].text;
+    assert.ok(text.length > 0);
+    assert.match(text, /类别=rule/);
+    assert.equal(message.result.structuredContent.count, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：query 走检索，命中理由可解释', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    // 「客户」是「买家」的别名：检索必须靠别名命中，而不是靠全文里恰好有这两个字
+    const message = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { query: '客户' },
+    });
+    assert.equal(message.result.isError, false);
+    const text = message.result.content[0].text;
+    assert.match(text, /检索：客户/);
+    assert.match(text, /命中理由/);
+    assert.ok(message.result.structuredContent.count >= 1);
+    const names = message.result.structuredContent.matches.map((item) => item.name);
+    assert.ok(names.includes('买家') || names.includes('客户'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：检索不到时给出下一步，而不是回空串', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { query: '完全不存在的说法' },
+    });
+    assert.equal(message.result.isError, false);
+    const text = message.result.content[0].text;
+    assert.ok(text.length > 0);
+    assert.match(text, /没有匹配/);
+    assert.match(text, /app/);
+    assert.equal(message.result.structuredContent.count, 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：describe_business_object 返回对象本身与它涉及的条目', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: DESCRIBE_TOOL_NAME,
+      arguments: { name: '买家' },
+    });
+    assert.equal(message.result.isError, false);
+    assert.match(message.result.content[0].text, /业务对象：买家/);
+    assert.equal(message.result.structuredContent.found, true);
+    // 客户（概念）与买家共用 app.main.customers 这张表，应被一起带出来
+    const relatedNames = message.result.structuredContent.related.map((item) => item.name);
+    assert.ok(relatedNames.includes('客户'));
+    // GMV 在另一张表上，不该混进来
+    assert.ok(!relatedNames.includes('GMV'));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：describe 找不到时给出候选，允许模型自我纠错', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    // 「付费主体」不在任何名字/别名里，但出现在买家的说明里：describe 拒绝，
+    // 检索却能给出候选——这正是「找不到也别让模型卡住」的路径
+    const message = await ctx.call('tools/call', {
+      name: DESCRIBE_TOOL_NAME,
+      arguments: { name: '付费主体' },
+    });
+    assert.equal(message.result.isError, false);
+    assert.match(message.result.content[0].text, /没有名为/);
+    assert.equal(message.result.structuredContent.found, false);
+    assert.ok(message.result.structuredContent.suggestions.length > 0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：describe 完全找不到时指向目录，still 不回空串', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: DESCRIBE_TOOL_NAME,
+      arguments: { name: '完全不存在的对象' },
+    });
+    assert.equal(message.result.isError, false);
+    const text = message.result.content[0].text;
+    assert.ok(text.length > 0);
+    assert.match(text, /可以先调 business_ontology/);
+    assert.deepEqual(message.result.structuredContent.suggestions, []);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('网关：describe 缺 name 时是工具错误，不是 502', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    const message = await ctx.call('tools/call', {
+      name: DESCRIBE_TOOL_NAME,
+      arguments: {},
+    });
+    assert.equal(message.result.isError, true);
+    assert.match(message.result.content[0].text, /需要 name/);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('网关：上游已有 instructions 时追加而不是覆盖', async () => {
   const upstream = await startRpcUpstream();
   // 换一个会返回 instructions 的上游
@@ -401,5 +644,35 @@ test('网关：上游已有 instructions 时追加而不是覆盖', async () => 
     await downstream.close();
     await upstream.close();
     await new Promise((done) => server.close(done));
+  }
+});
+
+test('网关：把调用者的角色传给本体论提供方', async () => {
+  const seen = [];
+  const upstream = await startRpcUpstream();
+  const gateway = createMcpGateway({
+    secret: SECRET,
+    resolveTarget: () => upstream.baseUrl,
+    // 按角色裁剪的前提：网关必须把 claims.role 交出去
+    ontology: (role) => {
+      seen.push(role);
+      return ONTOLOGY;
+    },
+  });
+  const downstream = await startDownstream(gateway);
+  const token = signToken({ role: 'customer' }, SECRET, 60);
+  try {
+    await fetch(downstream.baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    });
+    assert.deepEqual(seen, ['customer']);
+  } finally {
+    await downstream.close();
+    await upstream.close();
   }
 });

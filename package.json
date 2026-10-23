@@ -21,7 +21,7 @@
     "demo:db": "node scripts/create-demo-db.js",
     "demo:orders": "node scripts/seed-demo-orders.js",
     "test": "npm run test:frontend && npm --prefix sidecar-backend test",
-    "test:frontend": "node --test src/utils/policy.test.mjs",
+    "test:frontend": "node --test \"src/utils/*.test.mjs\"",
     "backend": "node sidecar-backend/src/index.js",
     "backend:demo": "npm run demo --prefix sidecar-backend",
     "verify:ui": "node scripts/verify-ui.js",
@@ -35,7 +35,7 @@
     "appId": "com.mcpbuilder.desktop",
     "productName": "MCP Server Build",
     "directories": {
-      "output": "release-final"
+      "output": "release"
     },
     "electronDist": "node_modules/electron/dist",
     "files": [

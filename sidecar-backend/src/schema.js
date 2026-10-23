@@ -95,6 +95,9 @@ function normalizeColumn(raw) {
     table: raw.TableName ?? raw.table_name ?? null,
     name: raw.ColumnName ?? raw.column_name ?? null,
     type: raw.Type ?? null,
+    // 注释是「库里已有的业务语境」：本体论可以据此起草，Schema 页也才说得清这列是什么。
+    // catalog 的 column 卡片与 details_json.columns 都带 Comment，之前丢掉了。
+    comment: raw.Comment ?? '',
     notNull: raw.NotNull === true,
     primaryKey: raw.PrimaryKey === true,
     unique: raw.UniqueKey === true,

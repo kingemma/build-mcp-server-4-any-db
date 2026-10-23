@@ -611,6 +611,28 @@ async function capturePages(cdp, dir) {
       fs.mkdirSync(path.join(dir, locale), { recursive: true });
       await cdp.screenshot(path.join(dir, locale, `${page.route}.png`));
       console.log(`截图 ${locale}/${page.route}.png`);
+
+      // 本体论页很长，首屏只到条目列表；质检与规则面板在下面。
+      // 文档要能证明这些面板存在，所以再补一张滚到「一致性体检」附近的图。
+      if (page.route === 'ontology') {
+        await cdp.evaluate(`(() => {
+          const panel = [...document.querySelectorAll('.panel')]
+            .find((item) => item.textContent.includes('一致性体检'));
+          panel?.scrollIntoView({ block: 'start' });
+          return panel ? 'ok' : 'missing';
+        })()`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await cdp.screenshot(path.join(dir, locale, 'ontology-detail.png'));
+        console.log(`截图 ${locale}/ontology-detail.png`);
+        // 滚回顶部：下一张截图不该继承这里的滚动位置
+        await cdp.evaluate(`(() => {
+          window.scrollTo(0, 0);
+          for (const el of document.querySelectorAll('*')) {
+            if (el.scrollTop > 0) el.scrollTop = 0;
+          }
+          return 'ok';
+        })()`);
+      }
     }
 
     // 使用向导是常驻入口，单独截一张打开态的抽屉图
@@ -780,6 +802,29 @@ async function main() {
     definition: '已支付订单的金额合计',
     expression: 'sum(amount) where status = "paid"',
     tables: ['analytics.main.orders'],
+  });
+  // 样例：评测的对象。查询必须对 verify 工程真实的表成立（app.db 的 orders 只有 id/user_id/amount）
+  ontologySeed.save({
+    database: 'app',
+    kind: 'example',
+    name: '看订单金额',
+    expression: '{ orders(limit: 5) { amount } }',
+    tables: ['app.main.orders'],
+    payload: { expect: { tables: ['orders'], columns: ['amount'] } },
+  });
+  // 强制规则：编译面板的输入。verify 工程没配 grants，所以编译应当报「无处可挂」——
+  // 这条验的是「做不到就说做不到」，不是只验 happy path
+  ontologySeed.save({
+    database: 'app',
+    kind: 'rule',
+    name: '只看未作废',
+    definition: '作废的单据不该进统计',
+    severity: 'enforce',
+    payload: {
+      mode: 'filter',
+      on: { table: 'app.main.orders' },
+      predicate: '{ status: { _eq: "voided" } }',
+    },
   });
   ontologySeed.close();
   const profileDir = path.join(workDir, 'edge-profile');
@@ -1538,6 +1583,32 @@ async function main() {
       (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('买家')
     );
 
+    // 从 schema 起草：此刻 app 库的 users / orders 还没被任何概念覆盖，
+    // orders.user_id → users.id 也没有关系条目，所以候选里必须有它们。
+    // 这一步同时验证「按库过滤」与「已覆盖的表不再出现」在真实链路上成立。
+    await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('从 schema 起草'));
+      const button = panel?.querySelector('.panel__head button');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('起草候选出结果', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.proposal').length`)) > 0
+    );
+    const proposePanel = await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('从 schema 起草'));
+      return panel ? panel.textContent : 'missing';
+    })()`);
+    record(
+      '从 schema 起草列出未覆盖的表与外键',
+      proposePanel.includes('app.main.users') &&
+        proposePanel.includes('app.main.orders') &&
+        proposePanel.includes('user_id'),
+      proposePanel.replace(/\s+/g, ' ').slice(0, 140)
+    );
+
     const tablesField = await cdp.evaluate(`(() => {
       const field = [...document.querySelectorAll('.form .field')]
         .find((item) => item.textContent.includes('关联表'));
@@ -1567,7 +1638,11 @@ async function main() {
     );
     for (const table of ['users', 'orders']) {
       await cdp.evaluate(`(() => {
-        const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === '${table}');
+        const option = ${VISIBLE_OPTIONS}.find((item) => {
+          const text = item.textContent.trim();
+          // 候选值是规范形式，带 schema 前缀（sqlite 是 main.users）；两种写法都要认
+          return text === '${table}' || text.endsWith('.${table}');
+        });
         option?.click();
         return option ? 'ok' : 'missing';
       })()`);
@@ -1604,6 +1679,17 @@ async function main() {
       box.dispatchEvent(new Event('input', { bubbles: true }));
       return 'ok';
     })()`);
+    // 值域是 P1 的结构化字段：它走的是 save → SQLite → render 这条完整链路，
+    // 所以「预览里出现值域」能证明 payload 真的落库并参与渲染，而不只是填进了表单
+    await cdp.evaluate(`(() => {
+      const field = [...document.querySelectorAll('.form .field')]
+        .find((item) => item.querySelector('.field__label')?.textContent.trim() === '值域');
+      const box = field?.querySelector('textarea');
+      if (!box) return 'no-values-input';
+      box.value = 'paid=已支付';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    })()`);
     await cdp.evaluate(`(() => {
       const button = [...document.querySelectorAll('.actions button')]
         .find((item) => item.textContent.trim() === '保存');
@@ -1613,20 +1699,105 @@ async function main() {
     await waitFor('新术语进入列表与预览', async () => {
       const list = await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`);
       const preview = await cdp.evaluate(`document.querySelector('.rendered')?.textContent ?? ''`);
-      return list.includes('会话') && preview.includes('会话');
+      return (
+        list.includes('会话') &&
+        preview.includes('会话') &&
+        preview.includes('值域：paid(已支付)')
+      );
     });
-    record('新增术语同步到列表与预览', true);
+    record('新增术语同步到列表与预览（含结构化值域）', true);
 
-    // 两张表都要跟着条目落库：只存一张说明多选在保存环节被截断了
+    // 两张表都要跟着条目落库：只存一张说明多选在保存环节被截断了。
+    // 同时锁住「规范形式」：落库的引用必须带库名与 schema，否则同一库的两个 schema
+    // 各有一张同名表时，本体论就指不准是哪一张了（docs/ontology-next.md D1）
     const savedRow = await cdp.evaluate(`(() => {
       const row = [...document.querySelectorAll('.entries tbody tr')]
         .find((item) => item.textContent.includes('会话'));
       return row ? row.textContent : 'missing';
     })()`);
     record(
-      '多选的关联表全部落库',
-      savedRow.includes('users') && savedRow.includes('orders'),
+      '多选的关联表全部落库且是规范形式',
+      savedRow.includes('app.main.users') && savedRow.includes('app.main.orders'),
       savedRow.replace(/\s+/g, ' ').slice(0, 140)
+    );
+
+    // 一致性体检：条目和真实 schema 对账。
+    // 这里刚好有个天然的腐烂样本——种子条目引用的是 customers / analytics 的表，
+    // 而当前实例只有 app 库的 users / orders，所以「找不到」必须被查出来。
+    // 体检面板不依赖实例在线也能跑，但在线时才查得出腐烂引用，这里验的就是在线那条路。
+    await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('一致性体检'));
+      const button = panel?.querySelector('.panel__head button');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('本体论体检出结果', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.issue').length`)) > 0
+    );
+    const lintPanel = await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('一致性体检'));
+      return panel ? panel.textContent : 'missing';
+    })()`);
+    record(
+      '本体论体检报出引用了不存在的表',
+      lintPanel.includes('必须修') && lintPanel.includes('找不到'),
+      lintPanel.replace(/\s+/g, ' ').slice(0, 140)
+    );
+
+    // 样例评测：结构与覆盖是确定性的，实例在跑所以查询也会真的执行一次。
+    // 「会话」这条术语已经把 orders 讲过了，所以覆盖检查应当通过——这是正常路径，
+    // 不是只验「面板能打开」。
+    await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('样例评测'));
+      const button = panel?.querySelector('.panel__head button');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('样例评测出结果', async () =>
+      (await cdp.evaluate(`(() => {
+        const panel = [...document.querySelectorAll('.panel')]
+          .find((item) => item.textContent.includes('样例评测'));
+        return panel ? panel.querySelectorAll('.issue').length : 0;
+      })()`)) > 0
+    );
+    const evalPanel = await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('样例评测'));
+      return panel ? panel.textContent : 'missing';
+    })()`);
+    record(
+      '样例评测跑通结构与覆盖',
+      evalPanel.includes('通过') && evalPanel.includes('看订单金额'),
+      evalPanel.replace(/\s+/g, ' ').slice(0, 140)
+    );
+
+    // 强制规则编译：verify 工程没有配 grants，这条读筛选无处可挂，必须报成冲突而不是假装成功
+    await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('强制规则'));
+      const button = panel?.querySelector('.panel__head button');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('强制规则编译出结果', async () =>
+      (await cdp.evaluate(`(() => {
+        const panel = [...document.querySelectorAll('.panel')]
+          .find((item) => item.textContent.includes('强制规则'));
+        return panel ? panel.querySelectorAll('.issue').length : 0;
+      })()`)) > 0
+    );
+    const rulesPanel = await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('强制规则'));
+      return panel ? panel.textContent : 'missing';
+    })()`);
+    record(
+      '强制规则编译报出无处可挂的冲突',
+      rulesPanel.includes('冲突') && rulesPanel.includes('没有任何角色'),
+      rulesPanel.replace(/\s+/g, ' ').slice(0, 140)
     );
 
     // 关键一段：以 AI 客户端的身份走网关，证明本体论真的送到了模型手里
@@ -1641,9 +1812,14 @@ async function main() {
     });
     const instructions = handshake?.result?.instructions ?? '';
     record(
-      '网关握手即下发业务语境',
-      instructions.includes('业务本体论') && instructions.includes('买家') && instructions.includes('事件'),
-      instructions.replace(/\s+/g, ' ').slice(0, 120)
+      '网关握手只下发目录（含硬约束）',
+      instructions.includes('业务本体论（目录）') &&
+        instructions.includes('库 app') &&
+        // 强制规则必须出现在目录里：它决定答案会不会错
+        instructions.includes('只看未作废') &&
+        // 而条目正文不进握手——那是每次会话都要付的固定成本
+        !instructions.includes('平台的付费主体'),
+      instructions.replace(/\s+/g, ' ').slice(0, 160)
     );
 
     const listed = await gatewayClient('tools/list');
@@ -1675,6 +1851,26 @@ async function main() {
       '本体论工具可按库取一节',
       analyticsText.includes('事件') && !analyticsText.includes('买家'),
       analyticsText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 检索与对象画像：模型不必拉全文也能拿到相关条目
+    const searchCall = await gatewayClient('tools/call', {
+      name: 'business_ontology',
+      arguments: { query: '客户' },
+    });
+    const searchText = searchCall?.result?.content?.[0]?.text ?? '';
+    const describeCall = await gatewayClient('tools/call', {
+      name: 'describe_business_object',
+      arguments: { name: '买家' },
+    });
+    const describeText = describeCall?.result?.content?.[0]?.text ?? '';
+    record(
+      '本体论可按说法检索并给出对象画像',
+      searchText.includes('检索：客户') &&
+        searchText.includes('命中理由') &&
+        describeText.includes('业务对象：买家') &&
+        describeText.includes('相关条目'),
+      `${searchText.replace(/\s+/g, ' ').slice(0, 60)} ｜ ${describeText.replace(/\s+/g, ' ').slice(0, 60)}`
     );
 
     await cdp.evaluate(`location.hash = '#/'; 'ok'`);

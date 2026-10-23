@@ -16,11 +16,14 @@ const { Readable } = require('node:stream');
 
 const { JwtError, bearerToken, verifyToken } = require('./jwt');
 const { parseSseMessages } = require('./mcp-client');
+const { searchEntries, describeObject } = require('./ontology-catalog');
 
 const MCP_PATH = '/api/v1/mcp';
 
 /** 平台自己的本体论工具名。GraphJin 没有这个名字，不会撞车 */
 const ONTOLOGY_TOOL_NAME = 'business_ontology';
+/** 单个对象的画像工具 */
+const DESCRIBE_TOOL_NAME = 'describe_business_object';
 
 /**
  * 本体论工具的描述。
@@ -30,19 +33,24 @@ const ONTOLOGY_TOOL_NAME = 'business_ontology';
 const ONTOLOGY_TOOL = {
   name: ONTOLOGY_TOOL_NAME,
   description:
-    'Read the human-maintained business ontology before writing any query: business terms and the schema they map to, business concepts and what they mean, business rules with their severity, and named metrics with their exact definitions. Call it first whenever a question uses business language, asks for a metric, or might violate a rule. Table structure and relationships are not here — use query_catalog for those.',
+    'Read the human-maintained business ontology: terms and the columns they map to (with real value domains), business concepts, relations that say which foreign key a business name refers to and which way it points, business rules with their severity and the form that enforces them, named metrics with grain, unit, time window and an executable fragment, and worked examples mapping a question to a verified query. The handshake already gives you a catalog of what exists; call this without arguments for the whole ontology, with kind/database for one section, or with query to search by the words a question uses. Use it before writing any query that involves business language, a metric, or a rule. Table structure itself is not here — use query_catalog for that.',
   inputSchema: {
     type: 'object',
     properties: {
       kind: {
         type: 'string',
-        enum: ['term', 'concept', 'rule', 'metric'],
+        enum: ['term', 'concept', 'relation', 'rule', 'metric', 'example'],
         description: 'Optional: return only this section instead of the whole ontology.',
       },
       database: {
         type: 'string',
         description:
-          'Optional: return only the ontology of one database. Each database has its own terms, concepts, rules and metrics — read the section for the database you are about to query.',
+          'Optional: return only the ontology of one database. Each database has its own terms, concepts, relations, rules, metrics and examples — read the section for the database you are about to query.',
+      },
+      query: {
+        type: 'string',
+        description:
+          'Optional: search the ontology by wording — pass the business words from the question (a term, an alias, a table name). Returns the few most relevant entries with why they matched.',
       },
     },
     additionalProperties: false,
@@ -54,6 +62,59 @@ const ONTOLOGY_TOOL = {
     openWorldHint: false,
   },
 };
+
+/** 单个对象的完整画像：概念 + 相关关系/规则/指标/样例 */
+const DESCRIBE_TOOL = {
+  name: DESCRIBE_TOOL_NAME,
+  description:
+    'Get the full picture of one business object: its definition, the tables it spans, the relations touching it, and the rules, metrics and worked examples that reference the same tables. Use it once you know which object a question is about; it saves reading the whole ontology.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: {
+        type: 'string',
+        description: 'The business name or alias of the object, as people say it in questions.',
+      },
+      database: {
+        type: 'string',
+        description: 'Optional: narrow the lookup to one database.',
+      },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  },
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+};
+
+/**
+ * GraphJin 自带一个 agent 工具，它跑在 GraphJin 进程里，看不见平台注入的本体论。
+ *
+ * 不移除它（有客户端就是冲它来的，移除等于断人一条路），而是把这件事写进描述：
+ * 模型看到「这个工具看不到业务语境」，就会先用本体论、再把要点带进问题里。
+ */
+const AGENT_TOOL_NAME = 'ask_graphjin_agent';
+
+/**
+ * 给上游 agent 工具补一句提醒。
+ *
+ * @param {Array<Object>} tools
+ * @returns {Array<Object>}
+ */
+function annotateUpstreamTools(tools) {
+  return (Array.isArray(tools) ? tools : []).map((tool) => {
+    if (tool?.name !== AGENT_TOOL_NAME || typeof tool.description !== 'string') return tool;
+    if (tool.description.includes('does not see the platform')) return tool;
+    return {
+      ...tool,
+      description: `${tool.description} (This tool runs inside GraphJin and does not see the platform's business ontology: read business_ontology first and put the relevant terms, metrics and rules into your question.)`,
+    };
+  });
+}
 
 /** 逐跳头不进不出，其余按原样转发 */
 const HOP_BY_HOP = new Set([
@@ -129,20 +190,48 @@ async function sendMergedMessage(response, upstream, message) {
   response.end(body);
 }
 
-/** 本体论工具的应答。GraphJin 不在线也答得出来——学业务不依赖数据库 */
-function sendOntologyResult(response, requestMessage, ontology, { kind = null, database = null } = {}) {
-  const entries = ontology.entries.filter(
-    (entry) =>
-      (!kind || entry.kind === kind) &&
-      (database === null || entry.database === database)
-  );
-  const text = ontology.render({ kind, database });
+/** 可用类别从工具 schema 取：只维护一份，避免描述与实际行为漂移 */
+const ONTOLOGY_KINDS = ONTOLOGY_TOOL.inputSchema.properties.kind.enum;
+
+/**
+ * 「没有内容」必须答出「为什么没有」，不能回一段空字符串。
+ *
+ * 空文本对模型的含义是「这里没有任何约束」——正好诱导它违反本来存在的规则。
+ * 所以空结果要说清三件事：问的是哪个库哪一类、哪些库有本体论、结构该去哪拿。
+ *
+ * @param {Object} input
+ * @param {string|null} input.kind
+ * @param {string|null} input.database
+ * @param {string[]} [input.databases] 已维护本体论的库
+ * @returns {string}
+ */
+function emptyOntologyText({ kind, database, databases }) {
+  const maintained =
+    Array.isArray(databases) && databases.length > 0 ? databases.join('、') : '（无）';
+
+  // 库名根本不在已维护清单里：这是「你问错了库」，比「这一类没条目」更该直说
+  if (database !== null && !(Array.isArray(databases) && databases.includes(database))) {
+    return `数据库「${database}」没有维护业务本体论。已维护的库：${maintained}。表结构请用 query_catalog。`;
+  }
+
+  const scope = [];
+  if (database !== null) scope.push(`库=${database}`);
+  if (kind !== null) scope.push(`类别=${kind}`);
+  const where = scope.length > 0 ? `（${scope.join('，')}）` : '';
+  return `当前条件下没有本体论条目${where}。已维护的库：${maintained}。表结构请用 query_catalog。`;
+}
+
+/**
+ * 回一条 tools/call 结果。
+ *
+ * 与 GraphJin 保持同一格式：恒为 SSE。客户端两种都收，但混着发容易踩坑。
+ */
+function sendToolResult(response, requestMessage, { text, isError, structuredContent = null }) {
   const result = {
     content: [{ type: 'text', text }],
-    structuredContent: { kind: 'business-ontology', count: entries.length, entries },
-    isError: false,
+    isError,
+    ...(structuredContent ? { structuredContent } : {}),
   };
-  // 与 GraphJin 保持同一格式：恒为 SSE。客户端两种都收，但混着发容易踩坑
   const body = `event: message\ndata: ${JSON.stringify({
     jsonrpc: '2.0',
     id: requestMessage.id ?? null,
@@ -155,6 +244,143 @@ function sendOntologyResult(response, requestMessage, ontology, { kind = null, d
     'Access-Control-Allow-Origin': '*',
   });
   response.end(body);
+}
+
+/**
+ * 本体论工具的应答。GraphJin 不在线也答得出来——学业务不依赖数据库。
+ *
+ * 三个模式共用一个工具：无参/按类别/按库取全文、`query` 检索、以及类别非法时的
+ * 明确报错。参数非法走 `isError: true` 的**工具结果**，而不是让异常冒到 HTTP 层：
+ * 客户端看到的应该是一句「类别不认识，可用的是这些」，不是 502。
+ */
+function sendOntologyResult(
+  response,
+  requestMessage,
+  ontology,
+  { kind = null, database = null, query = '' } = {}
+) {
+  if (kind !== null && !ONTOLOGY_KINDS.includes(kind)) {
+    sendToolResult(response, requestMessage, {
+      text: `未知类别「${kind}」，可用：${ONTOLOGY_KINDS.join(' / ')}`,
+      isError: true,
+      structuredContent: {
+        kind: 'business-ontology',
+        error: 'invalid-kind',
+        availableKinds: ONTOLOGY_KINDS,
+      },
+    });
+    return;
+  }
+
+  // 检索模式：模型带着问题里的说法来，只回最相关的几条（附带命中理由）
+  if (query !== '') {
+    const matches = searchEntries(ontology.entries ?? [], query, { database, limit: 5 });
+    if (matches.length === 0) {
+      const maintained = (ontology.databases ?? []).join('、') || '（无）';
+      sendToolResult(response, requestMessage, {
+        text: `没有匹配「${query}」的条目。已维护的库：${maintained}。可以先不传参看目录，或换一个说法（别名、表名）再试。`,
+        isError: false,
+        structuredContent: { kind: 'business-ontology', query, count: 0, matches: [] },
+      });
+      return;
+    }
+
+    const text = [
+      `# 业务本体论（检索：${query}）`,
+      '',
+      '按相关性排序，命中理由如下：',
+      ...matches.map(
+        (match) => `- ${match.entry.name}（${match.entry.kind} · ${match.entry.database}）：${match.matchedBy.join('；')}`
+      ),
+      '',
+      ontology.renderEntries(matches.map((match) => match.entry)),
+    ].join('\n');
+
+    sendToolResult(response, requestMessage, {
+      text,
+      isError: false,
+      structuredContent: {
+        kind: 'business-ontology',
+        query,
+        count: matches.length,
+        matches: matches.map((match) => ({
+          id: match.entry.id,
+          kind: match.entry.kind,
+          name: match.entry.name,
+          database: match.entry.database,
+          matchedBy: match.matchedBy,
+        })),
+      },
+    });
+    return;
+  }
+
+  const entries = (ontology.entries ?? []).filter(
+    (entry) => (!kind || entry.kind === kind) && (database === null || entry.database === database)
+  );
+  const rendered = ontology.render({ kind, database });
+  const text =
+    rendered === '' ? emptyOntologyText({ kind, database, databases: ontology.databases }) : rendered;
+
+  sendToolResult(response, requestMessage, {
+    text,
+    isError: false,
+    structuredContent: {
+      kind: 'business-ontology',
+      count: entries.length,
+      entries,
+      ...(rendered === '' ? { maintainedDatabases: ontology.databases ?? [] } : {}),
+    },
+  });
+}
+
+/**
+ * 对象画像的应答。
+ *
+ * 找不到时不说「没有」就完事：给出最接近的几条候选，模型才有下一步可走。
+ */
+function sendDescribeResult(response, requestMessage, ontology, { name, database = null }) {
+  const found = describeObject(ontology.entries ?? [], name, { database });
+
+  if (!found) {
+    const suggestions = searchEntries(ontology.entries ?? [], name, { database, limit: 3 });
+    const hint =
+      suggestions.length > 0
+        ? `最接近的是：${suggestions.map((item) => item.entry.name).join('、')}。`
+        : '可以先调 business_ontology 看目录，确认对象叫什么。';
+    sendToolResult(response, requestMessage, {
+      text: `没有名为「${name}」的对象。${hint}`,
+      isError: false,
+      structuredContent: { kind: 'business-object', name, found: false, suggestions: suggestions.map((item) => item.entry.name) },
+    });
+    return;
+  }
+
+  const related = found.related;
+  const text = [
+    `# 业务对象：${found.entry.name}`,
+    '',
+    `库 ${found.entry.database} · 涉及 ${found.tables.length} 张表 · 相关条目 ${related.length} 条`,
+    '',
+    ontology.renderEntries([found.entry, ...related]),
+  ].join('\n');
+
+  sendToolResult(response, requestMessage, {
+    text,
+    isError: false,
+    structuredContent: {
+      kind: 'business-object',
+      name: found.entry.name,
+      found: true,
+      entry: found.entry,
+      tables: found.tables,
+      related: related.map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+        name: entry.name,
+      })),
+    },
+  });
 }
 
 /** JSON-RPC 风格的错误体，MCP 客户端能直接读懂 */
@@ -211,7 +437,8 @@ function createMcpGateway({ resolveTarget, secret, verify = verifyToken, ontolog
 
       const body = request.method === 'POST' ? await readBody(request) : undefined;
       const message = body && body.length > 0 ? safeParseBody(body) : null;
-      const business = ontology ? ontology() : null;
+      // 把角色传下去：同一个库，受限角色不该看到被屏蔽表的语义
+      const business = ontology ? ontology(claims?.role ?? null) : null;
 
       // 本体论工具由平台自己答：不转发、也不要求 GraphJin 在线。
       // 放在运行检查之前 —— 「这是什么生意」不该因为库没启动就答不出来。
@@ -222,7 +449,31 @@ function createMcpGateway({ resolveTarget, secret, verify = verifyToken, ontolog
       ) {
         const args = message.params.arguments ?? {};
         sendOntologyResult(response, message, business, {
-          kind: typeof args.kind === 'string' ? args.kind : null,
+          kind: typeof args.kind === 'string' && args.kind ? args.kind : null,
+          database: typeof args.database === 'string' && args.database ? args.database : null,
+          query: typeof args.query === 'string' ? args.query.trim() : '',
+        });
+        return;
+      }
+
+      // 对象画像同样是平台自己答：它只读本体论，不需要数据库在线
+      if (
+        business &&
+        message?.method === 'tools/call' &&
+        message?.params?.name === DESCRIBE_TOOL_NAME
+      ) {
+        const args = message.params.arguments ?? {};
+        const name = typeof args.name === 'string' ? args.name.trim() : '';
+        if (name === '') {
+          sendToolResult(response, message, {
+            text: 'describe_business_object 需要 name：传对象在业务里的叫法（或别名）。',
+            isError: true,
+            structuredContent: { kind: 'business-object', error: 'missing-name' },
+          });
+          return;
+        }
+        sendDescribeResult(response, message, business, {
+          name,
           database: typeof args.database === 'string' && args.database ? args.database : null,
         });
         return;
@@ -285,12 +536,17 @@ function createMcpGateway({ resolveTarget, secret, verify = verifyToken, ontolog
       if (merged?.result) {
         if (message.method === 'initialize') {
           const existing = typeof merged.result.instructions === 'string' ? merged.result.instructions : '';
-          merged.result.instructions = existing
-            ? `${existing}\n\n${business.document}`
-            : business.document;
+          // 握手只给目录：它是每次会话的固定成本，全文按需取。
+          // 没有目录（旧调用方）时退回全文，保证升级期间不丢能力。
+          const handshake = business.catalog || business.document;
+          merged.result.instructions = existing ? `${existing}\n\n${handshake}` : handshake;
         }
         if (message.method === 'tools/list') {
-          merged.result.tools = [...(merged.result.tools ?? []), ONTOLOGY_TOOL];
+          merged.result.tools = [
+            ...annotateUpstreamTools(merged.result.tools),
+            ONTOLOGY_TOOL,
+            DESCRIBE_TOOL,
+          ];
         }
       }
       await sendMergedMessage(response, upstream, merged ?? { jsonrpc: '2.0', id: null, error: { code: -32603, message: '上游响应无法解析' } });
@@ -298,4 +554,13 @@ function createMcpGateway({ resolveTarget, secret, verify = verifyToken, ontolog
   };
 }
 
-module.exports = { createMcpGateway, MCP_PATH, ONTOLOGY_TOOL_NAME, ONTOLOGY_TOOL };
+module.exports = {
+  createMcpGateway,
+  MCP_PATH,
+  ONTOLOGY_TOOL_NAME,
+  ONTOLOGY_TOOL,
+  DESCRIBE_TOOL_NAME,
+  DESCRIBE_TOOL,
+  AGENT_TOOL_NAME,
+  annotateUpstreamTools,
+};

@@ -114,6 +114,14 @@ export const useAppStore = defineStore('app', {
     ontology: [],
     /** 本体论渲染出的业务语境文档，MCP 网关原样送给 AI */
     ontologyRendered: '',
+    /** 本体论体检结果；null 表示还没跑过（改条目后清空，避免展示过期结论） */
+    ontologyLint: null,
+    /** 从 schema 起草的候选；null 表示还没生成过 */
+    ontologyProposals: null,
+    /** 样例评测结果；null 表示还没跑过 */
+    ontologyEval: null,
+    /** 强制规则编译出的权限补丁；null 表示还没编译过 */
+    ontologyRules: null,
     users: [],
     /** Schema 页当前选中的库 */
     activeDatabase: '',
@@ -947,6 +955,11 @@ export const useAppStore = defineStore('app', {
         aliases: splitLoose(entry.aliases),
         tables: Array.isArray(entry.tables) ? entry.tables : splitLoose(entry.tables),
       });
+      // 条目变了，上一次体检 / 候选 / 评测 / 编译的结论都立刻过期
+      this.ontologyLint = null;
+      this.ontologyProposals = null;
+      this.ontologyEval = null;
+      this.ontologyRules = null;
       await this.loadOntology();
       return saved;
     },
@@ -956,7 +969,112 @@ export const useAppStore = defineStore('app', {
      */
     async removeOntology(id) {
       await rpc('ontology.remove', { id });
+      this.ontologyLint = null;
+      this.ontologyProposals = null;
+      this.ontologyEval = null;
+      this.ontologyRules = null;
       await this.loadOntology();
+    },
+
+    /**
+     * 一致性体检：只回答「结构是否自洽」，不回答「业务是否合理」。
+     *
+     * schema 由后端自己从运行中的实例取：前端把整份 schema 传过去既慢，也会让
+     * 「体检」在页面没加载 schema 时行为不同。后端拿不到时自己会跳过需要 schema 的规则。
+     *
+     * @returns {Promise<Object>} 体检结果
+     */
+    async runOntologyLint() {
+      this.ontologyLint = await rpc('ontology.lint', {});
+      return this.ontologyLint;
+    },
+
+    /**
+     * 从 schema 起草候选：没有概念的表、没有关系的外键、有注释却没有术语的列。
+     *
+     * 只拿候选，不写库——点「起草」才填表单，保存仍是人的动作。
+     *
+     * @returns {Promise<Object>} 候选
+     */
+    async proposeOntology() {
+      this.ontologyProposals = await rpc('ontology.propose', {
+        database: this.activeDatabase || null,
+      });
+      return this.ontologyProposals;
+    },
+
+    /**
+     * 扫一列的真实取值，供「值域」使用。
+     *
+     * 只对低基数列有意义：后端会拒掉取值太多的列，避免把姓名/金额那种列塞进上下文。
+     *
+     * @param {{table: string, column: string}} params 裸表名与裸列名（会拼进 GraphQL）
+     * @returns {Promise<Object>} 扫描结果
+     */
+    async scanOntologyValues({ table, column }) {
+      return rpc('ontology.scanValues', { baseUrl: this.baseUrl, table, column });
+    },
+
+    /**
+     * 样例评测。
+     *
+     * 测三件确定的事：样例还能不能跑、结构是否与声明一致、问题需要的表有没有被讲。
+     * **不测模型答得好不好**——那需要真模型与真答案，这里没有，也不假装有。
+     *
+     * @returns {Promise<Object>} 评测报告
+     */
+    async runOntologyEval() {
+      this.ontologyEval = await rpc('ontology.eval', {
+        // 实例没跑时不传地址：后端会退化成只做结构与覆盖检查
+        baseUrl: this.baseUrl || undefined,
+        database: this.activeDatabase || undefined,
+      });
+      return this.ontologyEval;
+    },
+
+    /**
+     * 把强制规则编译成权限补丁。
+     *
+     * 只算不写：返回的是「现状 + 规则」的完整 access 与变更清单，写不写由人决定。
+     * 现状优先从运行中的实例读，停着时后端会退回 dev.yml——两边读的是同一份真相。
+     *
+     * @returns {Promise<Object>} 编译结果
+     */
+    async compileOntologyRules() {
+      this.ontologyRules = await rpc('ontology.compileRules', {
+        database: this.activeDatabase,
+        baseUrl: this.baseUrl || null,
+        projectDir: this.status?.projectDir ?? null,
+        // 角色清单必须按**本体论页当前选中的库**取：applyDatabase 是权限页的选择，
+        // 两者可以不同，取错了会把别的库的角色名报成「没有 grant」
+        roles: this.rolesByDb[this.activeDatabase] ?? [],
+      });
+      return this.ontologyRules;
+    },
+
+    /**
+     * 应用编译结果。
+     *
+     * 复用 `permissions.apply`：它写入前自动存快照、同步角色，并且走的是权限页同一条写入路径。
+     * 另造一条「规则专用写入」等于绕开回滚能力，不划算。
+     *
+     * @param {Object} access 编译输出的完整 access
+     * @returns {Promise<Object>} 写入结果
+     */
+    async applyOntologyRules(access) {
+      const result = await rpc('permissions.apply', {
+        baseUrl: this.baseUrl,
+        projectDir: this.status?.projectDir ?? null,
+        database: this.activeDatabase,
+        // 快照来源写清楚：回滚时能分清这次是「应用规则补丁」还是手改矩阵
+        reason: 'before-ontology-rules',
+        matrix: {},
+        // 同时传 grants：让角色同步也覆盖到补丁里出现的角色
+        grants: access.grants,
+        access,
+      });
+      await Promise.all([this.loadCurrentPolicy(), this.loadSnapshots()]);
+      return result;
     },
 
     /**

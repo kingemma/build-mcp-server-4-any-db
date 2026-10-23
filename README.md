@@ -159,30 +159,82 @@ query lands on the default database), so those databases only get a catalog chec
 ### Business ontology
 
 A schema says which tables exist and how they join; it never says what the business is. This page
-maintains the context the AI needs before it queries data, in four layers, all written by a human
-and handed over verbatim. **Each database has its own set** — the same word can mean entirely
-different things in an orders database and an events database:
+maintains the context the AI needs before it queries data, all written by a human and handed over
+verbatim. **Each database has its own set** — the same wording can mean entirely different things
+in two databases. Six layers, delivered in the order "words → entities → relations → constraints
+→ measures → examples":
 
-- **Terms** — how the words people actually say map to the schema ("buyer" is `customers`,
-  "GMV" is the sum of paid order amounts);
-- **Concepts** — business entities, their meaning and boundaries, possibly spanning tables;
-- **Rules** — invariants and state machines with a severity (note / warning / enforced), which
-  decide whether the AI should perform an operation at all;
-- **Metrics** — named aggregations and their exact formulas, so one question gets one number.
+- **Terms** — how the words people actually say map to the schema, optionally bound to a column
+  and carrying that column's real value domain;
+- **Concepts** — business entities, their meaning and boundaries, possibly spanning tables, with
+  an optional primary key and display column;
+- **Relations** — what a foreign key is called in the business, which way it points, and its
+  cardinality. When one table has three foreign keys to the same target, this is what tells the
+  AI which edge "by customer" means;
+- **Rules** — invariants and state machines with a severity (note / warning / enforced), an
+  enforceable form (read filter / hidden column / blocked table / read-only), and a decidable
+  predicate;
+- **Metrics** — named aggregations with grain, unit, time window and an executable fragment;
+- **Examples** — a question paired with a verified query: few-shot for the model, and a
+  regression set for you.
 
-"Tables" is a multi-select dropdown whose candidates come from the currently selected database's
-schema — no typing table names. The preview at the bottom shows exactly what the AI will receive,
-and deliberately contains only what a schema cannot tell it: no table structure, columns or
-foreign keys, because the AI gets those from `query_catalog` anyway.
+"Tables" and "Relations" both draw their candidates from the currently selected database's schema:
+a relation can be picked straight from an existing foreign key, which fills both ends for you.
+The preview at the bottom shows exactly what the AI will receive, and deliberately contains only
+what a schema cannot tell it: no table structure, columns or foreign keys, because the AI gets
+those from `query_catalog` anyway.
 
-What you maintain is grouped per database and delivered to AI clients through the **MCP gateway**:
-it ships as instructions with the handshake (no tool call needed), and the `business_ontology`
-tool can read it again on demand, filtered by kind or by database. Clients that connect straight
-to GraphJin do not see it — turn on "Deliver through the platform gateway" on the Connect AI
-page, which is also the only way row filters work because identity comes from the token. With
-nothing maintained the gateway stays a plain proxy, so existing clients are unaffected.
+Anything domain-specific the system does not understand goes into **extra attributes**: passed
+through verbatim, neither interpreted nor validated — so no schema change and no self-invented
+entry kind is needed to accommodate an industry.
+
+The page also offers a **consistency check**: it reconciles the entries against the real schema
+(are the referenced tables still there, does an enforced rule have a decidable expression, does a
+metric have a formula, does the bound column exist, do both ends of a relation line up). With the
+instance stopped it runs only the rules that do not need a schema, and says how many it skipped.
+
+You do not have to start from an empty table: **Draft from the schema** lists what the database
+already has but the ontology does not cover — tables without a concept, foreign keys without a
+relation, commented columns without a term. "Draft" only fills the form and never saves, because
+meaning still needs a human. Once a term is bound to a column, **Scan values** samples that column
+and fills the value domain — accepting low-cardinality columns only (too many values, very long
+ones, or values containing "=" are rejected), so sensitive values stay out of every conversation's
+context.
+
+Examples can be **evaluated**: declare the expected tables / columns / values, then run the
+evaluation and the platform checks whether the query still runs, whether it matches what you
+declared, and whether the ontology actually documents the tables that question needs. It does not
+judge how well a model answers — a passing evaluation means "this context still holds up", not
+"the AI understands the business".
+
+**Enforced rules can be compiled into permissions**: pick an enforceable form (read filter, hidden
+column, blocked table, read-only) and the platform computes a patch and shows the diff. It only
+computes; applying goes through the Permissions page's own write path and snapshots automatically.
+Rules GraphJin cannot express (write invariants, state machines) are reported as conflicts rather
+than silently "applied".
+
+What you maintain is grouped per database and delivered to AI clients through the **MCP gateway**
+in three tiers: the handshake carries only a **catalog** (per-database counts, every enforced rule
+in full, and how to fetch details — with a length cap), the full text or one section comes from
+`business_ontology` on demand, `query` searches by the words a question uses, and
+`describe_business_object` profiles a single object (itself plus everything touching the same
+tables). **What is delivered also depends on identity**: entries about blocked tables — and, for
+non-admins, admin-only tables — are never sent to that role's client, so data and semantics are
+restricted together. Clients that connect straight to GraphJin do not see any of it — turn on
+"Deliver through the platform gateway" on the Connect AI page, which is also the only way row
+filters work because identity comes from the token. With nothing maintained the gateway stays a
+plain proxy, so existing clients are unaffected.
+
+A single entry longer than 1000 characters is truncated at render time and marked, and the
+consistency check suggests splitting it: every entry in the prompt costs budget, and one giant
+entry displaces ten useful ones.
 
 ![Business Ontology](./docs/screenshots/en-US/ontology.png)
+
+The consistency check, example evaluation, rule compilation and object profiles live further down
+the same page:
+
+![Business Ontology — checks and rules](./docs/screenshots/en-US/ontology-detail.png)
 
 ### Permission matrix
 
@@ -554,7 +606,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (71 checks)
+npm run verify:ui        # real backend + headless Edge (76 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -679,7 +731,7 @@ cd ..
 npm run test:frontend    # frontend policy normalization / diff (8)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping (71)
+npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles (76)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

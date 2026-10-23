@@ -33,6 +33,7 @@ function tableCard(name, columns) {
             ColumnName: column.name, Type: column.type, Ordinal: column.ordinal ?? index,
             PrimaryKey: column.name === 'id', NotNull: column.name === 'id',
             UniqueKey: column.name === 'id', Indexed: false,
+            Comment: column.comment ?? '',
           })),
         }),
       },
@@ -81,15 +82,30 @@ test('parseJsonField：对象直传、字符串解析、失败回落', () => {
   assert.strictEqual(parseJsonField(null, 'x'), 'x');
 });
 
-test('normalizeColumn：只保留平台需要的字段', () => {
+test('normalizeColumn：保留列注释，其余字段按需归一化', () => {
   const column = normalizeColumn({
     DatabaseName: 'app', SchemaName: 'main', TableName: 'accounts', ColumnName: 'id',
     Type: 'integer', NotNull: true, PrimaryKey: true, UniqueKey: true, Indexed: false, Ordinal: 0,
+    Comment: '入库时间',
   });
   assert.deepStrictEqual(column, {
     database: 'app', schema: 'main', table: 'accounts', name: 'id',
-    type: 'integer', notNull: true, primaryKey: true, unique: true, indexed: false, ordinal: 0,
+    type: 'integer', comment: '入库时间',
+    notNull: true, primaryKey: true, unique: true, indexed: false, ordinal: 0,
   });
+});
+
+test('normalizeColumn：没有注释时给空串，不塞 null', () => {
+  // 注释是「库里已有的业务语境」：本体论可以据此起草，Schema 页也才说得清这列是什么
+  assert.strictEqual(normalizeColumn({ ColumnName: 'x' }).comment, '');
+  assert.strictEqual(normalizeColumn({ ColumnName: 'x', Comment: null }).comment, '');
+});
+
+test('normalizeTable：列注释从 details_json 一路带到列上', () => {
+  const table = normalizeTable(
+    tableCard('accounts', [{ name: 'id', type: 'integer', comment: '账号主键' }])
+  );
+  assert.strictEqual(table.columns[0].comment, '账号主键');
 });
 
 test('normalizeTable：从 details_json 提取列并按 ordinal 排序', () => {

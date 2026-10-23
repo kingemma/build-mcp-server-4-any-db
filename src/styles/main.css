@@ -466,3 +466,81 @@ a {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ── 本体论页共用的结果展示 ──────────────────────────────────────────────
+   状态标签与「问题列表」被体检 / 评测 / 起草 / 规则四个面板共用，
+   放在全局而不是每个组件各写一份：它们只有一处定义，颜色才不会在各面板间漂移。 */
+
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.tag--info,
+.tag--skipped {
+  color: var(--text-dim);
+  background: var(--ink-700);
+}
+
+.tag--warn {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.tag--enforce,
+.tag--error,
+.tag--fail {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.tag--pass {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+
+.issues {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.issue {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.issue__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.issue__text {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.issue__hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
