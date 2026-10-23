@@ -1240,15 +1240,22 @@ async function main() {
     await waitFor('GraphJin 已停止', async () => (await rpc('graphjin.status')).running === false);
 
     await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
+    // 等到「已测试且不再有任何已连接」再收手：只等「已测试」出现会撞上个别行还没翻完的中间态
     let stoppedText = '';
     await waitFor('停止后连接列表回落', async () => {
       stoppedText = await cdp.evaluate(`document.querySelector('.conns')?.textContent ?? ''`);
-      return stoppedText.includes('已测试');
+      return stoppedText.includes('已测试') && !stoppedText.includes('已连接');
     });
+    // 断言前重新读一次，等待条件与断言逐字一致，中间态不可能溜进结果
+    stoppedText = await cdp.evaluate(`document.querySelector('.conns')?.textContent ?? ''`);
     record(
       '停止后连接状态回落为已测试',
       stoppedText.includes('已测试') && !stoppedText.includes('已连接'),
-      stoppedText.includes('已连接') ? '仍显示已连接' : ''
+      stoppedText.includes('已连接')
+        ? '仍显示已连接'
+        : stoppedText.includes('已测试')
+          ? ''
+          : '未显示已测试'
     );
 
     // 停止态读不到生效配置（config.current 需要 baseUrl）：步骤 2 只能靠历史快照判断，
