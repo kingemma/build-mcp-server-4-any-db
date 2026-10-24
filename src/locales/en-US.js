@@ -361,7 +361,7 @@ export default {
       'The gap between "my AI can reach the database" and "it only sees what it should" is a permission gate. Connect → set permissions → plug into your client, with verification and rollback at every step.',
     tryDemo: 'Try the demo',
     tryDemoHint:
-      'Builds a sample project (orders / customers + a read-only analyst role) in 10 seconds, without touching your own databases',
+      'Builds a sample project (a finance system and an inventory system, each with its own read-only role) in 10 seconds, without touching your own databases',
     goConnect: 'Connect an AI client',
     openGuide: 'Usage wizard',
     steps: 'Three steps',
@@ -377,7 +377,7 @@ export default {
     unknown: 'Unverified',
     demoTitle: 'Demo project',
     demoHint:
-      'Comes with sample data and a read-only analyst role (row filter: owner_code = current user), so you can see the permissions take effect immediately',
+      'Comes with two sample databases (finance / inventory) with one read-only role each (row filter: owner_code = current user), so switching databases means switching identity and you can watch the permissions take effect',
     demoReady: 'Demo project is running',
     demoEmpty: 'No demo project yet — use the button above to create one',
     demoDatabases: 'Databases',

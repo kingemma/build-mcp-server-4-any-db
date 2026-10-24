@@ -357,7 +357,8 @@ export default {
     tagline:
       '从「连上数据库」到「AI 只拿到该拿到的那一部分」，中间隔着权限闸门。连接 → 配权限 → 接入，三步走完，随时可验证、可回滚。',
     tryDemo: '一键体验演示',
-    tryDemoHint: '10 秒生成示例项目（orders / customers + analyst 只读角色），不碰你自己的数据库',
+    tryDemoHint:
+      '10 秒生成示例项目（财务系统 + 库存管理系统，各带一个只读角色），不碰你自己的数据库',
     goConnect: '接入 AI 客户端',
     openGuide: '使用向导',
     steps: '三步走完',
@@ -372,7 +373,8 @@ export default {
     todo: '待完成',
     unknown: '未确认',
     demoTitle: '演示项目',
-    demoHint: '自带示例数据与 analyst 只读角色（行过滤：owner_code = 当前用户），可以直接看到权限生效',
+    demoHint:
+      '自带两个示例库（财务系统 / 库存管理系统）与各库一个只读角色（行过滤：owner_code = 当前用户），换库就是换身份，可以直接看到权限生效',
     demoReady: '演示项目已启动',
     demoEmpty: '还没有演示项目，点上面的按钮生成',
     demoDatabases: '库',

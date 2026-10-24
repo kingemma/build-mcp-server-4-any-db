@@ -208,6 +208,25 @@ roles:
 > - 判断查询是否被拦截要看 `data.<root> === null`，不能只看 `errors`；
 > - 平台若要以 `admin` 角色执行 GraphQL，必须在 `roles` 里显式定义 `admin`。
 
+### 6.5.1 「没写 grant」不等于拒绝（2026-10-24 实测）
+
+source 模式下 `sources[].access.read: authenticated` 的含义是**任何已认证角色都能读**。
+`grants` 只给被点名的角色加 `columns` 白名单与 `filter`；**没被点名的角色不是被挡，而是
+拿不到任何限制** —— 权限比点名角色更大。实测（双库演示项目）：
+
+| 查询 | 结果 |
+|:---|:---|
+| `finance_analyst` 查本库 `vouchers`（grant + `owner_code` 行过滤） | 14 行（admin 40 行） |
+| `inventory_viewer` 查财务库 `vouchers`（财务库 grants 里没有它） | **5 行全给**，无过滤 |
+| 给它补一份 `filter: '{ owner_code: { _eq: "__not_granted__" } }'` 的 grant | **0 行** |
+
+> **平台影响**：
+> - 这条与 `permissions.js` 里已有的判断一致（`grants` 是加法不是白名单），本次补的是
+>   **跨库 / 跨角色**的实测后果：没点名的角色在别的库同样不受限制；
+> - 不能用「不给某角色写 grant」表达「该角色看不到这个库」，效果正好相反；
+> - 表达拒绝只有两条路：源级 `read: blocked`（对所有人生效），或给该角色一份**恒不成立
+>   的 filter**（按角色生效，返回 0 行而不是报错）——演示项目用的就是后者。
+
 ### 6.6 列管控 `columns` 的真实语义（5 项断言全部通过）
 
 验证脚本 `sidecar-backend/scripts/verify-columns.js`（单库 SQLite，真实拉起进程）：

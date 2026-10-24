@@ -1609,6 +1609,71 @@ async function main() {
       proposePanel.replace(/\s+/g, ' ').slice(0, 140)
     );
 
+    // 本体论页的库选择器必须真的决定「算哪个库」：起草 / 评测 / 编译 / 应用四个动作
+    // 都要带上页面当前选中的库，而不是 Schema 页那一份（曾经取错过，选 A 算 B）。
+    // 这里拦在 fetch 上看真实入参：面板文案可能因为候选为空而看不出差别。
+    await cdp.evaluate(`(() => {
+      const original = window.fetch;
+      window.__ontologyCalls = [];
+      window.fetch = (url, options) => {
+        try {
+          const body = JSON.parse(options?.body ?? '{}');
+          if (String(body.method ?? '').startsWith('ontology.')) {
+            window.__ontologyCalls.push({ method: body.method, params: body.params ?? null });
+          }
+        } catch {}
+        return original(url, options);
+      };
+      window.__restoreFetch = () => {
+        window.fetch = original;
+      };
+      return 'ok';
+    })()`);
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`document.querySelector('.picker .el-select input, .picker .el-select')?.click(); 'ok'`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await cdp.evaluate(`(() => {
+      const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === 'analytics');
+      option?.click();
+      return option ? 'ok' : 'missing';
+    })()`);
+    await waitFor('切到 analytics 库', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('事件')
+    );
+    await cdp.evaluate(`(() => {
+      const panel = [...document.querySelectorAll('.panel')]
+        .find((item) => item.textContent.includes('从 schema 起草'));
+      panel?.querySelector('.panel__head button')?.click();
+      return 'ok';
+    })()`);
+    await waitFor('analytics 库起草请求发出', async () =>
+      (await cdp.evaluate(
+        `window.__ontologyCalls.filter((item) => item.method === 'ontology.propose').length`
+      )) > 0
+    );
+    const proposeCall = await cdp.evaluate(
+      `window.__ontologyCalls.filter((item) => item.method === 'ontology.propose').pop()`
+    );
+    record(
+      '起草带上页面选中的库（不是 Schema 页那份）',
+      proposeCall?.params?.database === 'analytics',
+      `ontology.propose database=${proposeCall?.params?.database}`
+    );
+    await cdp.evaluate(`window.__restoreFetch(); 'ok'`);
+
+    // 切回 app：后面的关联表候选、保存、体检用例都在 app 库上
+    await closeDropdowns(cdp);
+    await cdp.evaluate(`document.querySelector('.picker .el-select input, .picker .el-select')?.click(); 'ok'`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await cdp.evaluate(`(() => {
+      const option = ${VISIBLE_OPTIONS}.find((item) => item.textContent.trim() === 'app');
+      option?.click();
+      return option ? 'ok' : 'missing';
+    })()`);
+    await waitFor('切回 app 库继续后面的用例', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('买家')
+    );
+
     const tablesField = await cdp.evaluate(`(() => {
       const field = [...document.querySelectorAll('.form .field')]
         .find((item) => item.textContent.includes('关联表'));
@@ -1881,26 +1946,52 @@ async function main() {
       button.click();
       return 'ok';
     })()`);
-    await waitFor('演示项目启动', async () =>
-      (await cdp.evaluate(`document.querySelector('.facts')?.textContent ?? ''`)).includes('orders')
+    await waitFor(
+      '演示项目启动',
+      async () =>
+        (await cdp.evaluate(`document.querySelector('.facts')?.textContent ?? ''`)).includes(
+          'finance'
+        )
     );
     const demoText = await cdp.evaluate(`document.querySelector('.facts').textContent`);
     record(
-      '一键演示建好示例项目',
-      demoText.includes('analyst') && demoText.includes('orders'),
-      demoText.replace(/\s+/g, ' ').slice(0, 100)
+      '一键演示建好两个示例库与各库角色',
+      demoText.includes('finance') &&
+        demoText.includes('inventory') &&
+        demoText.includes('finance_analyst') &&
+        demoText.includes('inventory_viewer'),
+      demoText.replace(/\s+/g, ' ').slice(0, 120)
     );
 
-    // 离线读配置的完整验收：演示项目 dev.yml 里有一份真实的 analyst grants
+    // 离线读配置的完整验收：演示项目 dev.yml 里每个库各有一份真实 grants（角色 × 库）
     const demoStatus = await rpc('graphjin.status');
     const demoFile = await rpc('config.file', { projectDir: demoStatus.projectDir });
     const demoGrants = demoFile.sources.flatMap((item) => item.access?.grants ?? []);
+    // 每个库两份 grant：本库角色给行过滤，另一个演示角色给「查不到任何行」的 filter
+    const grantOf = (role, table) =>
+      demoGrants.find(
+        (grant) => grant.role === role && grant.tables.some((item) => item.name === table)
+      );
+    const financeHome = grantOf('finance_analyst', 'vouchers');
+    const inventoryHome = grantOf('inventory_viewer', 'products');
+    const financeDenied = grantOf('inventory_viewer', 'vouchers');
+    const inventoryDenied = grantOf('finance_analyst', 'products');
     record(
-      '离线读出的 grants 与演示配置一致',
-      demoGrants.length === 1 &&
-        demoGrants[0].role === 'analyst' &&
-        demoGrants[0].tables.length === 2,
-      demoGrants.map((grant) => `${grant.role}:${grant.tables.map((table) => table.name).join('+')}`).join(',')
+      '离线读出的 grants 与演示配置一致（每库一个角色）',
+      demoGrants.length === 4 &&
+        financeHome?.tables.length === 5 &&
+        inventoryHome?.tables.length === 7 &&
+        financeHome.tables.every((table) => String(table.filter ?? '').includes('owner_code')) &&
+        financeDenied?.tables.every((table) =>
+          String(table.filter ?? '').includes('__not_granted__')
+        ) &&
+        inventoryDenied?.tables.every((table) =>
+          String(table.filter ?? '').includes('__not_granted__')
+        ),
+      demoGrants
+        .map((grant) => `${grant.role}:${grant.tables.length}表:${grant.tables[0]?.filter ?? ''}`)
+        .join(' | ')
+        .slice(0, 140)
     );
 
     await cdp.evaluate(`(() => {
@@ -1918,6 +2009,102 @@ async function main() {
       '一键体检逐项出结果',
       checkText.includes('正常') && !checkText.includes('异常'),
       checkText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 在演示项目上走一遍使用向导的五个节点：连接 → 配权限 → 验证 → 讲清业务 → 接入 AI。
+    // 向导本身的步骤、跳转、直达已有断言（上面），这里验的是「演示数据撑得住每一步」。
+    await cdp.evaluate(`location.hash = '#/connections'; 'ok'`);
+    await waitFor('演示连接落盘', async () =>
+      (await cdp.evaluate(`document.querySelector('.conns')?.textContent ?? ''`)).includes(
+        'finance'
+      )
+    );
+    const demoConns = await cdp.evaluate(`document.querySelector('.conns').textContent`);
+    record(
+      '节点1 连接：两个演示库都进了已保存连接',
+      demoConns.includes('finance') && demoConns.includes('inventory'),
+      demoConns.replace(/\s+/g, ' ').slice(0, 100)
+    );
+
+    await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
+    await waitFor(
+      '权限页按库分标签',
+      async () => (await cdp.evaluate(`document.querySelectorAll('.db-tab').length`)) >= 2,
+      15_000
+    );
+    const demoTabs = await cdp.evaluate(
+      `[...document.querySelectorAll('.db-tab__name')].map((item) => item.textContent.trim()).join(',')`
+    );
+    record(
+      '节点2 配权限：每个库一个标签',
+      demoTabs.includes('finance') && demoTabs.includes('inventory'),
+      demoTabs.slice(0, 80)
+    );
+
+    // 节点3 验证：真跑一次。finance_analyst 只能看到自己名下的行，admin 看到全部
+    const demoBaseUrl = (await rpc('graphjin.status')).baseUrl;
+    const analystVouchers = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'finance_analyst',
+      userCode: 'hq',
+      query: '{ vouchers(limit: 100) { id owner_code } }',
+    });
+    const adminVouchers = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'admin',
+      query: '{ vouchers(limit: 100) { id owner_code } }',
+    });
+    const analystRows = analystVouchers?.data?.vouchers ?? [];
+    const adminRows = adminVouchers?.data?.vouchers ?? [];
+    record(
+      '节点3 验证：行过滤真的少给了行',
+      analystRows.length > 0 &&
+        analystRows.every((row) => row.owner_code === 'hq') &&
+        adminRows.length > analystRows.length,
+      `finance_analyst(hq) ${analystRows.length} 行 · admin ${adminRows.length} 行`
+    );
+    // 角色 × 库：inventory_viewer 在财务库一行都看不到
+    const wrongRole = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'inventory_viewer',
+      userCode: 'hq',
+      query: '{ vouchers(limit: 5) { id } }',
+    });
+    const wrongRows = wrongRole?.data?.vouchers ?? [];
+    record(
+      '节点3 验证：角色只在本库有 grant',
+      Array.isArray(wrongRows) && wrongRows.length === 0,
+      `inventory_viewer 查财务库 vouchers → ${wrongRows.length} 行`
+    );
+    // 反向：finance_analyst 在库存库也应当一行都看不到
+    const wrongInventory = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'finance_analyst',
+      userCode: 'hq',
+      query: '{ products(limit: 5) { id } }',
+    });
+    const wrongInventoryRows = wrongInventory?.data?.products ?? [];
+    record(
+      '节点3 验证：换库即换身份（反向同样成立）',
+      Array.isArray(wrongInventoryRows) && wrongInventoryRows.length === 0,
+      `finance_analyst 查库存库 products → ${wrongInventoryRows.length} 行`
+    );
+
+    // 节点4 讲清业务：财务库能起草出还没被讲过的表
+    const financePropose = await rpc('ontology.propose', { database: 'finance' });
+    const financeProposeText = JSON.stringify(financePropose ?? '');
+    record(
+      '节点4 本体论：财务库能起草出未覆盖的表',
+      financeProposeText.includes('finance') && financeProposeText.includes('vouchers'),
+      financeProposeText.slice(0, 120)
+    );
+
+    // 节点5 接入 AI：演示项目同样能生成一份可直接粘贴的客户端配置
+    const demoClientConfig = await rpc('mcp.clientConfig', { baseUrl: demoBaseUrl });
+    record(
+      '节点5 接入 AI：演示项目也能生成客户端配置',
+      Boolean(demoClientConfig?.endpoint) && Boolean(demoClientConfig?.mcpServers),
+      String(demoClientConfig?.endpoint ?? '').slice(0, 100)
     );
 
     // 冷启动：刷新后没有任何页面帮忙加载 state，三张卡必须自己把判定依据补齐。

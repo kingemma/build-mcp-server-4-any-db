@@ -25,7 +25,7 @@ const { probeConnection } = require('./connection-probe');
 const { discoverSchema, listTables } = require('./schema');
 const { GraphJinSupervisor, resolveGraphJinBinary } = require('./supervisor');
 const { pickFreePort } = require('./graphjin-process');
-const { createDemoProject } = require('./demo');
+const { createDemoProject, DEMO_APP_NAME, DEMO_CONNECTIONS } = require('./demo');
 const {
   buildSourceAccessConfig,
   migrateLegacyRoleTables,
@@ -996,13 +996,16 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       await services.stop();
       const report = createDemoProject({ dir: projectDir, port: await pickFreePort() });
       const status = await startService({ projectDir });
-      // 记录落盘：演示项目也要出现在「已保存连接」里，否则用户找不到入口
-      remember('demo', { type: 'sqlite', path: 'orders.db' }, {
-        projectDir,
-        appName: 'Demo Orders',
-        status: STATUS_CONNECTED,
-        origin: ORIGIN_START,
-      });
+      // 记录落盘：演示项目也要出现在「已保存连接」里，否则用户找不到入口。
+      // 两个库各记一条：合成一条的话，删掉它就等于把另一个库也弄丢了
+      for (const { name, connection } of DEMO_CONNECTIONS) {
+        remember(name, connection, {
+          projectDir,
+          appName: DEMO_APP_NAME,
+          status: STATUS_CONNECTED,
+          origin: ORIGIN_START,
+        });
+      }
       return { ...report, projectDir, status };
     })
     // 一键体检：后端 / 二进制 / 实例 / 库 / 角色逐项打红绿灯

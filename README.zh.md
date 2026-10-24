@@ -69,8 +69,10 @@ YAML，也不需要理解 GraphJin 的配置细节。
 
 打开应用先看到欢迎页：一句话讲清它做什么，下面按当前数据自动判定的三步状态（连接数据库 /
 配置权限 / 接入 AI），点任意一步跳过去。想先看效果就点「一键体验演示」—— 10 秒建一个示例项目
-（`orders` / `customers` 两张表 + `analyst` 只读角色，行过滤 `owner_code = 当前用户`，写删全部
-blocked），**不碰你自己的库**；跑起来可以直接跳到 Schema 看表、跳到权限矩阵看规则。
+（**财务系统** + **库存管理系统**两个库，共 12 张表、约 490 行真实数据；每库一个只读角色
+`finance_analyst` / `inventory_viewer`，行过滤 `owner_code = 当前用户`，写删全部 blocked），
+**不碰你自己的库**；跑起来可以直接跳到 Schema 看表、跳到权限矩阵看规则——换库就是换身份：
+`inventory_viewer` 在财务库一行都看不到，反之亦然。
 底部还有「一键体检」：GraphJin 二进制、后端、运行实例、库连通、角色配置逐项打红绿灯。
 
 首次进入会自动弹出**使用向导**（应用内分步指引：连接 → 配权限 → 验证 → 接入 AI，每步可直达
@@ -485,7 +487,7 @@ macOS 关闭窗口只隐藏窗口，退出请用 `Cmd+Q`。开发态数据落在
 `userData/data`（Windows 通常是 `%APPDATA%\mcp-builder\data`）。
 
 窗口标题会显示当前项目名（启动参数里的应用名，落在项目 `dev.yml` 的 `app_name`），
-形如 `Demo Orders — MCP Server Build`；Windows 用的是自绘标题栏，项目名居中画在那条
+形如 `Demo Finance & Inventory — MCP Server Build`；Windows 用的是自绘标题栏，项目名居中画在那条
 40px 标题带上，没打开项目时回落到产品名。
 
 ### 5. 纯浏览器调试（可选）
@@ -664,7 +666,7 @@ npm run smoke:binaries
 
 ```bash
 cd sidecar-backend
-npm test                 # 后端单测（353 项）
+npm test                 # 后端单测（355 项）
 
 npm run verify:e2e         # 真机全链路：启动 → 发现 → 权限写入 → 快照回滚（24 项）
 npm run verify:migration   # legacy 项目迁移：角色/列折算、写删降级、库不可达（12 项）
@@ -673,7 +675,7 @@ cd ..
 npm run test:frontend    # 策略归一化 / diff + 中英文语言包 key 一致（12 项）
 npm run smoke:binaries   # GraphJin 二进制真实执行 version
 npm run build
-npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、侧栏钉住/默认折叠/tooltip/展开并记住、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检、停止后按 dev.yml 判定权限、粘成 JSON 参数自动解包、本体论一致性体检报出腐烂引用、从 schema 起草候选、样例评测跑通结构与覆盖、强制规则编译报出无处可挂的冲突、握手只下发目录、按说法检索与对象画像（76 项）
+npm run verify:ui        # 真实后端 + Edge headless：中英文切换、窗口标题、侧栏钉住/默认折叠/tooltip/展开并记住、建组织/成员、权限写入/验证/回滚、每库独立标签、MCP 逐库探活与调用示例、右下角悬浮按钮存在/可打开、使用向导自动弹出/关闭/再开/跳转、停止后状态回落、删库后 Schema 重置、欢迎页/接入向导/一键演示/一键体检、停止后按 dev.yml 判定权限、粘成 JSON 参数自动解包、本体论一致性体检报出腐烂引用、从 schema 起草候选、起草带上页面选中的库（不是 Schema 页那份）、样例评测跑通结构与覆盖、强制规则编译报出无处可挂的冲突、握手只下发目录、按说法检索与对象画像、一键演示建出两个示例库与各库角色、在演示项目上走通使用向导五个节点（连接 / 配权限 / 验证 / 本体论 / 接入 AI）（84 项）
 npm run verify:ui -- --shots=docs/screenshots   # 逐页产出中英文截图
 ```
 
