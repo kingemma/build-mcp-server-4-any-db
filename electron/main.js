@@ -7,6 +7,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
 
@@ -18,6 +19,21 @@ const TITLEBAR_HEIGHT = 40;
 
 /** 产品名：还没打开项目时窗口标题只用它 */
 const APP_TITLE = 'MCP Server Build';
+
+/** 开发态渲染地址 */
+const DEV_URL = process.env.MCP_BUILDER_DEV_URL || 'http://127.0.0.1:1420/';
+
+/**
+ * 导航前的探测节奏。
+ *
+ * Vite 刚监听端口时偶尔会先拒一次连接，而 Chromium 自带的错误页是一整片空白，
+ * 用户分辨不出「还在编译」还是「已经挂了」，只能重开窗口。所以先探测再导航，
+ * 探测不过就换成能读的说明页。
+ */
+const LOAD_RETRY_DELAYS_MS = [400, 800, 1600];
+
+/** 窗口最晚可见时间：首帧迟迟不来也要把窗口露出来，别让它一直藏成「没启动」 */
+const SHOW_FALLBACK_MS = 15_000;
 
 let backend = null;
 let mainWindow = null;
@@ -62,6 +78,101 @@ async function startBackend() {
   return createBackend({ dbPath: process.env.MCP_BUILDER_DB });
 }
 
+/** 加载过兜底页后不再捕获二次失败，否则会自己套娃 */
+let isShowingFailurePage = false;
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 探测渲染地址是否已经能响应。
+ *
+ * @param {string} url
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+function isReachable(url, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      resolve((response.statusCode ?? 0) < 500);
+    });
+    request.setTimeout(timeoutMs, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on('error', () => resolve(false));
+  });
+}
+
+/**
+ * 渲染层加载不出来时的兜底页面。
+ *
+ * 把地址、错误原因和该跑的命令直接画出来：默认白屏说不出任何信息，
+ * 用户只能反复重开，也分不清是没编译完还是装坏了。
+ *
+ * @param {{url: string, reason: string}} failure
+ * @returns {string} 完整 HTML
+ */
+function failurePageHtml({ url, reason }) {
+  const hint = IS_DEV
+    ? '开发态：先确认 Vite 已在运行（<code>npm run dev</code>），或用 <code>npm start</code> 一次拉起 Vite 与 Electron。'
+    : '打包态：请重新执行 <code>npm run build</code> 后重新打包安装，并确认安装目录里的 <code>dist</code> 完整。';
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>界面加载失败</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #ffffff; }
+  body {
+    display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; padding: 32px;
+    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    color: #10233d; text-align: center;
+  }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  p { max-width: 640px; margin: 0; font-size: 13px; line-height: 1.8; color: #3a5573; }
+  code { padding: 1px 5px; font-family: Consolas, monospace; font-size: 12px; background: #eef4fb; border-radius: 4px; }
+  .detail { font-size: 12px; color: #5c7492; }
+</style></head>
+<body>
+  <h1>界面没能加载</h1>
+  <p>${hint}</p>
+  <p class="detail">${url}<br />${reason}</p>
+</body></html>`;
+}
+
+/**
+ * 把窗口切到兜底页面。
+ * @param {BrowserWindow} window
+ * @param {{url: string, reason: string}} failure
+ */
+function showFailurePage(window, failure) {
+  if (window.isDestroyed() || isShowingFailurePage) return;
+  isShowingFailurePage = true;
+  const html = failurePageHtml(failure);
+  window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
+/**
+ * 开发态先探测再导航。
+ *
+ * 直接 loadURL 到还没起来（或刚重启）的 Vite 会先画出空白错误页；探测通过再导航，
+ * 拿到的第一个文档就是带首屏占位的 index.html。
+ *
+ * @param {BrowserWindow} window
+ */
+async function loadDevRenderer(window) {
+  for (let attempt = 0; ; attempt += 1) {
+    if (await isReachable(DEV_URL)) {
+      if (!window.isDestroyed()) window.loadURL(DEV_URL);
+      return;
+    }
+    if (attempt >= LOAD_RETRY_DELAYS_MS.length) {
+      showFailurePage(window, { url: DEV_URL, reason: '连接被拒绝：开发服务器没有在监听' });
+      return;
+    }
+    await delay(LOAD_RETRY_DELAYS_MS[attempt]);
+  }
+}
+
 /**
  * @param {number} port 后端端口，注入给渲染进程
  * @returns {BrowserWindow}
@@ -75,6 +186,8 @@ function createWindow(port) {
     title: APP_TITLE,
     // 任务栏 / 窗口标题栏图标；打包后的安装包图标由 build/icon.png 生成
     icon: path.join(__dirname, 'icon.png'),
+    // 先不显示：等首帧就绪再 show，否则会先看到一块纯白
+    show: false,
     // 与浅色主题一致，避免加载期先闪一块深色
     backgroundColor: '#ffffff',
     // 不要 File / Edit / View 这类系统菜单栏；同时挡掉 Alt 唤出隐藏菜单
@@ -101,7 +214,20 @@ function createWindow(port) {
   });
 
   mainWindow = window;
+  isShowingFailurePage = false;
+
+  // 首帧就绪再显示：窗口一出现就有内容（index.html 里的首屏占位），不会先白一段
+  window.once('ready-to-show', () => {
+    if (!window.isDestroyed()) window.show();
+  });
+
+  // 兜底：万一既没有首帧也没有加载失败，也不能让窗口一直藏着
+  const showFallback = setTimeout(() => {
+    if (!window.isDestroyed() && !window.isVisible()) window.show();
+  }, SHOW_FALLBACK_MS);
+
   window.on('closed', () => {
+    clearTimeout(showFallback);
     if (mainWindow === window) mainWindow = null;
   });
 
@@ -110,7 +236,20 @@ function createWindow(port) {
     return { action: 'deny' };
   });
 
-  if (IS_DEV) window.loadURL(process.env.MCP_BUILDER_DEV_URL || 'http://127.0.0.1:1420');
+  // 兜底之二：文档已经在加载了才失败（服务器中途挂掉），也要给出能读的说明
+  window.webContents.on('did-fail-load', (...args) => {
+    const [event, errorCode, errorDescription, validatedURL, isMainFrame] = args;
+    const code = errorCode ?? event?.errorCode;
+    // -3 = ERR_ABORTED：被新的导航打断（HMR 重载常见），不是真失败
+    if (code === -3) return;
+    if ((isMainFrame ?? event?.isMainFrame ?? true) === false) return;
+    showFailurePage(window, {
+      url: validatedURL ?? event?.validatedURL ?? DEV_URL,
+      reason: `${errorDescription ?? event?.errorDescription ?? '加载失败'} (${code})`,
+    });
+  });
+
+  if (IS_DEV) void loadDevRenderer(window);
   else window.loadFile(path.join(ROOT, 'dist', 'index.html'));
 
   // 菜单没了，Ctrl+Shift+I / F12 也跟着失效，开发态补一个

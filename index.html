@@ -4,9 +4,92 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MCP Server Build</title>
+    <!--
+      首屏占位：窗口一拿到 HTML 就画出品牌标记，不用等 JS 下载 + 编译完。
+      内容直接放在 #app 里，Vue 的 mount('#app') 会整体替换掉，不需要额外清理逻辑。
+      样式内联在这里而不是走 main.css：后者本身就是等 JS 加载完才生效的。
+    -->
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #ffffff;
+      }
+      #app {
+        height: 100%;
+      }
+      .boot {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+        color: #3a5573;
+      }
+      .boot__mark {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        font-size: 21px;
+        line-height: 1;
+        color: #ffffff;
+        background: linear-gradient(145deg, #3b82f6, #1e40af);
+        border-radius: 11px;
+        box-shadow: 0 6px 16px -8px rgba(29, 78, 216, 0.75);
+      }
+      .boot__name {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .boot__text {
+        font-size: 12px;
+        color: #5c7492;
+      }
+      .boot__bar {
+        width: 132px;
+        height: 2px;
+        overflow: hidden;
+        background: #e1ebf8;
+        border-radius: 2px;
+      }
+      .boot__bar span {
+        display: block;
+        width: 45%;
+        height: 100%;
+        background: #1d4ed8;
+        border-radius: 2px;
+        animation: boot-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes boot-slide {
+        0% {
+          transform: translateX(-110%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot__bar span {
+          width: 100%;
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot" role="status" aria-live="polite">
+        <div class="boot__mark">◈</div>
+        <div class="boot__name">MCP Server Build</div>
+        <div class="boot__bar"><span></span></div>
+        <div class="boot__text">正在载入界面…</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
