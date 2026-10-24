@@ -628,6 +628,11 @@ export default {
     verifyErrors: '返回了错误',
     blockNeedsSchema: '表 {tables} 使用了「阻止列表」列管控，但还没有发现列清单。请先刷新 Schema 再写入，否则补集无法计算，会把全部列放行。',
     adminReserved: 'admin 是平台保留角色，平台不会为它写限制规则，也不参与矩阵编辑；每次写入前会自动补齐。',
+    databaseAccess: {
+      label: '可访问 {database} 的角色',
+      hint: '没勾选的角色在这个库查不到任何数据（返回空，不是报错），直连 GraphJin 同样有效。admin 永远可访问，不在此列。',
+      saved: '已保存 {database} 的可访问角色：{count} 个',
+    },
     rollback: '回滚',
     history: '写入历史',
     historyTitle: '权限写入快照',

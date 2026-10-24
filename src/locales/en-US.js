@@ -639,6 +639,11 @@ export default {
       'Table(s) {tables} use block-list column control, but no column list has been discovered. Refresh the schema first; without the complement all columns would be allowed.',
     adminReserved:
       'admin is a reserved platform role: the platform never writes restrictive rules for it and keeps it out of the matrix, ensuring it exists before every write.',
+    databaseAccess: {
+      label: 'Roles allowed to access {database}',
+      hint: 'A role left unchecked sees no rows in this database (empty results, not an error) — direct GraphJin connections included. admin always has access and is not listed here.',
+      saved: 'Saved access list for {database}: {count} role(s)',
+    },
     rollback: 'Rollback',
     history: 'Write history',
     historyTitle: 'Permission write snapshots',

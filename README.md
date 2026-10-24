@@ -246,6 +246,13 @@ uncommitted edits**, so switching tabs never leaks rules across; a dot on the ta
 database has pending changes. Applying only touches the active tab's database, and the confirm
 dialog names the target database.
 
+Below the tabs is the **role → database** allowlist: tick the roles that may access this database.
+An unticked role is compiled, when the policy is applied, into a filter condition that never holds
+(it matches zero rows), and after the write the role is actually used to run one query as a
+self-check (`boundaryCheck`) — so the engine blocks it, not the gateway; a client talking to GraphJin
+directly gets nothing either. `admin` always has access, and a database you never ticked stays
+"unrestricted", so older projects are not silently tightened.
+
 Inside a tab there are two panels that mirror the two layers of GraphJin's source mode:
 
 **Source access** (`sources[].access`, applies to the whole database):
@@ -260,8 +267,9 @@ Inside a tab there are two panels that mirror the two layers of GraphJin's sourc
 
 **Read matrix** (`sources[].access.grants[]`, role × table):
 
-- the read toggle per role and table; tables not listed in any grant stay fully readable
-  for authenticated roles, so blocking has to use the two table classes above;
+- the read toggle per role and table; tables not listed in any grant stay **fully readable**
+  for authenticated roles (engine semantics, verified in practice), so scoping by role must use
+  the role → database allowlist above, and blocking tables must use the two table classes;
 - row filters (GraphJin DSL, `$user_code` and friends still work);
 - column control: an allowlist, or a blocklist converted into its complement allowlist
   (GraphJin's `columns` only accepts an array and rejects an empty one).
@@ -574,7 +582,8 @@ running; the UI reports the backend as offline after it stops.
 3. Click **Start**. The backend creates/merges `dev.yml` and starts GraphJin.
 4. Open **Schema browser** and confirm tables, columns and relationships were discovered.
 5. Open **Permission matrix**, configure source access first (read / write / delete modes,
-   owner column, table classes), then add roles and their read rules (row filters, column
+   owner column, table classes), tick the roles allowed into this database (the
+   role → database allowlist), then add roles and their read rules (row filters, column
    control). **Apply to GraphJin** shows a diff first and snapshots the policy before
    writing.
 6. Open **Runtime** to see the endpoint, probe health and copy the MCP client config.
@@ -725,7 +734,7 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (355)
+npm test                 # backend unit tests (367)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
@@ -734,7 +743,7 @@ cd ..
 npm run test:frontend    # policy normalization / diff + i18n key parity (12)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, drafting scoped to the database selected on the page (not the Schema page one), example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles, the demo building two sample databases with a role each, and the five wizard nodes walked end to end on the demo project (connect / permissions / verify / ontology / plug into AI) (84)
+npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, drafting scoped to the database selected on the page (not the Schema page one), example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles, the demo building two sample databases with a role each, the five wizard nodes walked end to end on the demo project (connect / permissions / verify / ontology / plug into AI), and the role-to-database allowlist really denying an unchecked role (89)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 
@@ -768,8 +777,9 @@ binaries/              GraphJin binaries (extracted at build time)
 - source mode has no per-table write switch: write / delete are database-level, and
   `grants[].columns` only constrains reads — write column allowlists are not enforced
   (`docs/graphjin-source-migration.md` §2.2);
-- roles have no table visibility: tables absent from grants stay fully readable for
-  authenticated roles, so you have to use the "admin only" / "blocked" table classes;
+- roles have no table visibility: within a database, tables absent from grants stay fully
+  readable for authenticated roles, so blocking tables has to use the "admin only" /
+  "blocked" table classes; the role → database allowlist only scopes whole databases;
 - `gj_security` needs an admin JWT, so the source of truth for policy is the MCP tool
   `get_current_config`;
 - `dev.yml` merging understands this project's output, flat single-line flow arrays, quoted

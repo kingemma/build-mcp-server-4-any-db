@@ -329,6 +329,114 @@ function migrateLegacyRoleTables({ roles = [], columnsByTable = {}, adminRoles =
   return { access, conflicts };
 }
 
+/**
+ * 把列清单统一成 { name, type, notNull, primaryKey }：调用方有的只给列名。
+ *
+ * @param {Array<string|Object>} columns
+ * @returns {Array<Object>}
+ */
+function normalizeColumnMeta(columns) {
+  return (Array.isArray(columns) ? columns : [])
+    .map((column) => (typeof column === 'string' ? { name: column } : column))
+    .filter((column) => column && column.name);
+}
+
+/** 挑拒绝规则用的锚点列：主键优先，其次 id，最后首列 @param {Array} columns */
+function pickAnchorColumn(columns) {
+  const meta = normalizeColumnMeta(columns);
+  return meta.find((column) => column.primaryKey === true) ?? meta.find((column) => column.name === 'id') ?? meta[0] ?? null;
+}
+
+const NUMERIC_TYPE = /int|numeric|decimal|real|double|float|serial|money|number/i;
+
+/**
+ * 「本库没你的份」用的 filter。
+ *
+ * 实测（2026-10-24，scripts/verify-source-acl.js + verify:ui）：
+ * - `{ 列: { _in: [] } }` 查询时是 0 行，但**写进配置时被拒**：
+ *   `add roles failed: role filter { id: { _in: [] } }: empty object or list for '_in'`。
+ *   启动路径与写入路径的校验不一致，所以它不能用作编译产物。
+ * - `{ 列: { _eq: 哨兵 } }` 两条路径都接受，且查询返回 0 行。
+ *
+ * 因此：非空列用 `_is_null: true`（与类型无关，必然 0 行），否则按列类型挑哨兵值。
+ * 兜底还有应用后的真实自检（`permissions.apply` 里的 boundaryCheck）——猜错会被抓出来，
+ * 而不是静默放行。
+ *
+ * @param {string|Object} anchor 列名或列元数据
+ * @returns {string}
+ */
+function denyFilterFor(anchor) {
+  const column = typeof anchor === 'string' ? { name: anchor } : anchor ?? {};
+  if (!column.name) throw new Error('denyFilterFor 需要列名');
+  if (column.notNull === true) return `{ ${column.name}: { _is_null: true } }`;
+  const sentinel = NUMERIC_TYPE.test(String(column.type ?? '')) ? '-1' : '"__not_granted__"';
+  return `{ ${column.name}: { _eq: ${sentinel} } }`;
+}
+
+/**
+ * 应用「角色 → 库」边界：不在允许清单里的角色，在本库一行都看不到。
+ *
+ * 为什么必须显式写 deny grant：source 模式下 `read: authenticated` 对所有已认证角色
+ * 生效，没被 grants 点名的角色不受任何限制（实测：外来角色能读全表）。所以「看不
+ * 到这个库」不能靠「不写 grant」表达，只能给该角色写一份恒不成立的 filter。
+ *
+ * @param {Object} options
+ * @param {Object} options.access buildSourceAccessConfig 的输出
+ * @param {string[]|null} options.allowedRoles 允许访问本库的角色；null 表示未配置（不限制）
+ * @param {string[]} options.roles 全部已知角色（含 admin）
+ * @param {string[]} options.tables 本库的表名
+ * @param {Object} [options.columnsByTable] { 表名: [列名] }，用来挑锚点列
+ * @returns {{ access: Object, deniedRoles: string[], conflicts: Array<Object> }}
+ */
+function applyDatabaseBoundary({
+  access,
+  allowedRoles,
+  roles = [],
+  tables = [],
+  columnsByTable = {},
+} = {}) {
+  if (allowedRoles === null || allowedRoles === undefined) {
+    // 未配置就维持现状：老项目不会被静默收紧
+    return { access: access ?? {}, deniedRoles: [], conflicts: [] };
+  }
+
+  const allowed = new Set(allowedRoles.map(String));
+  const all = [...new Set([...(roles ?? []).map(String), ...allowed])];
+  const deniedRoles = all.filter((role) => role !== 'admin' && !allowed.has(role));
+  if (deniedRoles.length === 0) return { access: access ?? {}, deniedRoles, conflicts: [] };
+
+  const conflicts = [];
+  const deniedSet = new Set(deniedRoles);
+  // 先摘掉被拒角色原有的 grant：它可能来自矩阵或上一次的编译，留着就会盖掉 deny
+  const keptGrants = (access?.grants ?? [])
+    .filter((grant) => !deniedSet.has(grant?.role))
+    .map((grant) => ({ role: grant.role, tables: grant.tables ?? [] }));
+
+  for (const role of deniedRoles) {
+    const entries = [];
+    for (const table of tables) {
+      const anchor = pickAnchorColumn(columnsByTable[table]);
+      if (!anchor) {
+        conflicts.push({
+          role,
+          table,
+          reason: 'no-anchor-column',
+          detail: '拿不到列清单，无法生成拒绝规则；请先刷新 schema 再应用',
+        });
+        continue;
+      }
+      entries.push({ name: table, columns: [anchor.name], filter: denyFilterFor(anchor) });
+    }
+    if (entries.length > 0) keptGrants.push({ role, tables: entries });
+  }
+
+  return {
+    access: { ...access, grants: keptGrants },
+    deniedRoles,
+    conflicts,
+  };
+}
+
 module.exports = {
   buildOperation,
   buildRoleTableConfig,
@@ -337,4 +445,7 @@ module.exports = {
   summarizeSourceAccess,
   migrateLegacyRoleTables,
   combineFilters,
+  applyDatabaseBoundary,
+  denyFilterFor,
+  pickAnchorColumn,
 };

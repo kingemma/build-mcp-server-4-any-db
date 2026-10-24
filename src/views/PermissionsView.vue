@@ -139,6 +139,31 @@ const accessDirty = computed(
 /** 矩阵改动 + source 级改动，确认弹窗与按钮状态都用它 */
 const totalChanges = computed(() => changes.value.length + (accessDirty.value ? 1 : 0));
 
+/**
+ * 本库的可访问角色。
+ *
+ * 没配过时按「所有角色都允许」展示：直接显示空勾选会让人以为大家都被拒了，
+ * 取消一个勾保存后才会真正落到白名单（其余角色被写成查不到任何行）。
+ */
+const allowedRoles = computed(
+  () => store.currentAllowedRoles ?? store.accessRoleChoices
+);
+
+async function onAllowedRolesChange(value) {
+  const roles = Array.isArray(value) ? value : [];
+  const database = store.applyDatabase;
+  try {
+    await store.setDatabaseRoles(database, roles);
+    ElMessage.success(
+      t('permissions.databaseAccess.saved', { database, count: roles.length })
+    );
+  } catch (error) {
+    ElMessage.error(error?.message ?? String(error));
+    // 保存失败要把勾选状态拉回服务端事实，否则界面会显示一个没生效的白名单
+    await store.loadDatabaseAccess();
+  }
+}
+
 async function apply() {
   if (!store.applyDatabase) {
     ElMessage.warning(t('permissions.selectDatabase'));
@@ -284,6 +309,7 @@ watch(
     if (!running) return;
     store.ensureSchemaLoaded();
     store.loadSnapshots();
+    store.loadDatabaseAccess();
   },
   { immediate: true }
 );
@@ -313,6 +339,33 @@ watch(
         </button>
       </div>
       <p v-else class="mono-dim">{{ t('permissions.noDatabase') }}</p>
+    </section>
+
+    <!-- 角色 → 库：不在勾选里的角色在这个库一行都看不到（引擎侧写成恒不成立的过滤） -->
+    <section v-if="store.applyDatabase" class="panel">
+      <div class="panel__head">
+        <span class="panel__title">
+          {{ t('permissions.databaseAccess.label', { database: store.applyDatabase }) }}
+        </span>
+      </div>
+      <div class="panel__body">
+        <el-checkbox-group
+          v-if="store.accessRoleChoices.length"
+          class="access-roles"
+          :model-value="allowedRoles"
+          size="small"
+          @change="onAllowedRolesChange"
+        >
+          <el-checkbox
+            v-for="role in store.accessRoleChoices"
+            :key="role"
+            :value="role"
+            :label="role"
+          />
+        </el-checkbox-group>
+        <p v-else class="mono-dim">{{ t('permissions.noRoles') }}</p>
+        <p class="mono-dim">{{ t('permissions.databaseAccess.hint') }}</p>
+      </div>
     </section>
 
     <section class="panel">
@@ -810,6 +863,13 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.access-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-bottom: 6px;
 }
 
 .db-tab {

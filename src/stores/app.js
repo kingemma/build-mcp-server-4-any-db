@@ -83,6 +83,10 @@ export const useAppStore = defineStore('app', {
     matrices: {},
     /** { [database]: string[] } 每库独立的角色清单 */
     rolesByDb: {},
+    /** { [database]: string[] } 允许访问该库的角色；缺键 = 没配过（不限制） */
+    databaseAccess: {},
+    /** 配过角色清单的库：配过但空数组 = 只允许 admin，与「没配过」是两回事 */
+    databaseAccessConfigured: [],
     clientConfig: null,
     /** 当前生效策略，按库分隔的原始归一化结果（键为 `database::table`） */
     policyRaw: {},
@@ -138,6 +142,21 @@ export const useAppStore = defineStore('app', {
     matrix: (state) => state.matrices[state.applyDatabase] ?? {},
     /** 当前标签页自己的角色清单 */
     roles: (state) => state.rolesByDb[state.applyDatabase] ?? [],
+    /** 当前库的角色白名单：null 表示没配过（不限制度） */
+    currentAllowedRoles: (state) =>
+      state.databaseAccessConfigured.includes(state.applyDatabase)
+        ? state.databaseAccess[state.applyDatabase] ?? []
+        : null,
+    /** 可以出现在白名单里的角色：本地角色 + GraphJin 配置里已有的角色，admin 永远隐式允许 */
+    accessRoleChoices(state) {
+      const names = new Set([
+        ...(state.rolesByDb[state.applyDatabase] ?? []),
+        ...(state.configRoles ?? []),
+        ...this.roleNames,
+      ]);
+      names.delete('admin');
+      return [...names].sort();
+    },
     /** 写入目标库下的表名；矩阵只展示、只提交这个库的表 */
     applyTables: (state) =>
       state.tables
@@ -568,6 +587,36 @@ export const useAppStore = defineStore('app', {
       this.applyPolicyScope();
       // 启动后角色与矩阵都是空的：自动回填一次，已配置的策略才能继续编辑
       this.hydrateMatrixFromPolicy();
+    },
+
+    /**
+     * 读取「角色 → 库」白名单。
+     *
+     * 这只是附加约束：读不到就保持空（等于不限制），不该连累权限页打不开。
+     */
+    async loadDatabaseAccess() {
+      const result = await rpcSafe('permissions.databases');
+      if (!result.ok) {
+        this.lastError = result.error ?? '';
+        return;
+      }
+      this.databaseAccess = result.data?.access ?? {};
+      this.databaseAccessConfigured = result.data?.configured ?? [];
+    },
+
+    /**
+     * 覆写某库的可访问角色。空数组 = 只允许 admin，与「没配过」不同。
+     *
+     * @param {string} database
+     * @param {string[]} roles
+     */
+    async setDatabaseRoles(database, roles) {
+      const saved = await rpc('permissions.setDatabaseRoles', { database, roles });
+      this.databaseAccess = { ...this.databaseAccess, [database]: saved?.roles ?? [] };
+      if (!this.databaseAccessConfigured.includes(database)) {
+        this.databaseAccessConfigured = [...this.databaseAccessConfigured, database];
+      }
+      return saved?.roles ?? [];
     },
 
     /** 把完整策略按写入目标库收敛，diff 与策略页只比较这个库 */

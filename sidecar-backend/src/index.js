@@ -30,6 +30,8 @@ const {
   buildSourceAccessConfig,
   migrateLegacyRoleTables,
   summarizeSourceAccess,
+  applyDatabaseBoundary,
+  pickAnchorColumn,
 } = require('./permissions');
 const { buildClientConfig, buildCliCommands, listClients, normalizeEndpoint } = require('./mcp-config');
 const {
@@ -44,6 +46,7 @@ const {
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
 const { OntologyStore } = require('./ontology');
+const { DatabaseAccessStore } = require('./database-access');
 const { lintOntology, buildTableIndex } = require('./ontology-lint');
 const { proposeEntries, summarizeValues } = require('./ontology-scaffold');
 const { evaluateExamples } = require('./ontology-eval');
@@ -507,9 +510,18 @@ async function verifyEntries(service, entries) {
  * @param {GraphJinSupervisor} [options.supervisor] 进程编排，缺省时自建一个
  * @param {SnapshotStore} [options.snapshots] 权限快照；缺省时写入不回滚
  * @param {OntologyStore} [options.ontology] 业务本体论；缺省时本体论方法报错
+ * @param {DatabaseAccessStore} [options.databaseAccess] 角色 → 库的白名单；缺省时不做边界
  * @returns {RpcRouter}
  */
-function createRouter({ store, connections = null, supervisor = null, snapshots = null, jwtSecret = null, ontology = null }) {
+function createRouter({
+  store,
+  connections = null,
+  supervisor = null,
+  snapshots = null,
+  jwtSecret = null,
+  ontology = null,
+  databaseAccess = null,
+}) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
 
@@ -524,6 +536,103 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
     if (!snapshots) throw RpcError.invalidParams('快照存储未初始化');
     return snapshots;
   };
+
+  /**
+   * 给某个库的 access 补上「角色 → 库」边界。
+   *
+   * 只有这个库配过角色清单时才需要 schema（拒绝规则要挑一个锚点列）；没配过原样返回，
+   * 老项目的行为不会被静默收紧。边界必须落在配置里：网关只是入口之一，直连同样要挡。
+   *
+   * @param {Object} options
+   * @param {Object} options.access buildSourceAccessConfig 的输出
+   * @param {string} options.database 库名
+   * @param {GraphJinService} options.service 运行中的实例（用来读 schema 与角色清单）
+   * @returns {Promise<Object>} { access, deniedRoles, conflicts, configured }
+   */
+  async function withDatabaseBoundary({ access, database, service }) {
+    if (!databaseAccess) {
+      return { access, deniedRoles: [], conflicts: [], configured: false };
+    }
+    const allowedRoles = databaseAccess.rolesFor(database);
+    if (allowedRoles === null) {
+      return { access, deniedRoles: [], conflicts: [], configured: false };
+    }
+
+    const schema = await discoverSchema(service.mcp, { withRelationships: false });
+    const tables = (schema.tables ?? []).filter(
+      (table) => !table.database || table.database === database
+    );
+    const columnsByTable = {};
+    for (const table of tables) {
+      // 类型与非空是挑「拒绝写法」的依据：非空列用 _is_null，否则按类型挑哨兵
+      columnsByTable[table.name] = (table.columns ?? []).map((column) => ({
+        name: column.name,
+        type: column.type,
+        notNull: column.notNull,
+        primaryKey: column.primaryKey,
+      }));
+    }
+
+    const config = await service.readConfig('roles');
+    const configRoles = (config?.roles ?? []).map((role) => role.name).filter(Boolean);
+    const grantRoles = (access?.grants ?? []).map((grant) => grant.role).filter(Boolean);
+    const roles = [...new Set(['admin', ...configRoles, ...grantRoles, ...allowedRoles])];
+
+    const result = applyDatabaseBoundary({
+      access,
+      allowedRoles,
+      roles,
+      tables: tables.map((table) => table.name),
+      columnsByTable,
+    });
+
+    // 自检用：拿第一张有列的表与被拒角色的锚点列，写完配置后真跑一次
+    const firstTable = tables.find((table) => (table.columns ?? []).length > 0) ?? null;
+    const probe = firstTable
+      ? { table: firstTable.name, column: pickAnchorColumn(firstTable.columns)?.name ?? null }
+      : null;
+
+    return { ...result, configured: true, probe };
+  }
+
+  /**
+   * 写完配置后真跑一次：被拒角色必须一行都查不到。
+   *
+   * 不能只信编译结果——实测存在「启动能过、写入被拒」的写法差异
+   * （`_in: []` 启动接受，写进配置报 empty object or list for '_in'），
+   * 也可能出现「写进去了但过滤不生效」。自检把这两种情况都变成可报告的失败。
+   *
+   * @param {Object} options
+   * @param {string} options.baseUrl
+   * @param {string} [options.role] 被拒角色
+   * @param {{table: string, column: string}|null} [options.probe]
+   * @returns {Promise<{ok: boolean|null, detail: string}>}
+   */
+  async function checkBoundary({ baseUrl, role, probe }) {
+    if (!role || !probe?.table || !probe?.column) {
+      return { ok: null, detail: '没有可探测的表或列，未自检' };
+    }
+    const query = `{ ${probe.table}(limit: 1) { ${probe.column} } }`;
+    let detail = '';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const body = await executeGraphql(baseUrl, { query, role });
+        const rows = body?.data?.[probe.table];
+        if (Array.isArray(rows) && rows.length === 0) {
+          return { ok: true, detail: `${role} 查 ${probe.table} 得到 0 行` };
+        }
+        detail =
+          Array.isArray(rows) && rows.length > 0
+            ? `${role} 仍能查到 ${rows.length} 行`
+            : `${role} 返回 ${JSON.stringify(rows)}`;
+      } catch (error) {
+        detail = `${role}: ${error.message}`;
+      }
+      // 配置热加载可能还没生效，重试两次再判定失败
+      await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+    }
+    return { ok: false, detail };
+  }
 
   /** 本体论存储：没有装配时只是「没有业务语境」，不影响其它能力 */
   const ontologyStore = () => {
@@ -1109,7 +1218,33 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       }
       const service = params?.baseUrl ? await getService(requireBaseUrl(params)) : null;
       const access = await buildAccessPipeline({ ...params, database }, service);
-      return summarizeSourceAccess(access);
+      const boundary = service
+        ? await withDatabaseBoundary({ access, database, service })
+        : { access, deniedRoles: [], conflicts: [], configured: false };
+      return {
+        ...summarizeSourceAccess(boundary.access),
+        deniedRoles: boundary.deniedRoles,
+        boundaryConfigured: boundary.configured,
+        conflicts: boundary.conflicts,
+      };
+    })
+    // 哪些角色可以访问哪个库。admin 永远允许，不落表。
+    .register('permissions.databases', () => {
+      if (!databaseAccess) return { access: {}, configured: [] };
+      return databaseAccess.list();
+    })
+    .register('permissions.setDatabaseRoles', (params) => {
+      if (!databaseAccess) throw RpcError.invalidParams('角色库白名单存储未初始化');
+      const database = params?.database;
+      if (typeof database !== 'string' || database === '') {
+        throw RpcError.invalidParams('database 不能为空');
+      }
+      const roles = params?.roles;
+      if (!Array.isArray(roles) || roles.some((role) => typeof role !== 'string')) {
+        throw RpcError.invalidParams('roles 必须是字符串数组');
+      }
+      const saved = databaseAccess.setRoles(database, roles);
+      return { database, roles: saved };
     })
     .register('permissions.apply', async (params) => {
       const database = params?.database;
@@ -1142,9 +1277,26 @@ function createRouter({ store, connections = null, supervisor = null, snapshots 
       });
 
       const access = await buildAccessPipeline({ ...params, database }, service);
+      // 角色 → 库边界：不在清单里的角色写成「查不到任何行」，否则没写 grant 的角色反而全开
+      const boundary = await withDatabaseBoundary({ access, database, service });
       const projectDir = params?.projectDir ?? services.status().projectDir;
-      const applied = await applySourceAccess(service, projectDir, database, access);
-      return { synced, applied, snapshot, access };
+      const applied = await applySourceAccess(service, projectDir, database, boundary.access);
+      // 真跑一次才敢说「拒绝生效」：配置接受 ≠ 查询真的查不到
+      const boundaryCheck = await checkBoundary({
+        baseUrl,
+        role: boundary.deniedRoles[0],
+        probe: boundary.probe,
+      });
+      return {
+        synced,
+        applied,
+        snapshot,
+        access: boundary.access,
+        deniedRoles: boundary.deniedRoles,
+        boundaryConfigured: boundary.configured,
+        conflicts: boundary.conflicts,
+        boundaryCheck,
+      };
     })
     // 写入历史：只返回摘要，roles 全文按需用 permissions.rollback 恢复
     .register('permissions.snapshots', (params) => {
@@ -1386,12 +1538,21 @@ async function createBackend({ dbPath } = {}) {
   const jwtSecret = loadSecret(dataFile('jwt.secret'));
 
   const store = new UserStore(resolvedDbPath);
-  // 两张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
+  // 几张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
   const connections = new ConnectionStore(resolvedDbPath);
   const ontology = new OntologyStore(resolvedDbPath);
   const snapshots = new SnapshotStore(resolvedDbPath);
+  const databaseAccess = new DatabaseAccessStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
-  const router = createRouter({ store, connections, supervisor, snapshots, jwtSecret, ontology });
+  const router = createRouter({
+    store,
+    connections,
+    supervisor,
+    snapshots,
+    jwtSecret,
+    ontology,
+    databaseAccess,
+  });
   // 本体论的取用按角色过滤：被屏蔽 / 仅管理员可见的表，它的语义也不该送出去。
   // 项目目录每次现取——实例可能被重启到别的目录，缓存的路径会变成别人的配置。
   const ontologyProvider = createOntologyProvider({

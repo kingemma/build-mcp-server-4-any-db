@@ -2107,6 +2107,66 @@ async function main() {
       String(demoClientConfig?.endpoint ?? '').slice(0, 100)
     );
 
+    // 「角色 → 库」配置项：没勾选的角色在本库必须一行都看不到。
+    // 关键在「落到配置里」——直连 GraphJin 的客户端绕不过网关，但绕不过配置。
+    const beforeBoundary = await rpc('permissions.databases');
+    record(
+      '角色库白名单默认未配置（不限制）',
+      Array.isArray(beforeBoundary?.configured) && beforeBoundary.configured.length === 0,
+      `configured=${JSON.stringify(beforeBoundary?.configured ?? [])}`
+    );
+    await rpc('permissions.setDatabaseRoles', { database: 'finance', roles: ['finance_analyst'] });
+    const financeAccess = (demoFile.sources ?? []).find((source) => source.name === 'finance')?.access ?? {};
+    const boundaryApplied = await rpc('permissions.apply', {
+      baseUrl: demoBaseUrl,
+      projectDir: demoStatus.projectDir,
+      database: 'finance',
+      access: financeAccess,
+    });
+    record(
+      '应用权限时把未勾选的角色写成拒绝',
+      boundaryApplied?.boundaryConfigured === true &&
+        (boundaryApplied?.deniedRoles ?? []).includes('inventory_viewer'),
+      `denied=${JSON.stringify(boundaryApplied?.deniedRoles ?? [])}`
+    );
+    const deniedQuery = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'inventory_viewer',
+      userCode: 'hq',
+      query: '{ vouchers(limit: 5) { id } }',
+    });
+    const deniedRows = deniedQuery?.data?.vouchers ?? [];
+    record(
+      '被拒角色在真实查询里拿不到行',
+      Array.isArray(deniedRows) && deniedRows.length === 0,
+      `${deniedRows.length} 行`
+    );
+    const allowedQuery = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'finance_analyst',
+      userCode: 'hq',
+      query: '{ vouchers(limit: 100) { id owner_code } }',
+    });
+    const allowedRows = allowedQuery?.data?.vouchers ?? [];
+    record(
+      '允许的角色不受影响',
+      allowedRows.length > 0,
+      `${allowedRows.length} 行`
+    );
+    await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
+    await waitFor('权限页出现可访问角色', async () =>
+      (await cdp.evaluate(`document.body.textContent ?? ''`)).includes('可访问')
+    );
+    const accessRow = await cdp.evaluate(`(() => {
+      const group = document.querySelector('.access-roles');
+      return group ? group.textContent.replace(/\\s+/g, ' ').trim() : '';
+    })()`);
+    record(
+      '权限页能勾选本库的可访问角色',
+      accessRow.includes('finance_analyst') && accessRow.includes('inventory_viewer'),
+      accessRow.slice(0, 80)
+    );
+
     // 冷启动：刷新后没有任何页面帮忙加载 state，三张卡必须自己把判定依据补齐。
     // 只靠 onMounted 判断 isRunning 会输给 App.vue 的异步 refreshBackend，卡片会全变「待完成」。
     await cdp.evaluate(`location.hash = '#/'; 'ok'`);
