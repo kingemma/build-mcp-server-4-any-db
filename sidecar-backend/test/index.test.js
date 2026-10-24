@@ -251,6 +251,18 @@ test('requireGraphqlQuery: 空值与粘错的 JSON 都给明确错误', () => {
   assert.throws(() => requireGraphqlQuery('{ "database": "app" }'), /JSON 参数而不是 GraphQL 语句/);
 });
 
+test('requireGraphqlQuery: 中文弯引号先换成 ASCII 引号', () => {
+  // 手打 / 文档里复制出来的弯引号：GraphJin 只会回 unrecognized character in action: U+201C
+  const curlyArgs = '{ \u201cdatabase\u201d: \u201cfinance\u201d }';
+  assert.throws(() => requireGraphqlQuery(curlyArgs), /JSON 参数而不是 GraphQL 语句/);
+
+  const curlyWrapped = '{ \u201cquery\u201d: \u201c{ orders(limit: 5) { id } }\u201d }';
+  assert.strictEqual(requireGraphqlQuery(curlyWrapped), '{ orders(limit: 5) { id } }');
+
+  const curlyValue = '{ items(where: { name: { _eq: \u201c张三\u201d } }) { id } }';
+  assert.strictEqual(requireGraphqlQuery(curlyValue), '{ items(where: { name: { _eq: "张三" } }) { id } }');
+});
+
 test('config.file: 实例未运行时从 dev.yml 读出权限与角色', async () => {
   const dir = tempProject(GRANTED_YAML);
   const router = createRouter({ store: new UserStore(':memory:') });

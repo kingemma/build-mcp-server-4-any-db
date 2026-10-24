@@ -144,6 +144,20 @@ async function applySourceAccess(service, projectDir, database, access) {
 }
 
 /**
+ * 把中文输入法 / 网页里带出来的弯引号换成 ASCII 引号。
+ *
+ * GraphQL 的字符串定界符只有 ASCII 双引号，`“...”` 会被 GraphJin 判成
+ * `unrecognized character in action: U+201C` —— 既不说是哪个字符，也不说在哪。
+ * 单引号只换成 ASCII 单引号：字符串里的撇号（it’s）本来就该留在原文里。
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeQuotes(text) {
+  return text.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'");
+}
+
+/**
  * 把入参里的 query 归一成 GraphQL 语句本体。
  *
  * 前端输入框既接受语句本体，也接受从调用示例复制来的 JSON 参数（`{ "query": "..." }`）——
@@ -158,7 +172,9 @@ function requireGraphqlQuery(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') {
     throw RpcError.invalidParams('query 不能为空');
   }
-  const trimmed = raw.trim();
+  // 先换引号再判 JSON：`{ “database”: “finance” }` 换完就是合法 JSON，
+  // 会走到下面「这是参数不是语句」的分支，而不是被当成语句发给 GraphJin
+  const trimmed = normalizeQuotes(raw).trim();
   if (!trimmed.startsWith('{')) return trimmed;
   let parsed;
   try {
