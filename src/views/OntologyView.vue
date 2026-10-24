@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from '../stores/app';
@@ -115,6 +115,12 @@ const entries = computed(() =>
     (entry) => entry.kind === activeKind.value && entry.database === activeDatabase.value
   )
 );
+
+/**
+ * 换库 = 换一整套本体论：体检 / 候选 / 评测 / 编译的结论都是上一个库算出来的。
+ * 不清掉就会显示「这个库已经检查过了」，而检查的其实是另一个库。
+ */
+watch(activeDatabase, () => store.resetOntologyConclusions());
 
 /**
  * 每个类别在当前库的条数。
@@ -443,7 +449,7 @@ async function runLint() {
 async function runPropose() {
   isProposing.value = true;
   try {
-    await store.proposeOntology();
+    await store.proposeOntology(activeDatabase.value);
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -455,7 +461,7 @@ async function runPropose() {
 async function runEval() {
   isEvaluating.value = true;
   try {
-    await store.runOntologyEval();
+    await store.runOntologyEval(activeDatabase.value);
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -467,7 +473,7 @@ async function runEval() {
 async function runCompile() {
   isCompiling.value = true;
   try {
-    await store.compileOntologyRules();
+    await store.compileOntologyRules(activeDatabase.value);
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
@@ -568,14 +574,14 @@ async function applyRules() {
 
   isApplyingRules.value = true;
   try {
-    const result = await store.applyOntologyRules(access);
+    const result = await store.applyOntologyRules(access, activeDatabase.value);
     ElMessage.success(
       result?.snapshot
         ? t('ontology.rules.applied', { id: result.snapshot.id })
         : t('ontology.rules.appliedNoSnapshot')
     );
     // 应用后补丁已经不是「待应用」状态，清掉避免重复点
-    store.ontologyRules = null;
+    store.resetOntologyConclusions();
   } catch (error) {
     ElMessage.error(error.message);
   } finally {

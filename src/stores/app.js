@@ -956,10 +956,7 @@ export const useAppStore = defineStore('app', {
         tables: Array.isArray(entry.tables) ? entry.tables : splitLoose(entry.tables),
       });
       // 条目变了，上一次体检 / 候选 / 评测 / 编译的结论都立刻过期
-      this.ontologyLint = null;
-      this.ontologyProposals = null;
-      this.ontologyEval = null;
-      this.ontologyRules = null;
+      this.resetOntologyConclusions();
       await this.loadOntology();
       return saved;
     },
@@ -969,11 +966,21 @@ export const useAppStore = defineStore('app', {
      */
     async removeOntology(id) {
       await rpc('ontology.remove', { id });
+      this.resetOntologyConclusions();
+      await this.loadOntology();
+    },
+
+    /**
+     * 清空体检 / 候选 / 评测 / 编译的结论。
+     *
+     * 三件事会让上一轮结论失效：改条目、删条目、换库。留着旧结论比没有结论更危险——
+     * 面板会显示「已检查」，而它检查的是另一个库或另一版条目。
+     */
+    resetOntologyConclusions() {
       this.ontologyLint = null;
       this.ontologyProposals = null;
       this.ontologyEval = null;
       this.ontologyRules = null;
-      await this.loadOntology();
     },
 
     /**
@@ -994,11 +1001,15 @@ export const useAppStore = defineStore('app', {
      *
      * 只拿候选，不写库——点「起草」才填表单，保存仍是人的动作。
      *
+     * 库必须由调用方显式给：本体论页自己有一个库选择器，而 `activeDatabase` 是
+     * Schema 页的选择，两者可以不同。这里偷用 activeDatabase 会出现「选 A 起草 B」。
+     *
+     * @param {string} [database] 目标库；缺省才回落到 activeDatabase
      * @returns {Promise<Object>} 候选
      */
-    async proposeOntology() {
+    async proposeOntology(database = this.activeDatabase) {
       this.ontologyProposals = await rpc('ontology.propose', {
-        database: this.activeDatabase || null,
+        database: database || null,
       });
       return this.ontologyProposals;
     },
@@ -1021,13 +1032,14 @@ export const useAppStore = defineStore('app', {
      * 测三件确定的事：样例还能不能跑、结构是否与声明一致、问题需要的表有没有被讲。
      * **不测模型答得好不好**——那需要真模型与真答案，这里没有，也不假装有。
      *
+     * @param {string} [database] 目标库；缺省才回落到 activeDatabase（见 proposeOntology）
      * @returns {Promise<Object>} 评测报告
      */
-    async runOntologyEval() {
+    async runOntologyEval(database = this.activeDatabase) {
       this.ontologyEval = await rpc('ontology.eval', {
         // 实例没跑时不传地址：后端会退化成只做结构与覆盖检查
         baseUrl: this.baseUrl || undefined,
-        database: this.activeDatabase || undefined,
+        database: database || undefined,
       });
       return this.ontologyEval;
     },
@@ -1038,16 +1050,17 @@ export const useAppStore = defineStore('app', {
      * 只算不写：返回的是「现状 + 规则」的完整 access 与变更清单，写不写由人决定。
      * 现状优先从运行中的实例读，停着时后端会退回 dev.yml——两边读的是同一份真相。
      *
+     * @param {string} [database] 目标库；缺省才回落到 activeDatabase（见 proposeOntology）
      * @returns {Promise<Object>} 编译结果
      */
-    async compileOntologyRules() {
+    async compileOntologyRules(database = this.activeDatabase) {
       this.ontologyRules = await rpc('ontology.compileRules', {
-        database: this.activeDatabase,
+        database,
         baseUrl: this.baseUrl || null,
         projectDir: this.status?.projectDir ?? null,
         // 角色清单必须按**本体论页当前选中的库**取：applyDatabase 是权限页的选择，
         // 两者可以不同，取错了会把别的库的角色名报成「没有 grant」
-        roles: this.rolesByDb[this.activeDatabase] ?? [],
+        roles: this.rolesByDb[database] ?? [],
       });
       return this.ontologyRules;
     },
@@ -1059,13 +1072,14 @@ export const useAppStore = defineStore('app', {
      * 另造一条「规则专用写入」等于绕开回滚能力，不划算。
      *
      * @param {Object} access 编译输出的完整 access
+     * @param {string} [database] 目标库；缺省才回落到 activeDatabase（见 proposeOntology）
      * @returns {Promise<Object>} 写入结果
      */
-    async applyOntologyRules(access) {
+    async applyOntologyRules(access, database = this.activeDatabase) {
       const result = await rpc('permissions.apply', {
         baseUrl: this.baseUrl,
         projectDir: this.status?.projectDir ?? null,
-        database: this.activeDatabase,
+        database,
         // 快照来源写清楚：回滚时能分清这次是「应用规则补丁」还是手改矩阵
         reason: 'before-ontology-rules',
         matrix: {},
