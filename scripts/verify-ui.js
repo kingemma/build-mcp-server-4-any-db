@@ -803,6 +803,32 @@ async function main() {
     expression: 'sum(amount) where status = "paid"',
     tables: ['analytics.main.orders'],
   });
+  // 关系图用例的夹具：analytics 库给两个概念 + 一条关系，术语「事件」绑在 events 上，
+  // 这样「节点上要显示术语」与「连线带基数」都能在真实渲染里验到
+  ontologySeed.save({
+    database: 'analytics',
+    kind: 'concept',
+    name: '事件流',
+    tables: ['analytics.main.events'],
+    payload: { pkey: 'id' },
+  });
+  ontologySeed.save({
+    database: 'analytics',
+    kind: 'concept',
+    name: '订单',
+    tables: ['analytics.main.orders'],
+    payload: { pkey: 'id' },
+  });
+  ontologySeed.save({
+    database: 'analytics',
+    kind: 'relation',
+    name: '属于订单',
+    payload: {
+      from: { table: 'analytics.main.events', column: 'order_id' },
+      to: { table: 'analytics.main.orders', column: 'id' },
+      cardinality: 'many-to-one',
+    },
+  });
   // 样例：评测的对象。查询必须对 verify 工程真实的表成立（app.db 的 orders 只有 id/user_id/amount）
   ontologySeed.save({
     database: 'app',
@@ -1639,6 +1665,62 @@ async function main() {
     })()`);
     await waitFor('切到 analytics 库', async () =>
       (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('事件')
+    );
+
+    // 关系图 Tab：一个概念一个节点、节点上写绑定到这些表的术语、连线是关系 + 基数
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.views .view')]
+        .find((item) => item.textContent.trim() === '关系图');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('关系图渲染出概念节点', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.graph__node').length`)) === 2
+    );
+    const graphText = await cdp.evaluate(`(() => ({
+      nodes: [...document.querySelectorAll('.graph__node')].map((item) => item.textContent.trim()),
+      edges: [...document.querySelectorAll('.graph__edge-label')].map((item) => item.textContent.trim()),
+    }))()`);
+    record(
+      '关系图一个概念一个节点，节点上标出术语',
+      graphText.nodes.some((item) => item.includes('事件流') && item.includes('事件')),
+      graphText.nodes.join(' / ')
+    );
+    record(
+      '关系图的连线带业务叫法与基数',
+      graphText.edges.some((item) => item.includes('属于订单') && item.includes('多对一')),
+      graphText.edges.join(' / ')
+    );
+
+    await cdp.evaluate(`(() => {
+      const node = [...document.querySelectorAll('.graph__node')]
+        .find((item) => item.textContent.includes('事件流'));
+      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return node ? 'ok' : 'missing';
+    })()`);
+    await waitFor('点节点后右侧详情出现', async () =>
+      (await cdp.evaluate(`document.querySelector('.graph__detail')?.textContent ?? ''`)).includes('事件')
+    );
+    const detailText = await cdp.evaluate(`document.querySelector('.graph__detail')?.textContent ?? ''`);
+    record(
+      '点节点列出它挂的术语与关系',
+      detailText.includes('事件流') && detailText.includes('属于订单'),
+      detailText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    const graphShot = path.join(workDir, 'ontology-graph.png');
+    await cdp.screenshot(graphShot);
+    console.log(`截图：${graphShot}`);
+
+    // 起草按钮在第一个 Tab 里，切回去再继续
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.views .view')]
+        .find((item) => item.textContent.trim() === '条目管理');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('切回条目管理', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.entries').length`)) === 1
     );
     await cdp.evaluate(`(() => {
       const panel = [...document.querySelectorAll('.panel')]

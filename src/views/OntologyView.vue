@@ -6,6 +6,7 @@ import { useAppStore } from '../stores/app';
 import EvalPanel from '../components/ontology/EvalPanel.vue';
 import LintPanel from '../components/ontology/LintPanel.vue';
 import OntologyForm from '../components/ontology/OntologyForm.vue';
+import OntologyGraph from '../components/ontology/OntologyGraph.vue';
 import ProposalsPanel from '../components/ontology/ProposalsPanel.vue';
 import RenderedPanel from '../components/ontology/RenderedPanel.vue';
 import RulesPanel from '../components/ontology/RulesPanel.vue';
@@ -29,6 +30,13 @@ const KINDS = [
   { id: 'metric', labelKey: 'ontology.kinds.metric' },
   { id: 'example', labelKey: 'ontology.kinds.example' },
 ];
+
+/** 两个视图：条目管理（原有页面）/ 关系图。库选择器在两者之上共用，切库等于换图 */
+const VIEWS = [
+  { id: 'entries', labelKey: 'ontology.views.entries' },
+  { id: 'graph', labelKey: 'ontology.views.graph' },
+];
+const activeView = ref('entries');
 
 const activeKind = ref('term');
 /** 当前在维护哪个库的本体论；每个库各有自己的一套 */
@@ -114,6 +122,11 @@ const entries = computed(() =>
   store.ontology.filter(
     (entry) => entry.kind === activeKind.value && entry.database === activeDatabase.value
   )
+);
+
+/** 当前库的全部条目：关系图要跨 kind 看（概念当节点、关系当线、术语挂节点） */
+const databaseEntries = computed(() =>
+  store.ontology.filter((entry) => entry.database === activeDatabase.value)
 );
 
 /**
@@ -600,23 +613,7 @@ onMounted(async () => {
 <template>
   <div class="stack">
     <section class="panel">
-      <div class="panel__head">
-        <span class="panel__title">{{ t('ontology.what') }}</span>
-      </div>
-      <div class="panel__body">
-        <p class="mono-dim note">{{ t('ontology.why') }}</p>
-        <p class="mono-dim note">{{ t('ontology.delivery') }}</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel__head">
-        <span class="panel__title">{{ t('ontology.entries') }}</span>
-        <span class="mono-dim">
-          {{ t('ontology.count', { count: store.ontology.length }) }}
-        </span>
-      </div>
-      <div class="panel__body">
+      <div class="panel__body ontology-bar">
         <label class="picker">
           <span class="picker__label">{{ t('ontology.pickDatabase') }}</span>
           <el-select
@@ -637,6 +634,43 @@ onMounted(async () => {
           </span>
         </label>
 
+        <div class="views" role="tablist">
+          <button
+            v-for="view in VIEWS"
+            :key="view.id"
+            type="button"
+            role="tab"
+            class="view"
+            :class="{ 'view--active': activeView === view.id }"
+            :aria-selected="activeView === view.id"
+            @click="activeView = view.id"
+          >
+            {{ t(view.labelKey) }}
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第一个 Tab：原有页面与功能，内容保持原样 -->
+    <template v-if="activeView === 'entries'">
+    <section class="panel">
+      <div class="panel__head">
+        <span class="panel__title">{{ t('ontology.what') }}</span>
+      </div>
+      <div class="panel__body">
+        <p class="mono-dim note">{{ t('ontology.why') }}</p>
+        <p class="mono-dim note">{{ t('ontology.delivery') }}</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head">
+        <span class="panel__title">{{ t('ontology.entries') }}</span>
+        <span class="mono-dim">
+          {{ t('ontology.count', { count: store.ontology.length }) }}
+        </span>
+      </div>
+      <div class="panel__body">
         <div class="kinds" role="tablist">
           <button
             v-for="kind in KINDS"
@@ -731,6 +765,9 @@ onMounted(async () => {
     />
 
     <RenderedPanel :text="store.ontologyRendered" @copy="copyRendered" />
+    </template>
+
+    <OntologyGraph v-else :entries="databaseEntries" :database="activeDatabase" />
   </div>
 </template>
 
@@ -746,6 +783,44 @@ onMounted(async () => {
 .picker__label {
   font-size: var(--fs-note);
   color: var(--text-dim);
+}
+
+/** 库选择器与两个 Tab 共用一行：切库对两个视图都生效，不该分两处各点一次 */
+.ontology-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ontology-bar .picker {
+  margin-bottom: 0;
+}
+
+.views {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.view {
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.view--active {
+  font-weight: 600;
+  color: var(--accent);
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(16, 35, 61, 0.08);
 }
 
 .kinds {
