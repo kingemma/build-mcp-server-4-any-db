@@ -14,6 +14,21 @@ const isDemoLoading = ref(false);
 const checks = ref([]);
 const isChecking = ref(false);
 
+/** 演示会按两个库的 schema 生成本体论：这里把每个库的条目数摊开给用户看 */
+const ONTOLOGY_KINDS = ['concept', 'term', 'relation', 'rule', 'metric'];
+const demoOntology = computed(() => {
+  const byDatabase = demoReport.value?.ontology?.byDatabase;
+  if (!byDatabase) return '';
+  return Object.entries(byDatabase)
+    .map(([database, counts]) => {
+      const parts = ONTOLOGY_KINDS.filter((kind) => counts[kind]).map(
+        (kind) => `${counts[kind]} ${t(`ontology.kinds.${kind}`)}`
+      );
+      return `${database}: ${parts.join(' · ')}`;
+    })
+    .join('    ');
+});
+
 /**
  * 步骤 2 的判定依据分三层：生效配置 → 历史快照 → 未知。
  *
@@ -181,6 +196,10 @@ watch(() => store.isRunning, syncProgress);
             <span class="fact__value">{{ demoReport.tables.join(', ') }}</span>
           </div>
           <div class="fact">
+            <span class="eyebrow">{{ t('welcome.demoOntology') }}</span>
+            <span class="fact__value">{{ demoOntology || t('common.dash') }}</span>
+          </div>
+          <div class="fact">
             <span class="eyebrow">{{ t('welcome.demoEndpoint') }}</span>
             <span class="fact__value">{{ demoReport.status?.baseUrl ?? t('common.dash') }}</span>
           </div>
@@ -192,6 +211,9 @@ watch(() => store.isRunning, syncProgress);
           </el-button>
           <el-button size="small" @click="go('/permissions')">
             {{ t('welcome.demoGoPolicy') }}
+          </el-button>
+          <el-button size="small" @click="go('/ontology')">
+            {{ t('welcome.demoGoOntology') }}
           </el-button>
         </div>
       </div>

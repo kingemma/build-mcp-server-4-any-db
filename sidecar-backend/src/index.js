@@ -46,6 +46,7 @@ const {
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
 const { OntologyStore } = require('./ontology');
+const { seedDemoOntology } = require('./demo-ontology');
 const { DatabaseAccessStore } = require('./database-access');
 const { lintOntology, buildTableIndex } = require('./ontology-lint');
 const { proposeEntries, summarizeValues } = require('./ontology-scaffold');
@@ -1120,6 +1121,9 @@ function createRouter({
       // 一个后端只托管一个实例，切到演示项目前先停掉旧的
       await services.stop();
       const report = createDemoProject({ dir: projectDir, port: await pickFreePort() });
+      // 本体论跟着两个演示库一起生成：不配的话新用户点进来只有空表结构，
+      // 「术语 / 关系 / 指标」这些能力得自己编内容才看得见
+      const ontologyReport = ontology ? seedDemoOntology({ dir: projectDir, store: ontology }) : null;
       const status = await startService({ projectDir });
       // 记录落盘：演示项目也要出现在「已保存连接」里，否则用户找不到入口。
       // 两个库各记一条：合成一条的话，删掉它就等于把另一个库也弄丢了
@@ -1131,7 +1135,7 @@ function createRouter({
           origin: ORIGIN_START,
         });
       }
-      return { ...report, projectDir, status };
+      return { ...report, projectDir, status, ontology: ontologyReport };
     })
     // 一键体检：后端 / 二进制 / 实例 / 库 / 角色逐项打红绿灯
     .register('diagnostics.run', async () => {

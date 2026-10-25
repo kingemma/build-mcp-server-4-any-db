@@ -868,6 +868,8 @@ export const useAppStore = defineStore('app', {
           this.loadConnectedDatabases(),
           this.loadSchema(),
           this.loadConnections(),
+          // 演示会顺带把两个库的本体论一起种好，不重新拉一次的话本体论页还是空的
+          this.loadOntology(),
           // 演示是换了实例，接入配置必须跟着换，否则欢迎页第三步会停在旧端点上
           this.loadClientConfig(),
         ]);

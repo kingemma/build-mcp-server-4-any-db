@@ -2172,13 +2172,59 @@ async function main() {
       `finance_analyst 查库存库 products → ${wrongInventoryRows.length} 行`
     );
 
-    // 节点4 讲清业务：财务库能起草出还没被讲过的表
-    const financePropose = await rpc('ontology.propose', { database: 'finance' });
-    const financeProposeText = JSON.stringify(financePropose ?? '');
+    // 节点4 讲清业务：一键演示要按两个库的 schema 自动带上本体论，
+    // 而不是让新用户面对一堆空表自己从零编术语
+    const demoOntology = await rpc('ontology.list', { database: 'finance' });
+    const demoEntries = demoOntology?.entries ?? [];
+    const demoKinds = new Set(demoEntries.map((entry) => entry.kind));
     record(
-      '节点4 本体论：财务库能起草出未覆盖的表',
-      financeProposeText.includes('finance') && financeProposeText.includes('vouchers'),
-      financeProposeText.slice(0, 120)
+      '节点4 本体论：演示库自带术语 / 概念 / 关系 / 规则 / 指标',
+      ['concept', 'term', 'relation', 'rule', 'metric'].every((kind) => demoKinds.has(kind)) &&
+        demoEntries.length >= 20,
+      `${demoEntries.length} 条：${[...demoKinds].join(', ')}`
+    );
+
+    // 自动生成的条目必须和 schema 对得上：概念覆盖全部表、关系覆盖全部外键，起草就没什么可挑的了
+    const financePropose = await rpc('ontology.propose', { database: 'finance' });
+    record(
+      '节点4 本体论：生成的条目覆盖了 schema，起草无遗漏',
+      (financePropose?.counts?.concepts ?? 0) === 0 && (financePropose?.counts?.relations ?? 0) === 0,
+      JSON.stringify(financePropose?.counts ?? {})
+    );
+
+    // 界面上也要看得见：本体论页默认落在演示的财务库
+    await cdp.evaluate(`location.hash = '#/ontology'; 'ok'`);
+    await waitFor('演示库的本体论在页面上出现', async () =>
+      (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('会计科目')
+    );
+    const demoEntriesText = await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`);
+    record(
+      '节点4 本体论：页面上能看到自动生成的条目',
+      demoEntriesText.includes('会计科目') && demoEntriesText.includes('记账凭证'),
+      demoEntriesText.replace(/\s+/g, ' ').slice(0, 120)
+    );
+
+    // 关系图是这套条目的直接产物：5 张表 → 5 个概念节点，4 个外键 → 4 条连线
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.views .view')]
+        .find((item) => item.textContent.trim() === '关系图');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('演示库的关系图渲染', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.graph__node').length`)) === 5
+    );
+    const demoGraph = await cdp.evaluate(`(() => ({
+      nodes: document.querySelectorAll('.graph__node').length,
+      edges: document.querySelectorAll('.graph__edge').length,
+    }))()`);
+    const demoGraphShot = path.join(workDir, 'ontology-graph-demo.png');
+    await cdp.screenshot(demoGraphShot);
+    console.log(`截图：${demoGraphShot}`);
+    record(
+      '节点4 本体论：关系图画出自动生成的概念与关系',
+      demoGraph.nodes === 5 && demoGraph.edges === 4,
+      `${demoGraph.nodes} 个概念 · ${demoGraph.edges} 条关系`
     );
 
     // 节点5 接入 AI：演示项目同样能生成一份可直接粘贴的客户端配置
