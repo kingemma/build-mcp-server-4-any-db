@@ -8,6 +8,7 @@
     "email": "18901599114@163.com",
     "url": "tel:+8618901599114"
   },
+  "license": "MIT",
   "main": "electron/main.js",
   "scripts": {
     "start": "node scripts/dev-all.js",
@@ -46,7 +47,8 @@
       "sidecar-backend/package.json",
       "graphjin-binaries/version.json",
       "scripts/platforms.js",
-      "package.json"
+      "package.json",
+      "LICENSE"
     ],
     "extraResources": [
       {
