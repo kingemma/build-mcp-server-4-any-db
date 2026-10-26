@@ -397,7 +397,7 @@ src/
 | 0.3 | Node.js 后端（**不再需要 pkg 打包**：Electron 主进程直接 `require` 后端，`createBackend()` 返回可编程启停的实例。Electron 44 内置 Node 24.21.0，`node:sqlite` 可用） |
 | 0.4 | 编写 `scripts/prepare-binaries.js`（下载走 `scripts/fetch-binaries.js`），构建时把当前平台的 GraphJin 二进制复制/解压到 `binaries/` 并按目标三元组命名（已完成；注意 `os.platform()` 返回 `win32`，需映射成 `windows`） |
 | 0.5 | 配置打包资源：`build.files` 含 `dist / electron / sidecar-backend/src / sidecar-backend/package.json / scripts/platforms.js`，`extraResources` 把 `binaries/graphjin-*` 放到 `resources/binaries/`；`electronDist` 复用已解压的 Electron，避免重复下载 |
-| 0.6 | 验证：`electron-builder --win nsis` 产出 `release-win/MCP Builder Setup 0.1.0.exe`（150 MB），打包产物实测可启动（进程内后端 :65339、数据落 `%APPDATA%\mcp-builder\data`） |
+| 0.6 | 验证：`electron-builder --win nsis` 产出 `release/MCP Server Build Setup 0.1.0.exe`（150 MB），打包产物实测可启动（进程内后端 :65339、数据落 `%APPDATA%\mcp-builder\data`） |
 
 > **Windows 构建环境（2026-10-17 实测）**
 >
@@ -490,7 +490,7 @@ src/
 |:---|:---|
 | 4.1 | 端到端测试：添加数据库 → 浏览 Schema → 配置权限 → 启动 MCP → 客户端连接验证（已实现：`scripts/verify-e2e.js`，24 项断言全通过。全链路走真实入口：拉起后端 → HTTP `/rpc` → 建库/发现/配权限/起 GraphJin → 用生成的客户端配置真实建立 MCP 会话 → 快照回滚） |
 | 4.2 | 权限验证测试：验证只读角色无法执行 insert/update/delete（已实现：同一脚本内断言 `Insert/Update/Delete blocked`、`db column blocked`、query 被拦静默返回 null） |
-| 4.3 | 跨平台打包：Windows NSIS（**已完成**：`release-final/MCP Builder Setup 0.1.0.exe`）；macOS dmg/zip 与 Linux AppImage/deb 的 electron-builder 配置、`dist:mac` / `dist:linux` 脚本和 GitHub Actions 矩阵已完成，本机仅实测 Windows |
+| 4.3 | 跨平台打包：Windows NSIS（**已完成**：`release/MCP Server Build Setup 0.1.0.exe`）；macOS dmg/zip 与 Linux AppImage/deb 的 electron-builder 配置、`dist:mac` / `dist:linux` 脚本和 GitHub Actions 矩阵已完成，本机仅实测 Windows |
 | 4.4 | macOS 代码签名和公证（**未做**：需要 Apple Developer 证书；CI 当前显式跳过签名发现） |
 | 4.5 | 用户文档和快速入门向导（**已完成**：中英文 README、功能进度表、Docker 测试库说明、截图） |
 

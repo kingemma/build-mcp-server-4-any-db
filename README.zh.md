@@ -584,22 +584,55 @@ npm run dist:mac    # macOS dmg + zip（需在 macOS 上执行）
 npm run dist:linux  # Linux AppImage + deb（需在 Linux 上执行）
 ```
 
-产物都在 `release-final/`。三个 `dist:*` 脚本会先跑 `npm run check:binaries`，确认当前平台的
+产物都在 `release/`。三个 `dist:*` 脚本会先跑 `npm run check:binaries`，确认当前平台的
 `binaries/graphjin-<triple>` 已就位（缺失时提示先跑 `fetch:binaries` + `prepare:binaries`），
 避免打出不含 GraphJin 的空壳安装包。跨平台打包由 `.github/workflows/build.yml` 的矩阵在
 Windows / macOS 13 / macOS 14 / Ubuntu 上完成；CI 没有签名证书，产物未签名。
 
-需要签名时在对应平台设置 electron-builder 的标准环境变量后再执行构建：
+macOS 签名与公证，在对应平台设置 electron-builder 的标准环境变量后再执行构建：
 
 ```bash
 # macOS：证书 + 公证
 CSC_LINK=/path/to/dev-id.p12 CSC_KEY_PASSWORD=... \
 APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... APPLE_TEAM_ID=... \
 npm run dist:mac
-
-# Windows：代码签名证书
-WIN_CSC_LINK=C:/path/to/cert.pfx WIN_CSC_KEY_PASSWORD=... npm run dist:win
 ```
+
+### Windows 代码签名
+
+签名逻辑在 [`electron-builder.js`](./electron-builder.js)，全部由环境变量驱动。没有配置证书时
+构建会跳过签名（`win.signExecutable: false`）并打印 `跳过 Windows 代码签名`，其它环节不受影响。
+
+| 变量 | 用途 |
+| --- | --- |
+| `MCPB_WIN_CERT_FILE` | `.pfx` / `.p12` 证书路径 |
+| `MCPB_WIN_CERT_PASSWORD` | 证书密码 |
+| `MCPB_WIN_CERT_SUBJECT` | 证书主题名，证书已在系统证书库里时使用 |
+| `MCPB_WIN_TIMESTAMP_URL` | RFC 3161 时间戳服务（默认用 electron-builder 的 digicert） |
+
+`WIN_CSC_LINK` / `CSC_LINK`（base64 或路径）仍可作为兜底。密码会交给 `CSC_KEY_PASSWORD`——
+electron-builder 26 只读这一个密码变量，单独设置 `WIN_CSC_KEY_PASSWORD` 不生效。
+
+本地测试用的自签名证书（`npm run sign:cert`，仅 Windows；私钥落在 `build/signing/`，已被 git 忽略）：
+
+```powershell
+npm run sign:cert
+
+$env:MCPB_WIN_CERT_FILE = "build/signing/mcp-builder-selfsigned.pfx"
+$env:MCPB_WIN_CERT_PASSWORD = "mcpb-selfsigned-dev"
+npm run dist:win
+```
+
+验证签名是否真的打上了。自签名证书会显示 `Status: UnknownError`、链状态 `UntrustedRoot`，
+说明签名本身有效，只是根证书不受信任：
+
+```powershell
+Get-AuthenticodeSignature "release/win-unpacked/MCP Server Build.exe" |
+  Format-List Status, SignerCertificate
+```
+
+自签名不会消除 SmartScreen 警告；正式对外分发仍需受信任的 OV/EV 证书。时间戳会访问 digicert，
+离线打包时设置 `$env:ELECTRON_BUILDER_OFFLINE = "true"`。
 
 ### 本地测试数据库（Docker）
 

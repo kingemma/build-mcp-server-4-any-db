@@ -10,7 +10,7 @@
 | 能力 | 说明 |
 |:--|:--|
 | Electron 外壳 | 主进程起后端、注入端口、外链走系统浏览器、退出前先停 GraphJin；窗口标题跟着项目名走（`dev.yml` 的 `app_name`），Windows 自绘标题带居中显示 |
-| Windows 安装包 | `npm run dist:win` → `release-final/`（NSIS，可选安装目录） |
+| Windows 安装包 | `npm run dist:win` → `release/`（NSIS，可选安装目录） |
 | macOS 打包配置 | `npm run dist:mac` → dmg + zip；GitHub Actions 在 macOS 13 / 14 上产出 |
 | Linux 打包配置 | `npm run dist:linux` → AppImage + deb；GitHub Actions 在 ubuntu-latest 上产出 |
 | CI / CD | `.github/workflows/build.yml`：单测 + Web 构建 → 四平台矩阵打包并上传产物 |

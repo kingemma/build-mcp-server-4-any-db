@@ -86,8 +86,8 @@ jobs:
           name: ${{ matrix.artifact }}
           if-no-files-found: error
           path: |
-            release-final/*.exe
-            release-final/*.dmg
-            release-final/*.zip
-            release-final/*.AppImage
-            release-final/*.deb
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb

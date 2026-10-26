@@ -638,24 +638,62 @@ npm run dist:mac    # macOS dmg + zip (run on macOS)
 npm run dist:linux  # Linux AppImage + deb (run on Linux)
 ```
 
-All output lands in `release-final/`. Every `dist:*` script first runs `npm run
+All output lands in `release/`. Every `dist:*` script first runs `npm run
 check:binaries`, which fails fast when `binaries/graphjin-<triple>` for the current platform
 is missing (it points you at `fetch:binaries` + `prepare:binaries`), so you never ship an
 installer without GraphJin. The matrix in `.github/workflows/build.yml` packages on
 Windows / macOS 13 / macOS 14 / Ubuntu; CI has no signing certificates, so the artifacts are
 unsigned.
 
-To sign, set electron-builder's standard environment variables on the matching platform:
+To sign on macOS, set electron-builder's standard environment variables:
 
 ```bash
 # macOS: certificate + notarization
 CSC_LINK=/path/to/dev-id.p12 CSC_KEY_PASSWORD=... \
 APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... APPLE_TEAM_ID=... \
 npm run dist:mac
-
-# Windows: code-signing certificate
-WIN_CSC_LINK=C:/path/to/cert.pfx WIN_CSC_KEY_PASSWORD=... npm run dist:win
 ```
+
+### Windows code signing
+
+Signing lives in [`electron-builder.js`](./electron-builder.js) and is driven entirely by
+environment variables. With no certificate configured, the build skips signing
+(`win.signExecutable: false`) and prints `跳过 Windows 代码签名`; nothing else changes.
+
+| Variable | Purpose |
+| --- | --- |
+| `MCPB_WIN_CERT_FILE` | path to the `.pfx` / `.p12` certificate |
+| `MCPB_WIN_CERT_PASSWORD` | certificate password |
+| `MCPB_WIN_CERT_SUBJECT` | subject name, when the certificate already sits in the Windows store |
+| `MCPB_WIN_TIMESTAMP_URL` | RFC 3161 timestamp server (default: electron-builder's digicert) |
+
+`WIN_CSC_LINK` / `CSC_LINK` (base64 or path) still work as a fallback. The password is handed
+to `CSC_KEY_PASSWORD` — the only password variable electron-builder 26 reads, so setting
+`WIN_CSC_KEY_PASSWORD` alone has no effect.
+
+Self-signed certificate for local testing (`npm run sign:cert`, Windows only; the key lands in
+`build/signing/`, which is git-ignored):
+
+```powershell
+npm run sign:cert
+
+$env:MCPB_WIN_CERT_FILE = "build/signing/mcp-builder-selfsigned.pfx"
+$env:MCPB_WIN_CERT_PASSWORD = "mcpb-selfsigned-dev"
+npm run dist:win
+```
+
+Check what actually got signed. A self-signed certificate reports `Status: UnknownError` with
+an `UntrustedRoot` chain status — the signature is present and valid, only the root is not
+trusted:
+
+```powershell
+Get-AuthenticodeSignature "release/win-unpacked/MCP Server Build.exe" |
+  Format-List Status, SignerCertificate
+```
+
+Self-signing does not silence SmartScreen; public releases need a trusted OV/EV certificate.
+Timestamping talks to digicert, so set `$env:ELECTRON_BUILDER_OFFLINE = "true"` when building
+offline.
 
 ### Local test databases (Docker)
 
