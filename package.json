@@ -30,63 +30,8 @@
     "electron:serve": "npm run build && electron .",
     "dist:win": "npm run check:binaries && npm run build && electron-builder --win nsis",
     "dist:mac": "npm run check:binaries && npm run build && electron-builder --mac dmg zip",
-    "dist:linux": "npm run check:binaries && npm run build && electron-builder --linux AppImage deb"
-  },
-  "build": {
-    "appId": "com.mcpbuilder.desktop",
-    "productName": "MCP Server Build",
-    "directories": {
-      "output": "release"
-    },
-    "electronDist": "node_modules/electron/dist",
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "!electron/mcp-build-server.png",
-      "sidecar-backend/src/**/*",
-      "sidecar-backend/package.json",
-      "graphjin-binaries/version.json",
-      "scripts/platforms.js",
-      "package.json",
-      "LICENSE"
-    ],
-    "extraResources": [
-      {
-        "from": "binaries",
-        "to": "binaries",
-        "filter": [
-          "graphjin-*"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "build/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "MCP Server Build"
-    },
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.png"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Development",
-      "maintainer": "Evan, Zhen Wang <18901599114@163.com>",
-      "icon": "build/icon.png"
-    }
+    "dist:linux": "npm run check:binaries && npm run build && electron-builder --linux AppImage deb",
+    "sign:cert": "node scripts/generate-signing-cert.js"
   },
   "dependencies": {
     "element-plus": "^2.9.1",

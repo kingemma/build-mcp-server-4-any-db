@@ -10,18 +10,13 @@ projects/
 .vite-*.txt
 .probe/
 
-# electron-builder 产物
+# electron-builder 产物（electron-builder.js 的 directories.output）
 release/
-release-app/
-release-win/
-release-mac/
-release-linux/
-release-final/
-release-final-app/
-release-final-win/
-release-final-mac/
-release-final-linux/
-release-ci-check/
 
 # 构建期解压的 GraphJin 二进制（单平台约 158 MiB，不入库）
 binaries/
+
+# 代码签名证书与私钥（scripts/generate-signing-cert.js 生成，绝不入库）
+build/signing/
+*.pfx
+*.p12
