@@ -813,3 +813,9 @@ The graphjin idle change to graphjin live.
   npm run prepare:binaries
   graphjin-x86_64-pc-windows-msvc.exe serve
   ```
+
+## License
+
+MIT — see [LICENSE](./LICENSE). Use, modify and redistribute freely, including
+commercially, as long as the copyright notice and the permission notice stay with the
+copies; the software comes with no warranty.

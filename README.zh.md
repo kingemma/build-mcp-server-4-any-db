@@ -740,3 +740,7 @@ binaries/              GraphJin 二进制（构建期解压）
   graphjin-x86_64-pc-windows-msvc.exe serve
 
   ```
+
+## 许可证
+
+MIT，见 [LICENSE](./LICENSE)。保留版权声明与许可声明的前提下，可自由使用、修改与再分发（含商用）；软件按现状提供，不带任何担保。
