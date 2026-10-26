@@ -5,6 +5,9 @@ import { useI18n } from 'vue-i18n';
 import { useAppStore } from './stores/app';
 import NavIcon from './components/NavIcon.vue';
 import UsageGuide from './components/UsageGuide.vue';
+// 品牌标记用产品图标的 68×68 缩略图：源图 electron/icon.png 是 512×512/417 KB，
+// 这里只显示 34px，缩略图按 2 倍图导出，HiDPI 屏也不糊
+import brandIcon from './assets/brand-icon.png';
 import { routes } from './router';
 import { ELEMENT_LOCALES, SUPPORTED_LOCALES } from './locales';
 import i18n, { setLocale } from './i18n';
@@ -89,7 +92,7 @@ onBeforeUnmount(() => {
     </div>
     <aside class="rail" :class="{ 'rail--collapsed': store.railCollapsed }">
       <div class="brand">
-        <div class="brand__mark">◈</div>
+        <img class="brand__mark" :src="brandIcon" alt="" draggable="false" />
         <div v-show="!store.railCollapsed" class="brand__text">
           <div class="brand__name">MCP Server Build</div>
           <div class="brand__tag serif">any database, one console</div>
@@ -289,16 +292,12 @@ onBeforeUnmount(() => {
 }
 
 .brand__mark {
-  display: grid;
-  place-items: center;
+  flex: none;
   width: 34px;
   height: 34px;
-  font-size: 19px;
-  color: #ffffff;
-  background: linear-gradient(145deg, #3b82f6, var(--accent-strong));
   border-radius: 10px;
+  object-fit: cover;
   box-shadow: 0 6px 16px -8px rgba(29, 78, 216, 0.75);
-  line-height: 1;
 }
 
 .brand__name {

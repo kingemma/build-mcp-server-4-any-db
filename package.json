@@ -31,7 +31,8 @@
     "dist:win": "npm run check:binaries && npm run build && electron-builder --win nsis",
     "dist:mac": "npm run check:binaries && npm run build && electron-builder --mac dmg zip",
     "dist:linux": "npm run check:binaries && npm run build && electron-builder --linux AppImage deb",
-    "sign:cert": "node scripts/generate-signing-cert.js"
+    "sign:cert": "node scripts/generate-signing-cert.js",
+    "gen:icons": "node scripts/generate-brand-icons.js"
   },
   "dependencies": {
     "element-plus": "^2.9.1",

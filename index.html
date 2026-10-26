@@ -30,15 +30,10 @@
         color: #3a5573;
       }
       .boot__mark {
-        display: grid;
-        place-items: center;
         width: 40px;
         height: 40px;
-        font-size: 21px;
-        line-height: 1;
-        color: #ffffff;
-        background: linear-gradient(145deg, #3b82f6, #1e40af);
         border-radius: 11px;
+        object-fit: cover;
         box-shadow: 0 6px 16px -8px rgba(29, 78, 216, 0.75);
       }
       .boot__name {
@@ -84,7 +79,8 @@
   <body>
     <div id="app">
       <div class="boot" role="status" aria-live="polite">
-        <div class="boot__mark">◈</div>
+        <!-- 用产品图标，和侧栏 .brand__mark 是同一个图形；public/ 下的文件不走 hash，路径写 / -->
+        <img class="boot__mark" src="/boot-icon.png" alt="" width="40" height="40" />
         <div class="boot__name">MCP Server Build</div>
         <div class="boot__bar"><span></span></div>
         <div class="boot__text">正在载入界面…</div>
