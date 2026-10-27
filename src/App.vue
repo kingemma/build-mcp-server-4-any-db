@@ -23,8 +23,12 @@ const locale = computed({
 });
 const elementLocale = computed(() => ELEMENT_LOCALES[locale.value]);
 
+/** 品牌文案：侧栏 brand 与 Windows 自绘标题带共用一份，避免两处各写一遍后漂移 */
+const BRAND_NAME = 'MCP Server with Ontology Build';
+const BRAND_TAG = 'any database, one console';
+
 /** 产品名：没打开项目时窗口标题只用它 */
-const APP_TITLE = 'MCP Server Build';
+const APP_TITLE = BRAND_NAME;
 
 /** 窗口标题里的项目名，来源是运行实例 dev.yml 的 app_name */
 const projectName = computed(() => store.status?.appName || APP_TITLE);
@@ -86,19 +90,14 @@ onBeforeUnmount(() => {
         'shell--rail-collapsed': store.railCollapsed,
       }"
     >
-    <!-- 自绘标题栏：系统按钮画在这条 40px 带上，整条可拖动窗口 -->
+    <!-- 自绘标题栏：系统按钮画在这条 40px 带上，整条可拖动窗口。
+         内容与侧栏 brand 同源，只有 40px 高放不下两行，名称与标语横排 -->
     <div v-if="hasTitlebarOverlay" class="titlebar">
-      <span class="titlebar__project">{{ projectName }}</span>
+      <img class="brand__mark" :src="brandIcon" alt="" draggable="false" />
+      <span class="brand__name">{{ BRAND_NAME }}</span>
+      <span class="brand__tag serif">{{ BRAND_TAG }}</span>
     </div>
     <aside class="rail" :class="{ 'rail--collapsed': store.railCollapsed }">
-      <div class="brand">
-        <img class="brand__mark" :src="brandIcon" alt="" draggable="false" />
-        <div v-show="!store.railCollapsed" class="brand__text">
-          <div class="brand__name">MCP Server Build</div>
-          <div class="brand__tag serif">any database, one console</div>
-        </div>
-      </div>
-
       <nav class="nav">
         <el-tooltip
           v-for="item in navItems"
@@ -232,23 +231,28 @@ onBeforeUnmount(() => {
   left: 0;
   z-index: 30;
   display: flex;
+  gap: 10px;
   align-items: center;
-  justify-content: center;
   height: 40px;
-  /* 右侧要让开系统自绘的最小化 / 最大化 / 关闭按钮 */
-  padding: 0 150px;
+  /* 右侧要让开系统自绘的最小化 / 最大化 / 关闭按钮；
+     左侧 22px 与侧栏 brand 对齐（rail 14 + brand 8） */
+  padding: 0 150px 0 22px;
+  overflow: hidden;
+  white-space: nowrap;
   background: #ffffff;
   -webkit-app-region: drag;
 }
 
-/* 项目名居中，过长时省略，避免压到系统按钮 */
-.titlebar__project {
+/* 侧栏 brand 里标语竖排在下一行，标题带只有 40px 高：横排、去掉那条上边距 */
+.titlebar .brand__tag {
+  margin-top: 0;
+}
+
+/* 窗口窄到放不下时先省略标语，别压到系统按钮 */
+.titlebar .brand__name,
+.titlebar .brand__tag {
   overflow: hidden;
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  color: var(--text-dim);
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 顶栏留作拖拽区，里面的下拉框 / 状态胶囊要能点 */
@@ -293,11 +297,9 @@ onBeforeUnmount(() => {
 
 .brand__mark {
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 10px;
-  object-fit: cover;
-  box-shadow: 0 6px 16px -8px rgba(29, 78, 216, 0.75);
 }
 
 .brand__name {
