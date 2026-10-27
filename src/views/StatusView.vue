@@ -62,7 +62,7 @@ onMounted(refreshAll);
       <div class="panel__head">
         <span class="panel__title">{{ t('status.service') }}</span>
         <span class="pill" :class="store.isRunning ? 'pill--on' : 'pill--off'">
-          <span class="dot" />{{ store.isRunning ? t('common.running') : t('common.stopped') }}
+          <span class="dot" />{{ store.isRunning ? t('app.live') : t('app.down') }}
         </span>
       </div>
       <div class="panel__body">

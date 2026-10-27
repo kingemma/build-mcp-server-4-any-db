@@ -24,7 +24,7 @@ const RESERVED_ROLES = new Set(['admin']);
 /** 使用引导「关闭后不再自动弹出」的持久化标记 */
 const GUIDE_DISMISSED_KEY = 'mcpb.guideDismissed';
 
-/** 侧栏折叠状态的持久化标记：没写过就是首次进入，按默认折叠处理 */
+/** 侧栏折叠状态的持久化标记：没写过就是首次进入，按默认展开处理 */
 const RAIL_COLLAPSED_KEY = 'mcpb.railCollapsed';
 
 /**
@@ -71,8 +71,11 @@ export const useAppStore = defineStore('app', {
     isBusy: false,
     /** 使用引导抽屉是否打开；关闭后写 localStorage，不再自动弹出 */
     guideOpen: false,
-    /** 侧栏是否折叠为「图标 + tooltip」：首次进入折叠，之后跟随用户选择 */
-    railCollapsed: localStorage.getItem(RAIL_COLLAPSED_KEY) !== '0',
+    /**
+     * 侧栏是否折叠为「图标 + tooltip」：首次进入展开，之后跟随用户选择。
+     * 只认显式写过的 '1'，否则老用户（没点过折叠）也会被判成折叠态。
+     */
+    railCollapsed: localStorage.getItem(RAIL_COLLAPSED_KEY) === '1',
     status: null,
     tables: [],
     schema: null,
