@@ -393,7 +393,7 @@ export default {
       'The gap between "my AI can reach the database" and "it only sees what it should" is a permission gate. Connect → set permissions → plug into your client, with verification and rollback at every step.',
     tryDemo: 'Try the demo',
     tryDemoHint:
-      'Builds a sample project (a finance system and an inventory system, each with its own read-only role) in 10 seconds, without touching your own databases',
+      'Builds a sample project (finance, inventory and equipment maintenance, each with its own read-only role) in 10 seconds, without touching your own databases',
     goConnect: 'Connect an AI client',
     openGuide: 'Usage wizard',
     steps: 'Three steps',
@@ -409,7 +409,7 @@ export default {
     unknown: 'Unverified',
     demoTitle: 'Demo project',
     demoHint:
-      'Comes with two sample databases (finance / inventory) with one read-only role each (row filter: owner_code = current user), so switching databases means switching identity and you can watch the permissions take effect; terms, concepts, relations, rules and metric definitions are generated from the tables that were just created',
+      'Comes with three sample databases (finance / inventory / equipment maintenance) with one read-only role each (row filter: owner_code = current user), so switching databases means switching identity and you can watch the permissions take effect; the maintenance database models equipment → parts → faults → fault tree → plans / reports → replaced parts and consumables, and terms, concepts, relations, rules and metric definitions are generated from the tables that were just created',
     demoReady: 'Demo project is running: databases, roles and business ontology are ready',
     demoEmpty: 'No demo project yet — use the button above to create one',
     demoDatabases: 'Databases',

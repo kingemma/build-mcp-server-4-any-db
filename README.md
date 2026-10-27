@@ -75,12 +75,17 @@ and the copyable MCP client configuration.
 The app opens on a welcome page that says what this is in one line, then shows three steps
 (connect a database / set permissions / plug into your AI) with the completion state computed
 from real data — click any step to jump there. "Try the demo" builds a sample project in about
-10 seconds (a **finance system** and an **inventory system**: 12 tables, about 490 rows of
-realistic data; one read-only role per database, `finance_analyst` / `inventory_viewer`, with
-the row filter `owner_code = current user`, writes and deletes blocked) **without touching your
-own databases**; from there you can jump straight to the schema browser or the permission
+10 seconds (a **finance system**, an **inventory system** and an **equipment maintenance
+system**: 21 tables, about 650 rows of realistic data; one read-only role per database,
+`finance_analyst` / `inventory_viewer` / `maintenance_engineer`, with the row filter
+`owner_code = current user`, writes and deletes blocked) **without touching your own
+databases**; from there you can jump straight to the schema browser or the permission
 matrix — switching databases switches identity: `inventory_viewer` sees zero rows in the finance
-database, and vice versa.
+database, and vice versa. The maintenance database is modelled from first principles
+(equipment → parts → faults → fault tree → plans / reports → replaced parts and consumables), and
+the business constraints live in the schema itself: a repair report has exactly one trigger
+(a plan *or* a fault), a plan's interval must match its type, and a fault can only point at a
+leaf cause in the fault tree.
 "Self-check" at the bottom reports the GraphJin binary, backend, running instance, database
 reachability and role configuration as red/green items.
 
@@ -618,7 +623,7 @@ running; the UI reports the backend as offline after it stops.
 npm test                 # frontend policy tests + backend unit tests
 npm run smoke:binaries   # GraphJin binary smoke test
 npm run build            # production web build
-npm run verify:ui        # real backend + headless Edge (76 checks)
+npm run verify:ui        # real backend + headless Edge (97 checks)
 ```
 
 Full end-to-end verification (starts GraphJin for real, creates databases, writes
@@ -772,16 +777,16 @@ behaviour is documented in
 
 ```bash
 cd sidecar-backend
-npm test                 # backend unit tests (367)
+npm test                 # backend unit tests (378)
 
 npm run verify:e2e         # real end-to-end: start → discover → write → rollback (24)
 npm run verify:migration   # legacy migration: roles/columns, degrade, unreachable DB (12)
 
 cd ..
-npm run test:frontend    # policy normalization / diff + i18n key parity (12)
+npm run test:frontend    # policy normalization / diff + i18n key parity (22)
 npm run smoke:binaries   # execute graphjin version for real
 npm run build
-npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / collapsed by default / tooltip / expand + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, drafting scoped to the database selected on the page (not the Schema page one), example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles, the demo building two sample databases with a role each, the five wizard nodes walked end to end on the demo project (connect / permissions / verify / ontology / plug into AI), and the role-to-database allowlist really denying an unchecked role (89)
+npm run verify:ui        # real backend + headless Edge: locales, window title, pinned sidebar / expanded by default / tooltip / collapse + remembered, orgs/members, write/verify/rollback, per-db tabs, MCP probe + call examples, bottom-right floating button present / opens, usage wizard open/close/reopen/jump, status fallback, schema reset after delete, welcome / connect / demo / diagnostics, offline policy read from dev.yml, JSON-arg unwrapping, ontology consistency check reporting stale references, drafting candidates from the schema, drafting scoped to the database selected on the page (not the Schema page one), example evaluation passing structure and coverage, enforced-rule compilation reporting impossible rules, catalog-only handshake, search and object profiles, the demo building three sample databases with a role each and querying the maintenance faults through GraphQL, the five wizard nodes walked end to end on the demo project (connect / permissions / verify / ontology / plug into AI), and the role-to-database allowlist really denying an unchecked role (97)
 npm run verify:ui -- --shots=docs/screenshots   # regenerate both locale screenshot sets
 ```
 

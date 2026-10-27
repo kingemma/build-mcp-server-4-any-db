@@ -14,7 +14,7 @@ const isDemoLoading = ref(false);
 const checks = ref([]);
 const isChecking = ref(false);
 
-/** 演示会按两个库的 schema 生成本体论：这里把每个库的条目数摊开给用户看 */
+/** 演示会按三个库的 schema 生成本体论：这里把每个库的条目数摊开给用户看 */
 const ONTOLOGY_KINDS = ['concept', 'term', 'relation', 'rule', 'metric'];
 const demoOntology = computed(() => {
   const byDatabase = demoReport.value?.ontology?.byDatabase;

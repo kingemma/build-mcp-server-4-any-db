@@ -2,14 +2,15 @@
 'use strict';
 
 /**
- * 一键演示项目：两个示例库（财务系统 / 库存管理系统）+ 各库一个只读角色（带行过滤）。
+ * 一键演示项目：三个示例库（财务系统 / 库存管理系统 / 装备维修保障系统）
+ * + 各库一个只读角色（带行过滤）。
  *
- * 演示的价值在于「不碰自己的库就能看到权限生效」：两张库都带 owner_code，
+ * 演示的价值在于「不碰自己的库就能看到权限生效」：三个库都带 owner_code，
  * 角色只能看到自己名下的行，写删一律 blocked —— 打开权限矩阵就能看到这套规则。
  *
- * 每个库一个角色是为了演示「角色 × 库」：finance_analyst 在 inventory 库里没有
- * 任何 grant，换库就是换身份，而不是「一个只读角色走天下」。两库的业务毫无关系
- * （财务 / 库存），也顺带说明平台不预设行业。
+ * 每个库一个角色是为了演示「角色 × 库」：finance_analyst 在 inventory 库里没有任何
+ * grant，换库就是换身份，而不是「一个只读角色走天下」。三个库的业务毫无关系
+ * （财务 / 库存 / 装备维修），也顺带说明平台不预设行业。
  */
 
 const fs = require('node:fs');
@@ -18,19 +19,25 @@ const { DatabaseSync } = require('node:sqlite');
 
 const { createProject, replaceRolesBlock } = require('./project');
 
-const DEMO_APP_NAME = 'Demo Finance & Inventory';
+const DEMO_APP_NAME = 'Demo Finance, Inventory & Maintenance';
 
 const FINANCE_DATABASE = 'finance.db';
 const INVENTORY_DATABASE = 'inventory.db';
+const MAINTENANCE_DATABASE = 'maintenance.db';
 
-/** 落盘「已保存连接」用：两个库各一条，只记一条会让删连接误伤另一个库 */
+/** 落盘「已保存连接」用：每个库一条，只记一条会让删连接误伤其它库 */
 const DEMO_CONNECTIONS = [
   { name: 'finance', connection: { type: 'sqlite', path: FINANCE_DATABASE } },
   { name: 'inventory', connection: { type: 'sqlite', path: INVENTORY_DATABASE } },
+  { name: 'maintenance', connection: { type: 'sqlite', path: MAINTENANCE_DATABASE } },
 ];
 
 /** 每个库一个只读角色：角色 × 库 的演示 */
-const ROLE_BY_DATABASE = { finance: 'finance_analyst', inventory: 'inventory_viewer' };
+const ROLE_BY_DATABASE = {
+  finance: 'finance_analyst',
+  inventory: 'inventory_viewer',
+  maintenance: 'maintenance_engineer',
+};
 
 /** 行过滤：只能看到自己名下的行 */
 const DEMO_FILTER = '{ owner_code: { _eq: $user_code } }';
@@ -533,6 +540,550 @@ function seedInventoryDatabase(dir) {
   return file;
 }
 
+/* ------------------------------------------------------- 装备维修保障系统 */
+
+/**
+ * 设计出发点（第一性原理）——先有不可再简化的事实，表结构是它们的直接推论：
+ *
+ * 1. 失效发生在「部件」上，不发生在「装备」上，所以 faults 同时挂装备与部件；
+ * 2. 维修只有两个触发源，且互斥：计划（预防性）或故障（纠正性）。这条不变量
+ *    落成 maintenance_reports 上的 CHECK 约束，schema 自己拒绝「没有来源」和
+ *    「两个来源」的记录——业务约束写在库里，比写在文档里可靠；
+ * 3. 一次维修的成本只可能来自两类资源：换掉的部件（report_parts）与耗掉的耗材
+ *    （consumption_items），所以单次维修成本、单台装备年成本都可由明细相加得出；
+ * 4. 「现象」与「根因」是两层东西：同一种现象可以有多个根因，因此故障树是自引用的树，
+ *    而故障记录必须落到「底事件」上，否则「为什么坏」这个问题就答不出来；
+ * 5. 计划的周期形态与类型必须自洽（日历 / 运行小时 / 状态监测），也写成 CHECK。
+ */
+
+/** 装备：[id, asset_no, name, model, category, location, commissioned_at, status, run_hours, owner] */
+const EQUIPMENT_SEED = [
+  [1, 'EQ-001', '液压挖掘机', 'SY215C', '工程机械', '上海临港保障基地', '2022-03-15', 'in_service', 4210, 'hq'],
+  [2, 'EQ-002', '柴油发电机组', '200GF', '能源保障', '广州南沙场站', '2021-07-01', 'in_service', 6880, 'gz'],
+  [3, 'EQ-003', '越野叉车', 'CPCD50', '装卸机械', '北京亦庄库区', '2020-11-20', 'pending_repair', 5120, 'sh'],
+  [4, 'EQ-004', '阵地雷达', 'TDR-120', '电子装备', '西安国际港阵地', '2023-01-10', 'in_service', 2140, 'hq'],
+  [5, 'EQ-005', '螺杆空压机', 'GA55', '能源保障', '成都双流场站', '2019-05-06', 'under_repair', 9040, 'sh'],
+  [6, 'EQ-006', '抢修车', 'QXC-2', '保障车辆', '武汉阳逻基地', '2022-09-18', 'in_service', 3760, 'gz'],
+  [7, 'EQ-007', '液压试验台', 'HYT-30', '检测设备', '上海临港保障基地', '2021-12-02', 'in_service', 1580, 'hq'],
+  [8, 'EQ-008', '备用发电机组', '120GF', '能源保障', '广州南沙场站', '2018-04-11', 'retired', 15200, 'gz'],
+];
+
+/**
+ * 每台装备的三个关键可更换单元：[名称, 件号, 装配位置, 设计寿命小时, 采购单价]。
+ * 只列「坏了要停机」的单元，不是完整 BOM——演示要的是能被故障指到的那几层。
+ */
+const PART_SPECS = [
+  [
+    ['液压主泵', 'PN-HY-101', '泵舱', 8000, 39800],
+    ['动臂油缸', 'PN-HY-102', '动臂', 6000, 12600],
+    ['回转减速机', 'PN-HY-103', '回转平台', 10000, 21500],
+  ],
+  [
+    ['发动机总成', 'PN-EN-201', '机舱', 12000, 86000],
+    ['励磁调节器', 'PN-EL-202', '控制柜', 6000, 9800],
+    ['散热器', 'PN-EN-203', '机组侧', 9000, 4200],
+  ],
+  [
+    ['变速箱', 'PN-TR-301', '车架', 10000, 32000],
+    ['制动器总成', 'PN-TR-302', '驱动桥', 5000, 6800],
+    ['门架油缸', 'PN-HY-303', '门架', 6000, 9400],
+  ],
+  [
+    ['收发组件', 'PN-RD-401', '阵面', 8000, 128000],
+    ['伺服转台', 'PN-RD-402', '底座', 9000, 46000],
+    ['电源模块', 'PN-EL-403', '机柜', 7000, 15600],
+  ],
+  [
+    ['主机总成', 'PN-AC-501', '机头', 15000, 98000],
+    ['冷却器', 'PN-AC-502', '机侧', 8000, 7400],
+    ['进气过滤器', 'PN-AC-503', '进气口', 4000, 1800],
+  ],
+  [
+    ['底盘传动轴', 'PN-VH-601', '底盘', 9000, 8200],
+    ['液压绞盘', 'PN-VH-602', '车尾', 6000, 24000],
+    ['取力器', 'PN-VH-603', '变速箱侧', 7000, 5600],
+  ],
+  [
+    ['高压柱塞泵', 'PN-TB-701', '泵站', 8000, 52000],
+    ['加载阀组', 'PN-TB-702', '台面', 6000, 18000],
+    ['传感器组', 'PN-TB-703', '测点', 5000, 3200],
+  ],
+  [
+    ['发动机总成', 'PN-EN-801', '机舱', 12000, 82000],
+    ['励磁调节器', 'PN-EL-802', '控制柜', 6000, 9200],
+    ['散热器', 'PN-EN-803', '机组侧', 9000, 3800],
+  ],
+];
+
+/**
+ * 故障树：[编码, 名称, 层级, 所属系统, 父节点编码, 说明]。
+ * 先顶事件、再中间事件、最后底事件，保证父节点先于子节点建出来。
+ * 底事件才是「可修的最小单元」，所以故障记录只允许指到底事件。
+ */
+const FAULT_TREE_SEED = [
+  ['FT-TOP-01', '液压系统压力不足', 'top', '液压', null, '整机动作无力、压力上不去的统称'],
+  ['FT-TOP-02', '发电与供电异常', 'top', '电气', null, '输出电压或频率偏离额定值'],
+  ['FT-TOP-03', '行走机构异响', 'top', '传动', null, '行走或换挡时出现金属撞击声'],
+  ['FT-TOP-04', '温升与进气异常', 'top', '冷却进气', null, '温度超限或进气量不足'],
+  ['FT-INT-011', '液压泵输出不足', 'intermediate', '液压', 'FT-TOP-01', '泵本身排量或效率下降'],
+  ['FT-INT-012', '系统内泄', 'intermediate', '液压', 'FT-TOP-01', '压力油在内部或接头处泄漏'],
+  ['FT-INT-021', '励磁与供电异常', 'intermediate', '电气', 'FT-TOP-02', '励磁或调压环节失效'],
+  ['FT-INT-031', '轴承与齿轮磨损', 'intermediate', '传动', 'FT-TOP-03', '传动件磨损失去精度'],
+  ['FT-INT-041', '冷却与进气受阻', 'intermediate', '冷却进气', 'FT-TOP-04', '散热或进气通路被堵'],
+  ['FT-BAS-0111', '柱塞磨损', 'basic', '液压', 'FT-INT-011', '泵内柱塞与缸体间隙超差'],
+  ['FT-BAS-0112', '吸油过滤器堵塞', 'basic', '液压', 'FT-INT-011', '吸油阻力大导致吸空'],
+  ['FT-BAS-0121', '密封圈老化', 'basic', '液压', 'FT-INT-012', '油缸或阀体密封失效'],
+  ['FT-BAS-0122', '管接头松动', 'basic', '液压', 'FT-INT-012', '接头预紧力不足'],
+  ['FT-BAS-0211', '电气部件受潮', 'basic', '电气', 'FT-INT-021', '绝缘下降，潮湿环境高发'],
+  ['FT-BAS-0212', '调压板失效', 'basic', '电气', 'FT-INT-021', '调压回路无法稳定输出'],
+  ['FT-BAS-0311', '轴承滚道剥落', 'basic', '传动', 'FT-INT-031', '疲劳剥落引起异响与卡滞'],
+  ['FT-BAS-0312', '齿轮点蚀', 'basic', '传动', 'FT-INT-031', '齿面点蚀导致换挡冲击'],
+  ['FT-BAS-0411', '冷却器堵塞', 'basic', '冷却进气', 'FT-INT-041', '散热通道结垢或堵塞'],
+  ['FT-BAS-0412', '润滑脂失效', 'basic', '冷却进气', 'FT-INT-041', '油脂老化失去润滑能力'],
+  ['FT-BAS-0413', '进气过滤器堵塞', 'basic', '冷却进气', 'FT-INT-041', '进气阻力大，进气量不足'],
+];
+
+/**
+ * 故障：[装备 id, 部件槽位(0-2), 故障号, 发生日, 现象, 严重度, 停机小时, 根因编码]。
+ * 根因一律指向底事件；严重度取 minor / major / critical。
+ */
+const FAULT_SEED = [
+  [1, 0, 'F-2026-0001', '2026-02-11', '动臂提升压力掉到 8MPa，动作明显迟缓', 'major', 18, 'FT-BAS-0111'],
+  [1, 1, 'F-2026-0002', '2026-05-08', '活塞杆处渗油，日补油约 2L', 'minor', 6, 'FT-BAS-0121'],
+  [2, 0, 'F-2026-0003', '2026-03-02', '机油压力低报警，曲轴箱有异响', 'critical', 52, 'FT-BAS-0412'],
+  [2, 1, 'F-2026-0004', '2026-06-19', '加载 120kW 时输出电压抖动、频率不稳', 'major', 26, 'FT-BAS-0212'],
+  [3, 0, 'F-2026-0005', '2026-04-07', '二挡换挡冲击，放油见金属屑', 'major', 30, 'FT-BAS-0312'],
+  [3, 1, 'F-2026-0006', '2026-07-22', '制动时门架异响，制动距离变长', 'major', 12, 'FT-BAS-0311'],
+  [4, 1, 'F-2026-0007', '2026-05-30', '方位转动卡滞，随动误差超差', 'major', 22, 'FT-BAS-0311'],
+  [4, 0, 'F-2026-0008', '2026-08-14', '开机自检报通道失锁，雨后故障率上升', 'critical', 48, 'FT-BAS-0211'],
+  [5, 0, 'F-2026-0009', '2026-04-20', '排气温度高，加载 5 分钟后自动停机', 'critical', 40, 'FT-BAS-0411'],
+  [5, 1, 'F-2026-0010', '2026-08-03', '油温 105℃，冷却风扇常转', 'major', 14, 'FT-BAS-0411'],
+  [6, 1, 'F-2026-0011', '2026-06-02', '绞盘保压时缓慢下滑，接头处见油迹', 'minor', 5, 'FT-BAS-0122'],
+  [7, 1, 'F-2026-0012', '2026-07-09', '加载到 25MPa 时压力上不去', 'major', 16, 'FT-BAS-0112'],
+  [7, 2, 'F-2026-0013', '2026-09-11', '压力显示跳变，标定后复现', 'minor', 4, 'FT-BAS-0211'],
+  [3, 2, 'F-2026-0014', '2026-09-26', '门架下沉，静置 2 小时下降 30mm', 'major', 20, 'FT-BAS-0121'],
+];
+
+/** 最后一条故障还没修：装备 3 停在「待修」，演示「故障 → 计划外维修」未闭环的状态 */
+const UNREPAIRED_FAULT_NO = 'F-2026-0014';
+
+/**
+ * 维修计划：[装备 id, 计划号, 名称, 类型, 间隔天, 间隔小时, 上次完成, 下次到期日,
+ * 下次到期小时, 状态]。退役装备（EQ-008）故意没有计划——规则里会断言这一点。
+ */
+const PLAN_SEED = [
+  [1, 'MP-2026-001', '液压系统季度保养', 'calendar', 90, null, '2026-07-15', '2026-10-13', null, 'active'],
+  [1, 'MP-2026-002', '主泵 500 小时检查', 'hour_based', null, 500, '2026-06-20', null, 4500, 'active'],
+  [1, 'MP-2026-003', '回转减速机状态监测', 'condition', null, null, '2026-08-05', null, null, 'active'],
+  [2, 'MP-2026-004', '发电机组半年保养', 'calendar', 180, null, '2026-05-02', '2026-10-29', null, 'active'],
+  [2, 'MP-2026-005', '机油与三滤更换', 'hour_based', null, 250, '2026-08-12', null, 7000, 'active'],
+  [3, 'MP-2026-006', '叉车制动系统检查', 'calendar', 90, null, '2026-06-28', '2026-09-26', null, 'active'],
+  [4, 'MP-2026-007', '雷达年度标校', 'calendar', 365, null, '2025-11-20', '2026-11-20', null, 'active'],
+  [4, 'MP-2026-008', '收发组件温漂监测', 'condition', null, null, '2026-07-18', null, null, 'active'],
+  [5, 'MP-2026-009', '空压机冷却器清洗', 'calendar', 60, null, '2026-06-15', '2026-08-14', null, 'suspended'],
+  [6, 'MP-2026-010', '抢修车底盘保养', 'calendar', 180, null, '2026-04-12', '2026-10-09', null, 'active'],
+  [6, 'MP-2026-011', '液压绞盘换油', 'hour_based', null, 1000, '2026-05-30', null, 4000, 'active'],
+  [7, 'MP-2026-012', '试验台压力标定', 'calendar', 90, null, '2026-08-01', '2026-10-30', null, 'active'],
+];
+
+/** 计划来源的维修报告取这几条计划（都已完成），故障来源的由 FAULT_SEED 推出来 */
+const PLAN_REPORT_PLAN_NOS = ['MP-2026-001', 'MP-2026-004', 'MP-2026-006', 'MP-2026-010', 'MP-2026-012'];
+
+/** 维修人员：报告要有署名，同一个人反复出现才像一份台账 */
+const TECHNICIANS = ['张卫东', '李国强', '陈志远', '王海涛'];
+
+/** 换件的故障号：只有这几条故障真的换了部件，其余是清洁 / 调整 / 紧固 */
+const REPLACEMENT_FAULT_NOS = new Set([
+  'F-2026-0001',
+  'F-2026-0003',
+  'F-2026-0004',
+  'F-2026-0005',
+  'F-2026-0006',
+  'F-2026-0007',
+  'F-2026-0008',
+  'F-2026-0009',
+]);
+
+/** 耗材台账：[编码, 名称, 规格, 单位, 库存, 单价] */
+const CONSUMABLES = [
+  ['CS-101', '抗磨液压油', 'L-HM 46#', 'L', 420, 68.0],
+  ['CS-102', '齿轮油', 'GL-5 85W-90', 'L', 180, 42.0],
+  ['CS-103', '柴油机油', 'CI-4 15W-40', 'L', 240, 55.0],
+  ['CS-104', '机油滤芯', '适配 200GF', '个', 36, 180.0],
+  ['CS-105', '空气滤芯', 'K2841', '个', 20, 240.0],
+  ['CS-106', '耐油密封胶', '310ml/支', '支', 90, 35.0],
+  ['CS-107', '极压锂基脂', '3#', 'kg', 120, 48.0],
+  ['CS-108', '环保清洗剂', '20L/桶', '桶', 24, 128.0],
+];
+
+/** 部件 id 换算：装备 i 的第 slot 个部件 */
+function partIdOf(equipmentId, slot) {
+  return (equipmentId - 1) * 3 + slot + 1;
+}
+
+/** @returns {Array} equipment 行 */
+function buildEquipment() {
+  return EQUIPMENT_SEED.map((row) => [...row]);
+}
+
+/** @returns {Array} parts 行：运行小时逼近设计寿命时状态自动升到 due_soon / overdue */
+function buildMaintenanceParts() {
+  const rows = [];
+  let id = 1;
+  EQUIPMENT_SEED.forEach((equipment, index) => {
+    const [equipmentId, , , , , , , , runHours, owner] = equipment;
+    PART_SPECS[index].forEach(([name, partNo, position, designHours, unitPrice], slot) => {
+      const partRunHours = Math.max(120, runHours - slot * 260);
+      const ratio = partRunHours / designHours;
+      const status = ratio >= 1 ? 'overdue' : ratio >= 0.85 ? 'due_soon' : 'normal';
+      rows.push([
+        id++,
+        equipmentId,
+        partNo,
+        name,
+        position,
+        designHours,
+        partRunHours,
+        status,
+        unitPrice,
+        owner,
+      ]);
+    });
+  });
+  return rows;
+}
+
+/** @returns {Array} fault_tree_nodes 行 */
+function buildFaultTreeNodes() {
+  const rows = [];
+  const idByCode = new Map();
+  FAULT_TREE_SEED.forEach(([code, name, nodeType, system, parentCode, description], index) => {
+    const id = index + 1;
+    idByCode.set(code, id);
+    rows.push([
+      id,
+      code,
+      name,
+      nodeType,
+      system,
+      parentCode == null ? null : idByCode.get(parentCode),
+      description,
+      'hq',
+    ]);
+  });
+  return rows;
+}
+
+/** @returns {Array} faults 行 */
+function buildFaults() {
+  const idByCode = new Map(FAULT_TREE_SEED.map(([code], index) => [code, index + 1]));
+  return FAULT_SEED.map(([equipmentId, slot, faultNo, occurredAt, symptom, severity, downtime, root], index) => {
+    const equipment = EQUIPMENT_SEED[equipmentId - 1];
+    return [
+      index + 1,
+      faultNo,
+      equipmentId,
+      partIdOf(equipmentId, slot),
+      occurredAt,
+      symptom,
+      severity,
+      downtime,
+      idByCode.get(root),
+      equipment[9],
+    ];
+  });
+}
+
+/** @returns {Array} maintenance_plans 行 */
+function buildMaintenancePlans() {
+  return PLAN_SEED.map((row, index) => {
+    const [equipmentId, planNo, name, planType, days, hours, lastDone, dueAt, dueHours, status] = row;
+    return [
+      index + 1,
+      planNo,
+      equipmentId,
+      name,
+      planType,
+      days,
+      hours,
+      lastDone,
+      dueAt,
+      dueHours,
+      status,
+      EQUIPMENT_SEED[equipmentId - 1][9],
+    ];
+  });
+}
+
+/**
+ * 维修报告：来源互斥由 CHECK 兜底，这里保证两类来源都有数据。
+ *
+ * 计划来源取「上次完成日」作为开工日（计划性停机 4~10h）；
+ * 故障来源直接复用故障的停机小时，两者对得上才算一份真实台账。
+ *
+ * @param {Array} faults
+ * @param {Array} plans
+ * @returns {Array}
+ */
+function buildMaintenanceReports(faults, plans) {
+  const rows = [];
+  let id = 1;
+  let sequence = 1;
+  const reportNo = () => `MR-2026-${String(sequence++).padStart(4, '0')}`;
+
+  for (const planNo of PLAN_REPORT_PLAN_NOS) {
+    const plan = plans.find((row) => row[1] === planNo);
+    if (!plan) continue;
+    const [, , equipmentId, name, , , , lastDone] = plan;
+    const downtime = 4 + (sequence % 4) * 2;
+    const started = lastDone ?? '2026-07-01';
+    rows.push([
+      id++,
+      reportNo(),
+      equipmentId,
+      plan[0],
+      null,
+      started,
+      isoDay(Date.parse(`${started}T00:00:00Z`) + downtime * 60 * 60 * 1000),
+      downtime,
+      pick(id, TECHNICIANS),
+      `${name}按计划执行，检查项全部合格，已复位并试运行`,
+      'completed',
+      EQUIPMENT_SEED[equipmentId - 1][9],
+    ]);
+  }
+
+  for (const fault of faults) {
+    const [faultId, faultNo, equipmentId, partId, occurredAt, symptom, , downtime] = fault;
+    if (faultNo === UNREPAIRED_FAULT_NO) continue;
+    const partName = PART_SPECS[equipmentId - 1].find((_, slot) => partIdOf(equipmentId, slot) === partId)[0];
+    const replaced = REPLACEMENT_FAULT_NOS.has(faultNo);
+    rows.push([
+      id++,
+      reportNo(),
+      equipmentId,
+      null,
+      faultId,
+      occurredAt,
+      isoDay(Date.parse(`${occurredAt}T00:00:00Z`) + downtime * 60 * 60 * 1000),
+      downtime,
+      pick(id, TECHNICIANS),
+      replaced
+        ? `${symptom}；定位到 ${partName}，已换件并复测，参数回到正常范围`
+        : `${symptom}；定位到 ${partName}，清洁紧固后复测正常`,
+      faultNo === 'F-2026-0009' ? 'deferred' : 'completed',
+      EQUIPMENT_SEED[equipmentId - 1][9],
+    ]);
+  }
+  return rows;
+}
+
+/**
+ * @param {Array} reports 维修报告
+ * @param {Array} faults 故障
+ * @param {Array} parts 部件（按 id 反查采购价）
+ * @returns {Array} report_parts 行：换件明细，单价取部件采购价
+ */
+function buildReportParts(reports, faults, parts) {
+  const rows = [];
+  let id = 1;
+  for (const report of reports) {
+    const [, , equipmentId, , faultId] = report;
+    if (faultId == null) continue;
+    const fault = faults.find((row) => row[0] === faultId);
+    if (!fault || !REPLACEMENT_FAULT_NOS.has(fault[1])) continue;
+    const part = parts.find((row) => row[0] === fault[3]);
+    if (!part) continue;
+    rows.push([id++, report[0], part[0], 1, part[8], EQUIPMENT_SEED[equipmentId - 1][9]]);
+  }
+  return rows;
+}
+
+/** @returns {Array} consumables 行 */
+function buildConsumables() {
+  return CONSUMABLES.map(([code, name, spec, unit, stock, unitPrice], index) => [
+    index + 1,
+    code,
+    name,
+    spec,
+    unit,
+    stock,
+    unitPrice,
+    pick(index, OWNERS),
+  ]);
+}
+
+/**
+ * 耗材消耗：[报告下标, 耗材下标, 数量]。每条报告都有油品 / 脂类消耗，
+ * 换件的报告再加密封胶与清洗剂——成本拆得开，指标才算得出来。
+ *
+ * @param {Array} reports
+ * @returns {Array}
+ */
+function buildConsumptionItems(reports) {
+  const rows = [];
+  let id = 1;
+  reports.forEach((report, index) => {
+    const equipmentId = report[2];
+    const owner = EQUIPMENT_SEED[equipmentId - 1][9];
+    const first = CONSUMABLES[index % CONSUMABLES.length];
+    rows.push([id++, report[0], (index % CONSUMABLES.length) + 1, 2 + (index % 4), first[5], owner]);
+    if (report[4] != null) {
+      rows.push([id++, report[0], 6, 1, CONSUMABLES[5][5], owner]);
+      rows.push([id++, report[0], 8, 1, CONSUMABLES[7][5], owner]);
+    }
+  });
+  return rows;
+}
+
+function seedMaintenanceDatabase(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, MAINTENANCE_DATABASE);
+  if (fs.existsSync(file)) fs.rmSync(file);
+
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`
+      CREATE TABLE equipment (
+        id INTEGER PRIMARY KEY,
+        asset_no TEXT NOT NULL,
+        name TEXT NOT NULL,
+        model TEXT NOT NULL,
+        category TEXT NOT NULL,
+        location TEXT NOT NULL,
+        commissioned_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        run_hours INTEGER NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE parts (
+        id INTEGER PRIMARY KEY,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id),
+        part_no TEXT NOT NULL,
+        name TEXT NOT NULL,
+        position TEXT NOT NULL,
+        design_hours INTEGER NOT NULL,
+        run_hours INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        unit_price REAL NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE fault_tree_nodes (
+        id INTEGER PRIMARY KEY,
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        node_type TEXT NOT NULL,
+        system TEXT NOT NULL,
+        parent_id INTEGER REFERENCES fault_tree_nodes(id),
+        description TEXT NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE faults (
+        id INTEGER PRIMARY KEY,
+        fault_no TEXT NOT NULL,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id),
+        part_id INTEGER NOT NULL REFERENCES parts(id),
+        occurred_at TEXT NOT NULL,
+        symptom TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        downtime_hours REAL NOT NULL,
+        root_cause_id INTEGER NOT NULL REFERENCES fault_tree_nodes(id),
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE maintenance_plans (
+        id INTEGER PRIMARY KEY,
+        plan_no TEXT NOT NULL,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id),
+        name TEXT NOT NULL,
+        plan_type TEXT NOT NULL,
+        interval_days INTEGER,
+        interval_hours INTEGER,
+        last_done_at TEXT,
+        next_due_at TEXT,
+        next_due_hours INTEGER,
+        status TEXT NOT NULL,
+        owner_code TEXT NOT NULL,
+        CHECK (
+          (plan_type = 'calendar' AND interval_days IS NOT NULL AND interval_hours IS NULL) OR
+          (plan_type = 'hour_based' AND interval_hours IS NOT NULL AND interval_days IS NULL) OR
+          (plan_type = 'condition' AND interval_days IS NULL AND interval_hours IS NULL)
+        )
+      );
+      CREATE TABLE maintenance_reports (
+        id INTEGER PRIMARY KEY,
+        report_no TEXT NOT NULL,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id),
+        plan_id INTEGER REFERENCES maintenance_plans(id),
+        fault_id INTEGER REFERENCES faults(id),
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        downtime_hours REAL NOT NULL,
+        technician TEXT NOT NULL,
+        conclusion TEXT NOT NULL,
+        result TEXT NOT NULL,
+        owner_code TEXT NOT NULL,
+        CHECK ((plan_id IS NOT NULL) <> (fault_id IS NOT NULL))
+      );
+      CREATE TABLE report_parts (
+        id INTEGER PRIMARY KEY,
+        report_id INTEGER NOT NULL REFERENCES maintenance_reports(id),
+        part_id INTEGER NOT NULL REFERENCES parts(id),
+        quantity INTEGER NOT NULL,
+        unit_price REAL NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE consumables (
+        id INTEGER PRIMARY KEY,
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        stock_qty REAL NOT NULL,
+        unit_price REAL NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+      CREATE TABLE consumption_items (
+        id INTEGER PRIMARY KEY,
+        report_id INTEGER NOT NULL REFERENCES maintenance_reports(id),
+        consumable_id INTEGER NOT NULL REFERENCES consumables(id),
+        quantity REAL NOT NULL,
+        unit_price REAL NOT NULL,
+        owner_code TEXT NOT NULL
+      );
+    `);
+
+    const equipment = buildEquipment();
+    const parts = buildMaintenanceParts();
+    const tree = buildFaultTreeNodes();
+    const faults = buildFaults();
+    const plans = buildMaintenancePlans();
+    const reports = buildMaintenanceReports(faults, plans);
+    const replaced = buildReportParts(reports, faults, parts);
+    const consumables = buildConsumables();
+    const consumption = buildConsumptionItems(reports);
+
+    const insert = (sql, rows) => {
+      const statement = db.prepare(sql);
+      for (const row of rows) statement.run(...row);
+    };
+    insert('INSERT INTO equipment VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', equipment);
+    insert('INSERT INTO parts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', parts);
+    insert('INSERT INTO fault_tree_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?)', tree);
+    insert('INSERT INTO faults VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', faults);
+    insert('INSERT INTO maintenance_plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', plans);
+    insert(
+      'INSERT INTO maintenance_reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      reports
+    );
+    insert('INSERT INTO report_parts VALUES (?, ?, ?, ?, ?, ?)', replaced);
+    insert('INSERT INTO consumables VALUES (?, ?, ?, ?, ?, ?, ?, ?)', consumables);
+    insert('INSERT INTO consumption_items VALUES (?, ?, ?, ?, ?, ?)', consumption);
+  } finally {
+    db.close();
+  }
+  return file;
+}
+
 /* ------------------------------------------------------------------- 项目装配 */
 
 /** 财务库的表与其可授权列；列白名单必须与建表语句逐字一致 */
@@ -599,36 +1150,137 @@ const INVENTORY_TABLES = [
   },
 ];
 
+/** 装备维修保障库的表与其可授权列；列白名单必须与建表语句逐字一致 */
+const MAINTENANCE_TABLES = [
+  {
+    name: 'equipment',
+    columns: [
+      'id',
+      'asset_no',
+      'name',
+      'model',
+      'category',
+      'location',
+      'commissioned_at',
+      'status',
+      'run_hours',
+      'owner_code',
+    ],
+  },
+  {
+    name: 'parts',
+    columns: [
+      'id',
+      'equipment_id',
+      'part_no',
+      'name',
+      'position',
+      'design_hours',
+      'run_hours',
+      'status',
+      'unit_price',
+      'owner_code',
+    ],
+  },
+  {
+    name: 'fault_tree_nodes',
+    columns: ['id', 'code', 'name', 'node_type', 'system', 'parent_id', 'description', 'owner_code'],
+  },
+  {
+    name: 'faults',
+    columns: [
+      'id',
+      'fault_no',
+      'equipment_id',
+      'part_id',
+      'occurred_at',
+      'symptom',
+      'severity',
+      'downtime_hours',
+      'root_cause_id',
+      'owner_code',
+    ],
+  },
+  {
+    name: 'maintenance_plans',
+    columns: [
+      'id',
+      'plan_no',
+      'equipment_id',
+      'name',
+      'plan_type',
+      'interval_days',
+      'interval_hours',
+      'last_done_at',
+      'next_due_at',
+      'next_due_hours',
+      'status',
+      'owner_code',
+    ],
+  },
+  {
+    name: 'maintenance_reports',
+    columns: [
+      'id',
+      'report_no',
+      'equipment_id',
+      'plan_id',
+      'fault_id',
+      'started_at',
+      'finished_at',
+      'downtime_hours',
+      'technician',
+      'conclusion',
+      'result',
+      'owner_code',
+    ],
+  },
+  {
+    name: 'report_parts',
+    columns: ['id', 'report_id', 'part_id', 'quantity', 'unit_price', 'owner_code'],
+  },
+  {
+    name: 'consumables',
+    columns: ['id', 'code', 'name', 'spec', 'unit', 'stock_qty', 'unit_price', 'owner_code'],
+  },
+  {
+    name: 'consumption_items',
+    columns: ['id', 'report_id', 'consumable_id', 'quantity', 'unit_price', 'owner_code'],
+  },
+];
+
 /**
  * 一个数据源的 grants：本库角色给列白名单 + 行过滤，
- * 另一个演示角色给一份永远查不到行的 grant（原因见 DENY_FILTER 的注释）。
+ * 其余演示角色各给一份永远查不到行的 grant（原因见 DENY_FILTER 的注释）。
  *
  * @param {string} database
  * @param {Array<Object>} tables
  * @returns {Array<Object>}
  */
 function demoGrants(database, tables) {
+  const ownRole = ROLE_BY_DATABASE[database];
+  const otherRoles = Object.values(ROLE_BY_DATABASE).filter((role) => role !== ownRole);
   return [
     {
-      role: ROLE_BY_DATABASE[database],
+      role: ownRole,
       tables: tables.map((table) => ({
         name: table.name,
         columns: [...table.columns],
         filter: DEMO_FILTER,
       })),
     },
-    {
-      role: ROLE_BY_DATABASE[database === 'finance' ? 'inventory' : 'finance'],
+    ...otherRoles.map((role) => ({
+      role,
       tables: tables.map((table) => ({
         name: table.name,
         columns: ['id', 'owner_code'],
         filter: DENY_FILTER,
       })),
-    },
+    })),
   ];
 }
 
-/** @returns {Array<Object>} dev.yml 的 sources 段所需的两个数据源 */
+/** @returns {Array<Object>} dev.yml 的 sources 段所需的三个数据源 */
 function demoSources() {
   return [
     {
@@ -655,11 +1307,22 @@ function demoSources() {
         grants: demoGrants('inventory', INVENTORY_TABLES),
       },
     },
+    {
+      name: 'maintenance',
+      type: 'sqlite',
+      path: MAINTENANCE_DATABASE,
+      access: {
+        read: 'authenticated',
+        write: 'blocked',
+        delete: 'blocked',
+        grants: demoGrants('maintenance', MAINTENANCE_TABLES),
+      },
+    },
   ];
 }
 
 /**
- * 创建（或重建）演示项目：写 dev.yml、种两个库、各配一个只读角色。
+ * 创建（或重建）演示项目：写 dev.yml、种三个库、各配一个只读角色。
  *
  * @param {Object} options
  * @param {string} options.dir 项目目录
@@ -673,12 +1336,13 @@ function createDemoProject({ dir, appName = DEMO_APP_NAME, port }) {
   }
   seedFinanceDatabase(dir);
   seedInventoryDatabase(dir);
+  seedMaintenanceDatabase(dir);
 
   const sources = demoSources();
   const devYaml = createProject({ dir, appName, port, sources });
 
-  // roles 段单独写：admin 保证启动不被拒，两个只读角色进入矩阵可编辑
-  const roles = ['admin', ROLE_BY_DATABASE.finance, ROLE_BY_DATABASE.inventory];
+  // roles 段单独写：admin 保证启动不被拒，三个只读角色进入矩阵可编辑
+  const roles = ['admin', ...Object.values(ROLE_BY_DATABASE)];
   const text = replaceRolesBlock(fs.readFileSync(devYaml, 'utf8'), roles);
   fs.writeFileSync(devYaml, text, 'utf8');
 
@@ -686,10 +1350,13 @@ function createDemoProject({ dir, appName = DEMO_APP_NAME, port }) {
     devYaml,
     databases: sources.map((source) => source.name),
     roles,
-    tables: [...FINANCE_TABLES, ...INVENTORY_TABLES].map((table) => table.name),
+    tables: [...FINANCE_TABLES, ...INVENTORY_TABLES, ...MAINTENANCE_TABLES].map(
+      (table) => table.name
+    ),
     tablesByDatabase: {
       finance: FINANCE_TABLES.map((table) => table.name),
       inventory: INVENTORY_TABLES.map((table) => table.name),
+      maintenance: MAINTENANCE_TABLES.map((table) => table.name),
     },
   };
 }
@@ -701,7 +1368,10 @@ module.exports = {
   ROLE_BY_DATABASE,
   FINANCE_DATABASE,
   INVENTORY_DATABASE,
+  MAINTENANCE_DATABASE,
+  MAINTENANCE_TABLES,
   seedFinanceDatabase,
   seedInventoryDatabase,
+  seedMaintenanceDatabase,
   createDemoProject,
 };

@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const { FINANCE_DATABASE, INVENTORY_DATABASE } = require('./demo');
+const { FINANCE_DATABASE, INVENTORY_DATABASE, MAINTENANCE_DATABASE } = require('./demo');
 
 /** 演示库里的 schema 名：sqlite 只有一个 main */
 const SCHEMA = 'main';
@@ -95,6 +95,60 @@ const CONCEPTS = {
     definition: '出库单里的商品行，quantity 是发货数量、unit_price 是这次销售的单价。',
     display: 'product_id',
   },
+  equipment: {
+    name: '装备',
+    aliases: ['资产', '设备'],
+    definition: '一台可服役的实物装备，status 是在役 / 待修 / 修理中 / 退役；run_hours 是它的累计运行小时，可靠性的分母就是它。',
+    display: 'name',
+  },
+  parts: {
+    name: '部件',
+    aliases: ['可更换单元', '组件'],
+    definition: '装在装备上的可更换单元，失效发生在这一层而不是整机；run_hours 逼近 design_hours 时状态升到 due_soon / overdue。',
+    display: 'name',
+  },
+  fault_tree_nodes: {
+    name: '故障树节点',
+    aliases: ['事件', '故障模式'],
+    definition: '故障树的节点：top 是现象（顶事件）、intermediate 是中间机理、basic 是能动手修的底事件；parent_id 把三层连成树。',
+    display: 'name',
+  },
+  faults: {
+    name: '故障',
+    aliases: ['失效', '故障记录'],
+    definition: '一次真实发生的失效事件：哪台装备的哪个部件、什么现象、停机多久，以及归因到故障树的哪个底事件。',
+    display: 'fault_no',
+  },
+  maintenance_plans: {
+    name: '维修计划',
+    aliases: ['预防性维修', '保养计划'],
+    definition: '预防性维修的排程：plan_type 决定按日历、按运行小时还是按状态触发，周期形态与类型必须自洽。',
+    display: 'plan_no',
+  },
+  maintenance_reports: {
+    name: '维修报告',
+    aliases: ['维修工单', '维修记录'],
+    definition: '一次实际执行的维修，来源只有两种且互斥：计划（预防）或故障（纠正）；停机时长、换件与耗材都挂在这张单上。',
+    display: 'report_no',
+  },
+  report_parts: {
+    name: '维修换件明细',
+    aliases: ['换件记录'],
+    definition: '维修报告里换掉的部件行，quantity × unit_price 就是这次维修的备件成本。',
+    display: 'part_id',
+  },
+  consumables: {
+    name: '耗材',
+    aliases: ['物资', '易耗品'],
+    definition: '维修时消耗掉的物资台账（油料、滤芯、密封胶等），stock_qty 是结存、unit_price 是当前单价。',
+    display: 'name',
+  },
+  consumption_items: {
+    name: '耗材消耗明细',
+    aliases: ['领用记录'],
+    definition: '某次维修领用了多少耗材，与换件明细一起构成这次维修的全部成本。',
+    display: 'consumable_id',
+  },
 };
 
 /**
@@ -155,6 +209,57 @@ const COLUMN_TERMS = {
     name: '销售单价',
     definition: '这次出库的成交单价，通常高于商品当前成本单价。',
   },
+  'equipment.status': {
+    name: '装备状态',
+    definition: 'in_service 在役、pending_repair 待修、under_repair 修理中、retired 退役；退役装备不再排计划、不计入可用率。',
+    values: true,
+  },
+  'equipment.run_hours': {
+    name: '累计运行小时',
+    definition: '装备自投运以来的运行小时数，是按时长排计划和算 MTBF 的分母。',
+  },
+  'parts.status': {
+    name: '部件状态',
+    definition: 'normal 正常、due_soon 接近设计寿命、overdue 已超设计寿命；超寿命不等于已故障，但优先纳入计划。',
+    values: true,
+  },
+  'parts.design_hours': {
+    name: '设计寿命',
+    definition: '部件在设计工况下的可用小时数，run_hours 与它的比值决定寿命消耗程度。',
+  },
+  'fault_tree_nodes.node_type': {
+    name: '事件层级',
+    definition: 'top 顶事件（可见现象）、intermediate 中间事件（机理）、basic 底事件（可修根因）；故障只能归因到底事件。',
+    values: true,
+  },
+  'fault_tree_nodes.system': {
+    name: '所属系统',
+    definition: '故障所属的专业系统（液压 / 电气 / 传动 / 冷却进气），用于按系统看故障分布。',
+    values: true,
+  },
+  'faults.severity': {
+    name: '故障严重度',
+    definition: 'minor 轻微、major 严重、critical 致命；严重度决定是否停机抢修与是否必须换件。',
+    values: true,
+  },
+  'faults.downtime_hours': {
+    name: '停机时长',
+    definition: '从故障发生到恢复可用的小时数，是 MTTR 与停机损失的输入。',
+  },
+  'maintenance_plans.plan_type': {
+    name: '计划类型',
+    definition: 'calendar 按日历、hour_based 按运行小时、condition 按状态监测；三种类型的周期字段必须与类型匹配。',
+    values: true,
+  },
+  'maintenance_reports.plan_id': {
+    name: '计划来源',
+    definition: '这份报告由哪条计划触发；与 fault_id 互斥，恰好一个非空——维修要么是预防，要么是纠正。',
+  },
+  'maintenance_reports.result': {
+    name: '维修结果',
+    definition: 'completed 已完成、partial 部分完成、deferred 待件延期；只有已完成才计入修复时长口径。',
+    values: true,
+  },
 };
 
 /**
@@ -174,6 +279,19 @@ const RELATION_NAMES = {
   'outbound_orders.warehouse_id': '发货仓库',
   'outbound_items.order_id': '所属出库单',
   'outbound_items.product_id': '出库商品',
+  'parts.equipment_id': '所属装备',
+  'fault_tree_nodes.parent_id': '上级事件',
+  'faults.equipment_id': '故障装备',
+  'faults.part_id': '失效部件',
+  'faults.root_cause_id': '根因事件',
+  'maintenance_plans.equipment_id': '计划归属装备',
+  'maintenance_reports.equipment_id': '维修装备',
+  'maintenance_reports.plan_id': '计划来源',
+  'maintenance_reports.fault_id': '故障来源',
+  'report_parts.report_id': '换件报告',
+  'report_parts.part_id': '更换部件',
+  'consumption_items.report_id': '领用报告',
+  'consumption_items.consumable_id': '消耗耗材',
 };
 
 const ENDPOINT_SIDE = { from: 'from', to: 'to' };
@@ -216,6 +334,31 @@ const RULES = {
       definition: '库存余额是结果表，不手工改：写入与删除都应拦住，只允许通过入库、出库两类单据影响它。',
       mode: 'read-only',
       on: { table: 'stock_levels' },
+      severity: 'enforce',
+    },
+  ],
+  maintenance: [
+    {
+      name: '退役装备不参与维修统计',
+      definition: '已退役的装备不再排计划、也不进可用率与成本口径，否则分母里会混进本该消失的资产。',
+      mode: 'filter',
+      on: { table: 'equipment' },
+      predicate: '{ status: { _ne: "retired" } }',
+      severity: 'enforce',
+    },
+    {
+      name: '未完成的维修不计入修复时长',
+      definition: 'pending / deferred 的报告还没真正修复，算 MTTR 时不能把它们算进已完成，否则修复时长会被低估。',
+      mode: 'filter',
+      on: { table: 'maintenance_reports' },
+      predicate: '{ result: { _eq: "completed" } }',
+      severity: 'warn',
+    },
+    {
+      name: '故障树是标准库，只读',
+      definition: '故障树的层级与归因口径是全厂统一的标准，不允许通过 MCP 改写，否则历史故障的归因会失真。',
+      mode: 'read-only',
+      on: { table: 'fault_tree_nodes' },
       severity: 'enforce',
     },
   ],
@@ -267,6 +410,38 @@ const METRICS = {
       tables: ['outbound_items'],
       expression: 'sum(quantity * unit_price)',
       unit: '元',
+    },
+  ],
+  maintenance: [
+    {
+      name: '平均无故障间隔 MTBF',
+      definition: '装备累计运行小时除以故障次数，衡量「多久坏一次」；分母只算真实发生的故障记录。',
+      tables: ['equipment', 'faults'],
+      expression: 'sum(equipment.run_hours) / count(faults.id)',
+      unit: '小时',
+    },
+    {
+      name: '平均修复时长 MTTR',
+      definition: '已完成维修的平均停机小时，衡量「坏了多久能修好」；未完成的报告不计入。',
+      tables: ['maintenance_reports'],
+      expression: 'avg(downtime_hours) where result = "completed"',
+      unit: '小时',
+    },
+    {
+      name: '维修成本',
+      definition: '换件成本 + 耗材成本：两类资源是维修投入的全部，按明细单价乘数量求和。',
+      tables: ['report_parts', 'consumption_items'],
+      expression:
+        'sum(report_parts.quantity * report_parts.unit_price) + ' +
+        'sum(consumption_items.quantity * consumption_items.unit_price)',
+      unit: '元',
+    },
+    {
+      name: '计划维修占比',
+      definition: '计划来源的维修报告占全部报告的比例，越高说明越靠预防而不是抢修。',
+      tables: ['maintenance_reports'],
+      expression: 'count(plan_id IS NOT NULL) / count(*)',
+      unit: '%',
     },
   ],
 };
@@ -391,12 +566,16 @@ function buildDatabaseEntries(database, file) {
   for (const [table, info] of schema) {
     for (const fk of info.foreignKeys) {
       if (!schema.has(fk.table)) continue;
+      // 自引用外键（故障树的 parent_id）是多叉树，不是普通的「多条指向一条」
+      const isTree = fk.table === table;
       entries.push({
         database,
         kind: 'relation',
         name: RELATION_NAMES[`${table}.${fk.column}`] ?? `${conceptName(fk.table)}关联`,
         aliases: [],
-        definition: `${conceptName(table)} 通过 ${fk.column} 指向 ${conceptName(fk.table)}，多条${conceptName(table)}可以指向同一条${conceptName(fk.table)}。`,
+        definition: isTree
+          ? `${conceptName(table)} 通过 ${fk.column} 指向上级${conceptName(table)}，层层展开成一棵树；最顶层没有上级。`
+          : `${conceptName(table)} 通过 ${fk.column} 指向 ${conceptName(fk.table)}，多条${conceptName(table)}可以指向同一条${conceptName(fk.table)}。`,
         payload: {
           from: { table: tableRef(table), column: fk.column },
           to: { table: tableRef(fk.table), column: fk.to },
@@ -446,16 +625,17 @@ function buildDatabaseEntries(database, file) {
 }
 
 /**
- * 读两个演示库，产出两个库各自的条目。
+ * 读三个演示库，产出各库自己的条目。
  *
  * @param {Object} options
- * @param {string} options.dir 演示项目目录（两个 sqlite 文件所在处）
+ * @param {string} options.dir 演示项目目录（三个 sqlite 文件所在处）
  * @returns {Array<Object>}
  */
 function buildDemoOntology({ dir }) {
   return [
     ...buildDatabaseEntries('finance', path.join(dir, FINANCE_DATABASE)),
     ...buildDatabaseEntries('inventory', path.join(dir, INVENTORY_DATABASE)),
+    ...buildDatabaseEntries('maintenance', path.join(dir, MAINTENANCE_DATABASE)),
   ];
 }
 

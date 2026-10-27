@@ -1020,7 +1020,7 @@ async function main() {
     record('使用向导可关闭', guideClosed === 'ok', guideClosed);
 
     // 布局：窗口本身不滚，滚动只发生在 .content —— 否则内容一长侧栏就跟着被卷走。
-    // 首访（localStorage 里没有折叠标记）侧栏是折叠态：64px，只有图标。
+    // 首访（localStorage 里没有折叠标记）侧栏是展开态：248px，标题与图标都在。
     const layout = await cdp.evaluate(`(() => {
       const rail = document.querySelector('.rail');
       const content = document.querySelector('.content');
@@ -1043,9 +1043,31 @@ async function main() {
       `窗口滚动 ${layout.windowScroll} · 内容区可滚 ${layout.contentScrolls}`
     );
     record(
-      '侧栏默认折叠成图标',
-      layout.collapsed && layout.railWidth <= 72 && layout.titleWidth === 0 && layout.iconWidth > 0,
+      '侧栏默认展开',
+      layout.collapsed === false && layout.railWidth > 200 && layout.titleWidth > 0 && layout.iconWidth > 0,
       `宽 ${layout.railWidth}px · 折叠 ${layout.collapsed} · 标题 ${layout.titleWidth}px · 图标 ${layout.iconWidth}px`
+    );
+
+    // 底部按钮折叠：文字收掉、宽度降到 64px；选择写进 localStorage 供下次启动沿用。
+    // 宽度是 grid-template-columns 的过渡动画（0.16s）：等它稳定再断言，只看 class 会读到中间帧
+    await cdp.evaluate(`document.querySelector('.rail__toggle')?.click(); 'ok'`);
+    await waitFor(
+      '侧栏折叠',
+      async () =>
+        (await cdp.evaluate(`document.querySelector('.rail').getBoundingClientRect().width`)) <= 72
+    );
+    const collapsedRail = await cdp.evaluate(`(() => {
+      const title = document.querySelector('.nav__item .nav__title');
+      return {
+        width: Math.round(document.querySelector('.rail').getBoundingClientRect().width),
+        titleWidth: Math.round(title.getBoundingClientRect().width),
+        remembered: localStorage.getItem('mcpb.railCollapsed'),
+      };
+    })()`);
+    record(
+      '侧栏可折叠且记住选择',
+      collapsedRail.width <= 72 && collapsedRail.titleWidth === 0 && collapsedRail.remembered === '1',
+      `宽 ${collapsedRail.width}px · 标题 ${collapsedRail.titleWidth}px · localStorage ${collapsedRail.remembered}`
     );
 
     // 折叠态没有文字，靠 tooltip 补上下文：鼠标移到图标上要弹出「标题 · 副标题」
@@ -1072,8 +1094,8 @@ async function main() {
     // 移开鼠标，别让 popper 挡住后面的操作
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 700, y: 420, button: 'none' });
 
-    // 底部按钮展开：文案回来、侧栏变宽；选择写进 localStorage，下次启动沿用。
-    // 宽度是 grid-template-columns 的过渡动画（0.16s）：等它稳定再断言，只看 class 会读到中间帧
+    // 再点一次展开：文案回来、侧栏变宽，选择同样写进 localStorage。
+    // 后面的断言与截图沿用展开态 —— 与首访现在看到的布局一致
     await cdp.evaluate(`document.querySelector('.rail__toggle')?.click(); 'ok'`);
     await waitFor(
       '侧栏展开',
@@ -1089,16 +1111,9 @@ async function main() {
       };
     })()`);
     record(
-      '侧栏可展开且记住选择',
+      '侧栏可再展开且记住选择',
       expandedRail.width > 200 && expandedRail.titleWidth > 0 && expandedRail.remembered === '0',
       `宽 ${expandedRail.width}px · 标题 ${expandedRail.titleWidth}px · localStorage ${expandedRail.remembered}`
-    );
-    // 收回折叠态：后面的断言与截图按用户首访看到的布局跑
-    await cdp.evaluate(`document.querySelector('.rail__toggle')?.click(); 'ok'`);
-    await waitFor(
-      '侧栏收回折叠态',
-      async () =>
-        (await cdp.evaluate(`document.querySelector('.rail').getBoundingClientRect().width`)) <= 72
     );
 
     // 关闭写进 localStorage：整页刷新后不再自动弹出
@@ -2037,12 +2052,14 @@ async function main() {
     );
     const demoText = await cdp.evaluate(`document.querySelector('.facts').textContent`);
     record(
-      '一键演示建好两个示例库与各库角色',
+      '一键演示建好三个示例库与各库角色',
       demoText.includes('finance') &&
         demoText.includes('inventory') &&
+        demoText.includes('maintenance') &&
         demoText.includes('finance_analyst') &&
-        demoText.includes('inventory_viewer'),
-      demoText.replace(/\s+/g, ' ').slice(0, 120)
+        demoText.includes('inventory_viewer') &&
+        demoText.includes('maintenance_engineer'),
+      demoText.replace(/\s+/g, ' ').slice(0, 140)
     );
 
     // 离线读配置的完整验收：演示项目 dev.yml 里每个库各有一份真实 grants（角色 × 库）
@@ -2056,24 +2073,31 @@ async function main() {
       );
     const financeHome = grantOf('finance_analyst', 'vouchers');
     const inventoryHome = grantOf('inventory_viewer', 'products');
+    const maintenanceHome = grantOf('maintenance_engineer', 'equipment');
     const financeDenied = grantOf('inventory_viewer', 'vouchers');
     const inventoryDenied = grantOf('finance_analyst', 'products');
+    const maintenanceDenied = grantOf('finance_analyst', 'equipment');
     record(
-      '离线读出的 grants 与演示配置一致（每库一个角色）',
-      demoGrants.length === 4 &&
+      '离线读出的 grants 与演示配置一致（每库一个角色，其余角色显式拒绝）',
+      // 3 个库 × 3 个角色：本库角色一份带行过滤，另外两个角色各一份查不到行的
+      demoGrants.length === 9 &&
         financeHome?.tables.length === 5 &&
         inventoryHome?.tables.length === 7 &&
+        maintenanceHome?.tables.length === 9 &&
         financeHome.tables.every((table) => String(table.filter ?? '').includes('owner_code')) &&
         financeDenied?.tables.every((table) =>
           String(table.filter ?? '').includes('__not_granted__')
         ) &&
         inventoryDenied?.tables.every((table) =>
           String(table.filter ?? '').includes('__not_granted__')
+        ) &&
+        maintenanceDenied?.tables.every((table) =>
+          String(table.filter ?? '').includes('__not_granted__')
         ),
       demoGrants
         .map((grant) => `${grant.role}:${grant.tables.length}表:${grant.tables[0]?.filter ?? ''}`)
         .join(' | ')
-        .slice(0, 140)
+        .slice(0, 180)
     );
 
     await cdp.evaluate(`(() => {
@@ -2103,15 +2127,17 @@ async function main() {
     );
     const demoConns = await cdp.evaluate(`document.querySelector('.conns').textContent`);
     record(
-      '节点1 连接：两个演示库都进了已保存连接',
-      demoConns.includes('finance') && demoConns.includes('inventory'),
-      demoConns.replace(/\s+/g, ' ').slice(0, 100)
+      '节点1 连接：三个演示库都进了已保存连接',
+      demoConns.includes('finance') &&
+        demoConns.includes('inventory') &&
+        demoConns.includes('maintenance'),
+      demoConns.replace(/\s+/g, ' ').slice(0, 120)
     );
 
     await cdp.evaluate(`location.hash = '#/permissions'; 'ok'`);
     await waitFor(
       '权限页按库分标签',
-      async () => (await cdp.evaluate(`document.querySelectorAll('.db-tab').length`)) >= 2,
+      async () => (await cdp.evaluate(`document.querySelectorAll('.db-tab').length`)) >= 3,
       15_000
     );
     const demoTabs = await cdp.evaluate(
@@ -2119,8 +2145,10 @@ async function main() {
     );
     record(
       '节点2 配权限：每个库一个标签',
-      demoTabs.includes('finance') && demoTabs.includes('inventory'),
-      demoTabs.slice(0, 80)
+      demoTabs.includes('finance') &&
+        demoTabs.includes('inventory') &&
+        demoTabs.includes('maintenance'),
+      demoTabs.slice(0, 100)
     );
 
     // 节点3 验证：真跑一次。finance_analyst 只能看到自己名下的行，admin 看到全部
@@ -2170,6 +2198,23 @@ async function main() {
       '节点3 验证：换库即换身份（反向同样成立）',
       Array.isArray(wrongInventoryRows) && wrongInventoryRows.length === 0,
       `finance_analyst 查库存库 products → ${wrongInventoryRows.length} 行`
+    );
+
+    // 维修库的业务本体要真的能查：故障带严重度、停机时长与根因引用，行过滤按 owner 生效
+    const maintenanceQuery = await rpc('graphql.execute', {
+      baseUrl: demoBaseUrl,
+      role: 'maintenance_engineer',
+      userCode: 'hq',
+      query:
+        '{ faults(limit: 50) { fault_no severity downtime_hours root_cause_id part_id owner_code } }',
+    });
+    const faultRows = maintenanceQuery?.data?.faults ?? [];
+    record(
+      '节点3 验证：维修库能查出故障，且只给自己名下的行',
+      faultRows.length > 0 &&
+        faultRows.every((row) => row.owner_code === 'hq') &&
+        faultRows.every((row) => row.root_cause_id != null && row.part_id != null),
+      `maintenance_engineer(hq) ${faultRows.length} 条故障`
     );
 
     // 节点4 讲清业务：一键演示要按两个库的 schema 自动带上本体论，
