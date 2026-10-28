@@ -64,6 +64,7 @@ const { dataFile } = require('./paths');
 const { executeGraphql } = require('./graphql-http');
 const { createMcpGateway } = require('./mcp-gateway');
 const { loadSecret, signToken } = require('./jwt');
+const { McpClient } = require('./mcp-client');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
 const serviceCache = new Map();
@@ -516,6 +517,38 @@ async function verifyEntries(service, entries) {
   return results;
 }
 
+/** 把非字符串的 message 也变成可读文本：agent 会把 message 塞成对象 */
+function messageText(value) {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+/**
+ * 判断一条「成功返回」的工具结果里是否装着失败。
+ *
+ * GraphJin 的几种工具都这样：MCP 层 isError=false，失败写在 payload 里 ——
+ * execute_graphql 回 `{ data: null, errors: [...] }`、validate_config 回 `{ success: false }`、
+ * ask_graphjin_agent 回 `{ status: 'error' }`。AI Demo 要按失败处理，否则「查无此表」
+ * 会被算成通过，这个测试就没有意义了。
+ *
+ * @param {*} value callTool 解包后的结果
+ * @returns {string|null} 失败原因；成功返回 null
+ */
+function describePayloadFailure(value) {
+  if (!value || typeof value !== 'object') return null;
+
+  if (Array.isArray(value.errors) && value.errors.length > 0) {
+    return value.errors.map((item) => messageText(item?.message ?? item)).join('\n');
+  }
+  if (value.success === false) {
+    return messageText(value.message ?? 'tool reported success: false');
+  }
+  if (value.status === 'error') {
+    return messageText(value.message ?? 'agent reported status: error');
+  }
+  return null;
+}
+
 /**
  * 组装 JSON-RPC 方法表。
  *
@@ -538,6 +571,7 @@ function createRouter({
   jwtSecret = null,
   ontology = null,
   databaseAccess = null,
+  selfPort = null,
 }) {
   const router = new RpcRouter();
   const services = supervisor ?? new GraphJinSupervisor();
@@ -552,6 +586,31 @@ function createRouter({
   const snapshotStore = () => {
     if (!snapshots) throw RpcError.invalidParams('快照存储未初始化');
     return snapshots;
+  };
+
+  /**
+   * AI Demo 的客户端：自签一个短令牌，打自己身上的 MCP 网关。
+   *
+   * 这与真实外部客户端（DSH / Claude 等）走的是同一条路：令牌验签 → 角色透传 →
+   * 网关追加本体论工具。直连 GraphJin 测不到这些，测出来的「通过」是假的。
+   *
+   * @param {{role: string, userCode?: string}} options
+   * @returns {McpClient}
+   */
+  const demoClient = ({ role, userCode = '' }) => {
+    if (!jwtSecret) throw RpcError.invalidParams('令牌密钥未初始化');
+    const port = selfPort?.() ?? 0;
+    if (!port) throw RpcError.invalidParams('后端服务未就绪');
+    const token = signToken(
+      { sub: 'ai-demo', role, user_code: userCode || 'ai-demo', name: 'AI Demo' },
+      jwtSecret,
+      // 一次测试几百毫秒，给 10 分钟足够，且不会在日志里留下长期有效的令牌
+      600
+    );
+    return new McpClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      headers: { Authorization: `Bearer ${token}` },
+    });
   };
 
   /**
@@ -1110,6 +1169,65 @@ function createRouter({
       const service = await getService(requireBaseUrl(params), role);
       return probeDatabases(service, role);
     })
+    // AI Demo：以「外部客户端」身份打一遍平台网关，而不是直连 GraphJin。
+    // 直连拿不到 business_ontology / describe_business_object（网关追加的），
+    // 令牌验签、角色透传、行过滤也只有走网关才真的被走到。
+    .register('mcp.demoTools', async (params) => {
+      const client = demoClient({ role: requireRole(params), userCode: params?.userCode });
+      const tools = await client.listTools();
+      return tools.map(({ name, description, inputSchema }) => ({
+        name,
+        description: description ?? '',
+        inputSchema: inputSchema ?? null,
+      }));
+    })
+    .register('mcp.demoCall', async (params) => {
+      const name = params?.name;
+      if (typeof name !== 'string' || name === '') throw RpcError.invalidParams('name 不能为空');
+      const role = requireRole(params);
+      const userCode = typeof params?.userCode === 'string' ? params.userCode : '';
+      const args =
+        params?.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments)
+          ? params.arguments
+          : {};
+
+      const client = demoClient({ role, userCode });
+      const started = Date.now();
+      try {
+        const value = await client.callTool(name, args);
+        const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        // MCP 层的「成功」里也可能装着失败：execute_graphql 的 GraphQL 报错、
+        // validate_config 的 success:false、agent 的 status:error。不识别出来的话，
+        // 面板会把「查无此表」显示成通过，等于把测试做成了装饰。
+        const failure = describePayloadFailure(value);
+        return {
+          ok: failure === null,
+          isError: failure !== null,
+          role,
+          userCode,
+          elapsedMs: Date.now() - started,
+          value,
+          text: failure ?? text,
+        };
+      } catch (error) {
+        // 失败不抛：面板要把报错原样展示出来，并据此自动改参数重试
+        const payload = error?.payload ?? null;
+        const content = Array.isArray(payload?.content) ? payload.content : [];
+        const text = content
+          .filter((part) => part?.type === 'text')
+          .map((part) => part.text)
+          .join('\n');
+        return {
+          ok: false,
+          isError: true,
+          role,
+          userCode,
+          elapsedMs: Date.now() - started,
+          text: text || error.message,
+          protocolError: error?.name === 'McpProtocolError',
+        };
+      }
+    })
     // 一键演示：示例库 + 预配只读角色，让用户不必准备环境就能看到权限生效
     .register('demo.bootstrap', async (params) => {
       const dataDir = path.dirname(dataFile('mcp-builder.db'));
@@ -1564,6 +1682,8 @@ async function createBackend({ dbPath } = {}) {
   const snapshots = new SnapshotStore(resolvedDbPath);
   const databaseAccess = new DatabaseAccessStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
+  // 端口要 listen 之后才知道，而路由先建：留给 AI Demo 回调自己的网关用
+  let server = null;
   const router = createRouter({
     store,
     connections,
@@ -1572,6 +1692,7 @@ async function createBackend({ dbPath } = {}) {
     jwtSecret,
     ontology,
     databaseAccess,
+    selfPort: () => server?.address()?.port ?? 0,
   });
   // 本体论的取用按角色过滤：被屏蔽 / 仅管理员可见的表，它的语义也不该送出去。
   // 项目目录每次现取——实例可能被重启到别的目录，缓存的路径会变成别人的配置。
@@ -1586,7 +1707,7 @@ async function createBackend({ dbPath } = {}) {
     // 没有维护条目、或该角色看不到任何条目时返回 null，网关保持纯透传
     ontology: ontologyProvider,
   });
-  const server = await startHttpServer({ router, port: 0, gateway });
+  server = await startHttpServer({ router, port: 0, gateway });
 
   return {
     port: server.address().port,

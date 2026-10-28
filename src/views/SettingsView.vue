@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAppStore } from '../stores/app';
 import { rpcSafe } from '../api/rpc';
+import AiDemoPanel from '../components/AiDemoPanel.vue';
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -52,62 +53,66 @@ onMounted(loadInfo);
 </script>
 
 <template>
-  <div class="grid">
-    <section class="panel">
-      <div class="panel__head">
-        <span class="panel__title">{{ t('settings.backendConnection') }}</span>
-        <span class="pill" :class="store.isBackendUp ? 'pill--on' : 'pill--off'">
-          <span class="dot" />{{ store.isBackendUp ? t('common.online') : t('common.offline') }}
-        </span>
-      </div>
-      <div class="panel__body">
-        <p class="mono-dim note">{{ t('settings.portNote') }}</p>
-        <div class="row">
-          <el-input
-            v-model="portInput"
-            :placeholder="t('settings.portPlaceholder')"
-            style="width: 160px"
-          />
-          <el-button type="primary" @click="savePort">
-            {{ t('settings.saveAndConnect') }}
-          </el-button>
-          <el-button :loading="isProbing" @click="probe">{{ t('settings.probe') }}</el-button>
+  <div class="page">
+    <div class="grid">
+      <section class="panel">
+        <div class="panel__head">
+          <span class="panel__title">{{ t('settings.backendConnection') }}</span>
+          <span class="pill" :class="store.isBackendUp ? 'pill--on' : 'pill--off'">
+            <span class="dot" />{{ store.isBackendUp ? t('common.online') : t('common.offline') }}
+          </span>
         </div>
-      </div>
-    </section>
+        <div class="panel__body">
+          <p class="mono-dim note">{{ t('settings.portNote') }}</p>
+          <div class="row">
+            <el-input
+              v-model="portInput"
+              :placeholder="t('settings.portPlaceholder')"
+              style="width: 160px"
+            />
+            <el-button type="primary" @click="savePort">
+              {{ t('settings.saveAndConnect') }}
+            </el-button>
+            <el-button :loading="isProbing" @click="probe">{{ t('settings.probe') }}</el-button>
+          </div>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel__head">
-        <span class="panel__title">{{ t('settings.bundled') }}</span>
-        <el-button size="small" :disabled="!info" @click="copyVersion">
-          {{ t('settings.copyVersion') }}
-        </el-button>
-      </div>
-      <div class="panel__body">
-        <div v-if="info" class="facts">
-          <div class="fact">
-            <span class="eyebrow">{{ t('settings.version') }}</span>
-            <span class="fact__value">{{ info.version }}</span>
-          </div>
-          <div class="fact">
-            <span class="eyebrow">{{ t('settings.cachedPlatforms') }}</span>
-            <span class="fact__value">
-              {{ t('settings.platformRatio', { count: platformCount, total: 6 }) }}
-            </span>
-          </div>
-          <div class="fact">
-            <span class="eyebrow">{{ t('settings.upstream') }}</span>
-            <span class="fact__value">{{ info.repo }}</span>
-          </div>
-          <div class="fact">
-            <span class="eyebrow">{{ t('settings.backend') }}</span>
-            <span class="fact__value">{{ info.backendVersion }}</span>
-          </div>
+      <section class="panel">
+        <div class="panel__head">
+          <span class="panel__title">{{ t('settings.bundled') }}</span>
+          <el-button size="small" :disabled="!info" @click="copyVersion">
+            {{ t('settings.copyVersion') }}
+          </el-button>
         </div>
-        <p v-else class="mono-dim">{{ t('settings.noInfo') }}</p>
-        <p class="mono-dim note">{{ t('settings.updateNote') }}</p>
-      </div>
-    </section>
+        <div class="panel__body">
+          <div v-if="info" class="facts">
+            <div class="fact">
+              <span class="eyebrow">{{ t('settings.version') }}</span>
+              <span class="fact__value">{{ info.version }}</span>
+            </div>
+            <div class="fact">
+              <span class="eyebrow">{{ t('settings.cachedPlatforms') }}</span>
+              <span class="fact__value">
+                {{ t('settings.platformRatio', { count: platformCount, total: 6 }) }}
+              </span>
+            </div>
+            <div class="fact">
+              <span class="eyebrow">{{ t('settings.upstream') }}</span>
+              <span class="fact__value">{{ info.repo }}</span>
+            </div>
+            <div class="fact">
+              <span class="eyebrow">{{ t('settings.backend') }}</span>
+              <span class="fact__value">{{ info.backendVersion }}</span>
+            </div>
+          </div>
+          <p v-else class="mono-dim">{{ t('settings.noInfo') }}</p>
+          <p class="mono-dim note">{{ t('settings.updateNote') }}</p>
+        </div>
+      </section>
+    </div>
+
+    <AiDemoPanel />
   </div>
 </template>
 
