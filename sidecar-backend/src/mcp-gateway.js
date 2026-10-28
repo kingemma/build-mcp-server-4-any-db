@@ -225,9 +225,15 @@ function emptyOntologyText({ kind, database, databases }) {
  * 回一条 tools/call 结果。
  *
  * 与 GraphJin 保持同一格式：恒为 SSE。客户端两种都收，但混着发容易踩坑。
+ *
+ * `resultType` 是 MCP 2026-07-28 的必填字段（complete / input_required），新版客户端
+ * 按最新 schema 校验，缺了会整条结果拒收——哪怕握手协商到的是 2025-11-25（实测：
+ * 上游 GraphJin 的成功结果已经带 resultType，本地代答的工具之前漏了）。工具执行失败
+ * 仍然是 complete，错误由 isError 表达，只有多轮往返才是 input_required。
  */
 function sendToolResult(response, requestMessage, { text, isError, structuredContent = null }) {
   const result = {
+    resultType: 'complete',
     content: [{ type: 'text', text }],
     isError,
     ...(structuredContent ? { structuredContent } : {}),

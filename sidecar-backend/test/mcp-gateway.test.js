@@ -414,6 +414,31 @@ test('网关：本体论工具支持按 kind / database 过滤', async () => {
   }
 });
 
+test('网关：平台代答的工具结果带 resultType', async () => {
+  const ctx = await setupWithOntology();
+  try {
+    // 新版客户端按 2026-07-28 的 schema 校验，缺 resultType 会整条拒收
+    const ok = await ctx.call('tools/call', { name: ONTOLOGY_TOOL_NAME, arguments: {} });
+    assert.equal(ok.result.resultType, 'complete');
+
+    // 工具执行失败也仍是 complete：错误由 isError 表达，不是 input_required
+    const failed = await ctx.call('tools/call', {
+      name: ONTOLOGY_TOOL_NAME,
+      arguments: { kind: 'no-such-kind' },
+    });
+    assert.equal(failed.result.resultType, 'complete');
+    assert.equal(failed.result.isError, true);
+
+    const described = await ctx.call('tools/call', {
+      name: DESCRIBE_TOOL_NAME,
+      arguments: { name: '不存在的对象' },
+    });
+    assert.equal(described.result.resultType, 'complete');
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('网关：GraphJin 不在线时本体论工具仍答得出来', async () => {
   const ctx = await setupWithOntology({ target: 'none' });
   try {
