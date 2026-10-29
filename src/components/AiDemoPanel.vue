@@ -69,34 +69,131 @@ function orderTools(tools) {
 }
 
 function toRow(tool) {
+  const auto = DEMO_TOOL_ORDER.includes(tool.name);
   return {
     name: tool.name,
     // 目录里的工具才有可自动跑的测试数据；目录外的（例如写配置的工具）留给人自己填参数
-    auto: DEMO_TOOL_ORDER.includes(tool.name),
+    auto,
     description: tool.description ?? '',
     inputSchema: tool.inputSchema ?? null,
-    /** null = 用户还没动过，显示按当前 schema 现生成的参数 */
-    argsText: null,
+    /** null = 用户还没改过，参数按当前 schema / 本体论现生成 */
+    args: null,
+    /** JSON 类字段的原始输入（解析失败时也要留住用户敲的东西） */
+    raw: {},
+    /** 字段级报错：有值时不允许运行，免得把「半截参数」发出去 */
+    errors: {},
     status: 'idle',
     elapsedMs: 0,
     text: '',
     attempts: [],
-    open: false,
+    // 没有预设参数的工具直接摊开：它必须由人来填，藏着等于没法用
+    open: !auto,
   };
 }
 
 /**
- * 行上的测试参数：没被编辑过就按当前 schema / 本体论现生成。
+ * 当前参数：用户没改过就按当前 schema / 本体论现生成。
  *
  * 不在建行时烤死参数，是因为 schema 可能比工具清单晚到（子组件的 onMounted
  * 早于父组件拉运行态），烤死的话第一条就成了「缺必填参数」，一路红。
  *
  * @param {Object} row
- * @returns {string}
+ * @returns {Object}
  */
-function argsTextOf(row) {
-  if (typeof row.argsText === 'string') return row.argsText;
-  return JSON.stringify(buildDemoArgs(row.name, context.value), null, 2);
+function argsOf(row) {
+  return row.args ?? buildDemoArgs(row.name, context.value);
+}
+
+/**
+ * 按 inputSchema 把参数摊成表单字段：类型决定控件，必填决定是否标星。
+ *
+ * @param {Object} row
+ * @returns {Array<{key: string, spec: Object, kind: string, required: boolean}>}
+ */
+function fieldsOf(row) {
+  const properties = row.inputSchema?.properties;
+  if (!properties || typeof properties !== 'object') return [];
+  const required = new Set(Array.isArray(row.inputSchema?.required) ? row.inputSchema.required : []);
+  return Object.entries(properties).map(([key, spec]) => ({
+    key,
+    spec: spec ?? {},
+    kind: fieldKind(spec ?? {}),
+    required: required.has(key),
+  }));
+}
+
+/** 控件类型：枚举 > 布尔 > 数值 > 字符串 > JSON（对象 / 数组 / 没声明类型） */
+function fieldKind(spec) {
+  if (Array.isArray(spec.enum) && spec.enum.length > 0) return 'enum';
+  if (spec.type === 'boolean') return 'boolean';
+  if (spec.type === 'number' || spec.type === 'integer') return 'number';
+  if (spec.type === 'string') return 'string';
+  return 'json';
+}
+
+/** 写一个字段：空值即删掉这个参数（工具的 additionalProperties 多数是 false） */
+function setArg(row, key, value) {
+  const next = { ...argsOf(row) };
+  if (value === null || value === undefined || value === '') delete next[key];
+  else next[key] = value;
+  row.args = next;
+  delete row.raw[key];
+  delete row.errors[key];
+}
+
+/** 标量字段的展示值：缺省给空串 / null，避免 el-input 显示 undefined */
+function textOf(row, key) {
+  const value = argsOf(row)[key];
+  return value === undefined || value === null ? '' : String(value);
+}
+
+function valueOf(row, key) {
+  const value = argsOf(row)[key];
+  return value === undefined ? null : value;
+}
+
+/** JSON 字段的展示值：用户敲坏的内容优先原样显示 */
+function jsonTextOf(row, key) {
+  if (typeof row.raw[key] === 'string') return row.raw[key];
+  const value = argsOf(row)[key];
+  return value === undefined ? '' : JSON.stringify(value);
+}
+
+/**
+ * 写 JSON 字段：解析成功才落到参数里，失败只记错并保留原文 ——
+ * 否则用户打了一半的 `{` 会被吞掉。
+ */
+function setJsonArg(row, key, text) {
+  const next = { ...argsOf(row) };
+  if (text.trim() === '') {
+    delete next[key];
+    delete row.raw[key];
+    delete row.errors[key];
+    row.args = next;
+    return;
+  }
+  try {
+    next[key] = JSON.parse(text);
+    row.args = next;
+    row.raw[key] = text;
+    delete row.errors[key];
+  } catch (error) {
+    row.raw[key] = text;
+    row.errors[key] = t('aiDemo.fieldInvalidJson', { message: error.message });
+  }
+}
+
+/** 折叠时的一行参数预览：默认值也要看得见，否则没人知道能改什么 */
+function previewOf(row) {
+  const text = JSON.stringify(argsOf(row)).replace(/\s+/g, ' ');
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
+
+/** 恢复默认值：清掉用户的编辑，参数回到按当前 schema 现生成的状态 */
+function resetArgs(row) {
+  row.args = null;
+  row.raw = {};
+  row.errors = {};
 }
 
 /** schema 与本体论是测试数据的来源；设置页可能没被访问过，这里现取 */
@@ -156,18 +253,16 @@ function repairText(attempt) {
 async function runRow(row) {
   if (row.status === 'running') return row.status;
 
-  let args;
-  try {
-    const text = argsTextOf(row).trim();
-    args = text === '' ? {} : JSON.parse(text);
-  } catch (error) {
+  const fieldErrors = Object.values(row.errors);
+  if (fieldErrors.length > 0) {
     row.status = 'fail';
     row.open = true;
-    row.text = t('aiDemo.invalidJson', { message: error.message });
+    row.text = fieldErrors.join('\n');
     row.attempts = [];
     return row.status;
   }
 
+  let args = argsOf(row);
   row.status = 'running';
   row.attempts = [];
   row.text = '';
@@ -183,7 +278,6 @@ async function runRow(row) {
     if (last.ok) {
       row.status = attempt === 1 ? 'pass' : 'fixed';
       row.text = last.text ?? '';
-      row.argsText = JSON.stringify(args, null, 2);
       return row.status;
     }
 
@@ -203,7 +297,10 @@ async function runRow(row) {
       role.value = fix.role;
     }
     if (fix.args) args = fix.args;
-    row.argsText = JSON.stringify(args, null, 2);
+    // 修正后的参数回写到表单，用户才看得到「它自己改了什么」
+    row.args = args;
+    row.raw = {};
+    row.errors = {};
     row.open = true;
   }
 
@@ -223,9 +320,7 @@ async function runAll() {
       await runRow(row);
     }
     const { passed, failed } = summary.value;
-    ElMessage[failed === 0 ? 'success' : 'warning'](
-      t('aiDemo.allDone', { passed, failed })
-    );
+    ElMessage[failed === 0 ? 'success' : 'warning'](t('aiDemo.allDone', { passed, failed }));
   } finally {
     isRunningAll.value = false;
   }
@@ -240,13 +335,12 @@ function pillClass(row) {
 
 /**
  * 子组件的 onMounted 早于父组件拉回运行态。运行态没到就取不到工具清单，
- * 所以等它变成 running 再补一次；参数不用补，argsTextOf 会按最新 schema 现生成。
+ * 所以等它变成 running 再补一次；参数不用补，argsOf 会按最新 schema 现生成。
  */
 watch(
   () => store.isRunning,
   async (running) => {
     if (!running) return;
-    // 运行态没到之前 ensureSchemaLoaded 直接返回空表，测试参数会退化成 {}
     await prepareContext();
     if (rows.value.length === 0) await loadTools();
   }
@@ -314,9 +408,13 @@ onMounted(loadTools);
               {{ t('aiDemo.elapsed', { ms: row.elapsedMs }) }}
             </span>
             <span class="tool__desc">{{ row.description }}</span>
+            <el-button size="small" text :data-args="row.name" @click="row.open = !row.open">
+              {{ t('aiDemo.params') }}
+            </el-button>
             <el-button
               size="small"
               :loading="row.status === 'running'"
+              :disabled="Object.keys(row.errors).length > 0"
               :data-tool="row.name"
               @click="runRow(row)"
             >
@@ -324,17 +422,102 @@ onMounted(loadTools);
             </el-button>
           </div>
 
+          <p v-show="!row.open" class="tool__preview mono-dim">{{ previewOf(row) }}</p>
+
           <div v-show="row.open" class="tool__body">
             <div class="tool__block">
-              <span class="eyebrow">{{ t('aiDemo.args') }}</span>
-              <el-input
-                :model-value="argsTextOf(row)"
-                type="textarea"
-                :rows="3"
-                spellcheck="false"
-                class="tool__args"
-                @update:model-value="(value) => (row.argsText = value)"
-              />
+              <div class="tool__label">
+                <span class="eyebrow">{{ t('aiDemo.args') }}</span>
+                <span class="mono-dim tool__hint">
+                  {{ row.auto ? t('aiDemo.argsHint') : t('aiDemo.argsManual') }}
+                </span>
+                <el-button
+                  size="small"
+                  text
+                  :disabled="row.args === null"
+                  :data-reset="row.name"
+                  @click="resetArgs(row)"
+                >
+                  {{ t('aiDemo.resetArgs') }}
+                </el-button>
+              </div>
+
+              <p v-if="fieldsOf(row).length === 0" class="mono-dim tool__nofields">
+                {{ t('aiDemo.fieldsEmpty') }}
+              </p>
+
+              <div v-else class="fields">
+                <div v-for="field in fieldsOf(row)" :key="field.key" class="field">
+                  <div class="field__head" :title="field.spec.description ?? ''">
+                    <span class="field__name">{{ field.key }}</span>
+                    <span v-if="field.required" class="field__required">*</span>
+                    <span class="field__kind mono-dim">{{ field.kind }}</span>
+                  </div>
+
+                  <el-select
+                    v-if="field.kind === 'enum'"
+                    :model-value="valueOf(row, field.key)"
+                    size="small"
+                    :clearable="!field.required"
+                    :data-field="`${row.name}.${field.key}`"
+                    @update:model-value="(value) => setArg(row, field.key, value)"
+                  >
+                    <el-option
+                      v-for="option in field.spec.enum"
+                      :key="String(option)"
+                      :label="String(option)"
+                      :value="option"
+                    />
+                  </el-select>
+
+                  <el-select
+                    v-else-if="field.kind === 'boolean'"
+                    :model-value="valueOf(row, field.key)"
+                    size="small"
+                    :clearable="!field.required"
+                    :data-field="`${row.name}.${field.key}`"
+                    @update:model-value="(value) => setArg(row, field.key, value)"
+                  >
+                    <el-option :label="'true'" :value="true" />
+                    <el-option :label="'false'" :value="false" />
+                  </el-select>
+
+                  <el-input-number
+                    v-else-if="field.kind === 'number'"
+                    :model-value="valueOf(row, field.key)"
+                    size="small"
+                    :controls="false"
+                    class="field__number"
+                    :data-field="`${row.name}.${field.key}`"
+                    @update:model-value="(value) => setArg(row, field.key, value)"
+                  />
+
+                  <el-input
+                    v-else-if="field.kind === 'string'"
+                    :model-value="textOf(row, field.key)"
+                    size="small"
+                    clearable
+                    :placeholder="field.required ? t('aiDemo.fieldRequired') : ''"
+                    :data-field="`${row.name}.${field.key}`"
+                    @update:model-value="(value) => setArg(row, field.key, value)"
+                  />
+
+                  <template v-else>
+                    <el-input
+                      :model-value="jsonTextOf(row, field.key)"
+                      type="textarea"
+                      :rows="2"
+                      spellcheck="false"
+                      class="field__json"
+                      :data-field="`${row.name}.${field.key}`"
+                      @update:model-value="(value) => setJsonArg(row, field.key, value)"
+                    />
+                    <span v-if="row.errors[field.key]" class="field__error">
+                      {{ row.errors[field.key] }}
+                    </span>
+                  </template>
+                </div>
+              </div>
             </div>
 
             <ol v-if="row.attempts.length > 0" class="attempts">
@@ -479,6 +662,16 @@ onMounted(loadTools);
   border-radius: 999px;
 }
 
+/* 折叠时也把当前参数摊一行：默认值看得见，才知道能改 */
+.tool__preview {
+  padding: 0 12px 8px 34px;
+  overflow: hidden;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool__body {
   display: flex;
   flex-direction: column;
@@ -494,10 +687,80 @@ onMounted(loadTools);
   padding-top: 10px;
 }
 
-.tool__args :deep(textarea) {
+.tool__label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.tool__hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool__nofields {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+/* 参数表单：按 schema 一字段一控件，窄屏自动落成一列 */
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 14px;
+  margin-top: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field__head {
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.field__name {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.field__required {
+  font-size: 12px;
+  color: #b42318;
+}
+
+.field__kind {
+  font-size: 11px;
+}
+
+.field__number {
+  width: 100%;
+}
+
+.field__number :deep(.el-input__inner) {
+  text-align: left;
+}
+
+.field__json :deep(textarea) {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.field__error {
+  font-size: 11.5px;
+  color: #b42318;
 }
 
 .tool__result {
