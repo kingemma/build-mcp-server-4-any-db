@@ -1,0 +1,10 @@
+- insert:
+    - id: graphjin-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: graphjin
+        transport: streamable-http
+        url: http://127.0.0.1:52060/api/v1/mcp
+        headers:
+          Authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3OTMxOTc1NzMsImV4cCI6MTc5MzI0MDc3Mywic3ViIjoiMiIsInJvbGUiOiJ3cml0ZXIiLCJ1c2VyX2NvZGUiOiIxODkwMTU5OTExNEAxNjMuY29tIiwibmFtZSI6ImV2YW4ifQ.V6fAaokt2wKwOf5TPWM3BB50N_imGA-qkfaQ_OAnBog'
+        failOnStartupError: true

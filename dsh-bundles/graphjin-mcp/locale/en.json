@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GraphJin MCP Connection",
+    "description": "Connects the local GraphJin server at 127.0.0.1:52060 with a JWT identity and exposes its catalog, ontology, query, and workflow tools to the agent."
+  }
+}

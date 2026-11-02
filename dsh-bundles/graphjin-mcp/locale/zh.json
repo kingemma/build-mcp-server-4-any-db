@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GraphJin MCP 连接",
+    "description": "带上 JWT 身份连接本机 127.0.0.1:52060 的 GraphJin 服务，把它的目录检索、业务本体论、查询与工作流工具提供给智能体使用。"
+  }
+}
