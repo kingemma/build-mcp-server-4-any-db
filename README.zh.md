@@ -603,7 +603,7 @@ npm run dist:mac
 
 ### Windows 代码签名
 
-签名逻辑在 [`electron-builder.js`](./electron-builder.js)，全部由环境变量驱动。没有配置证书时
+签名逻辑在 [`electron-builder.config.js`](./electron-builder.config.js)，全部由环境变量驱动。没有配置证书时
 构建会跳过签名（`win.signExecutable: false`）并打印 `跳过 Windows 代码签名`，其它环节不受影响。
 
 | 变量 | 用途 |

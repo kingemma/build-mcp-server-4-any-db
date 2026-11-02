@@ -661,7 +661,7 @@ npm run dist:mac
 
 ### Windows code signing
 
-Signing lives in [`electron-builder.js`](./electron-builder.js) and is driven entirely by
+Signing lives in [`electron-builder.config.js`](./electron-builder.config.js) and is driven entirely by
 environment variables. With no certificate configured, the build skips signing
 (`win.signExecutable: false`) and prints `跳过 Windows 代码签名`; nothing else changes.
 

@@ -8,9 +8,14 @@
  * 2) electron-builder 一旦在 package.json 读到 "build" 字段就会完全忽略本文件
  *    （app-builder-lib/out/util/config/load.js 的 loadConfig），所以配置只能留一份。
  *
- * 文件名必须是 electron-builder.js：查找列表只认
- * electron-builder.{yml,yaml,json,json5,toml,js,cjs,ts}，写成 electron-builder.config.js
- * 会被静默忽略，打包退回全默认配置（产物落到 dist/、productName 变成 mcp-builder）。
+ * 文件名故意不叫 electron-builder.js：Windows 的 PATHEXT 含 .JS，而 cmd 解析裸命令名时
+ * 先查当前目录、再查 PATH，于是 package.json 里的 `electron-builder` 会命中仓库根目录的
+ * electron-builder.js —— 把那行配置当脚本执行，退出码 0、什么也不产出，`npm run dist:win`
+ * 看起来「成功」但没有安装包。改叫 electron-builder.config.js 后裸名字只会解析到
+ * node_modules/.bin 里的真 CLI，配置则通过 --config 显式传入（见 package.json 的 pack 脚本）。
+ *
+ * 手动打包时记得也带上：`npx electron-builder --config electron-builder.config.js --win nsis`，
+ * 否则退回全默认配置（产物落到 dist/、productName 变成 mcp-builder）。
  *
  * 签名环境变量（全部可选，缺省时跳过 Windows 代码签名）：
  *   MCPB_WIN_CERT_FILE      .pfx/.p12 证书路径
@@ -100,7 +105,7 @@ const winSigning = resolveWinSigning();
 
 module.exports = {
   appId: 'com.mcpbuilder.desktop',
-  productName: 'MCP Server Build',
+  productName: '领域本体构建系统',
   directories: {
     output: 'release',
   },
@@ -131,7 +136,7 @@ module.exports = {
   nsis: {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
-    shortcutName: 'MCP Server Build',
+    shortcutName: '领域本体构建系统',
   },
   mac: {
     target: ['dmg', 'zip'],

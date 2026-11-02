@@ -28,9 +28,10 @@
     "verify:ui": "node scripts/verify-ui.js",
     "electron:dev": "electron .",
     "electron:serve": "npm run build && electron .",
-    "dist:win": "npm run check:binaries && npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run check:binaries && npm run build && electron-builder --mac dmg zip",
-    "dist:linux": "npm run check:binaries && npm run build && electron-builder --linux AppImage deb",
+    "pack": "electron-builder --config electron-builder.config.js",
+    "dist:win": "npm run check:binaries && npm run build && npm run pack -- --win nsis",
+    "dist:mac": "npm run check:binaries && npm run build && npm run pack -- --mac dmg zip",
+    "dist:linux": "npm run check:binaries && npm run build && npm run pack -- --linux AppImage deb",
     "sign:cert": "node scripts/generate-signing-cert.js",
     "gen:icons": "node scripts/generate-brand-icons.js"
   },
