@@ -45,7 +45,7 @@ const {
   validateConnectionFields,
 } = require('./db-types');
 const { ensureKeystoreKey } = require('./keystore');
-const { OntologyStore } = require('./ontology');
+const { OntologyStore, OntologyStagingStore } = require('./ontology');
 const { seedDemoOntology } = require('./demo-ontology');
 const { DatabaseAccessStore } = require('./database-access');
 const { lintOntology, buildTableIndex } = require('./ontology-lint');
@@ -64,6 +64,8 @@ const { dataFile } = require('./paths');
 const { executeGraphql } = require('./graphql-http');
 const { createMcpGateway } = require('./mcp-gateway');
 const { loadSecret, signToken } = require('./jwt');
+const { listLlmModels, saveLlmModels, removeLlmModel, getLlmModelConfig, getDefaultLlmModelConfig, ensureDefaultLlmModels } = require('./llm');
+const { generateOntology } = require('./ontology-generate');
 const { McpClient } = require('./mcp-client');
 
 /** 同一个 GraphJin 地址 + 角色复用一条 MCP 会话，避免每次调用都重新握手 */
@@ -570,6 +572,7 @@ function createRouter({
   snapshots = null,
   jwtSecret = null,
   ontology = null,
+  ontologyStaging = null,
   databaseAccess = null,
   selfPort = null,
 }) {
@@ -715,6 +718,28 @@ function createRouter({
     if (!ontology) throw RpcError.invalidParams('本体论存储未初始化');
     return ontology;
   };
+
+  /** 草稿存储：生成 / 审核都要它；没装配时报错，别静默丢草稿 */
+  const ontologyStagingStore = () => {
+    if (!ontologyStaging) throw RpcError.invalidParams('本体论草稿存储未初始化');
+    return ontologyStaging;
+  };
+
+  /** 草稿行 → 正式条目：丢掉草稿专属字段（id / batchId / 时间戳） */
+  function promoteFromStaging(row) {
+    return {
+      database: row.database,
+      kind: row.kind,
+      name: row.name,
+      aliases: row.aliases ?? [],
+      definition: row.definition ?? '',
+      tables: row.tables ?? [],
+      expression: row.expression ?? '',
+      severity: row.severity ?? 'info',
+      payload: row.payload ?? {},
+      facets: row.facets ?? [],
+    };
+  }
 
   /**
    * 体检用的 schema 来源。
@@ -988,6 +1013,68 @@ function createRouter({
         database: typeof params?.database === 'string' && params.database !== '' ? params.database : null,
       });
       return { ...proposed, schemaSource: source };
+    })
+    // LLM 生成：把 schema 交给模型产出六类本体论候选，形状与 scaffold 平行。
+    // 关键：先落草稿表（ontology_staging），不直接进正式库——必须人工「审核通过」才升舱。
+    // 模型取传入的 modelId；不传则取默认（或第一个）。未配置任何模型直接报错，不空跑。
+    .register('ontology.generate', async (params) => {
+      const { schema, source } = await resolveLintSchema(params);
+      const database =
+        typeof params?.database === 'string' && params.database !== ''
+          ? params.database
+          : schema?.database ?? '';
+      const modelConfig = getLlmModelConfig(params?.modelId) ?? getDefaultLlmModelConfig();
+      if (!modelConfig) {
+        throw RpcError.invalidParams('未配置任何 LLM 模型，请先在「设置 → LLM 设置」中添加');
+      }
+      const result = await generateOntology({ schema, database, modelConfig, schemaSource: source });
+      // 先清掉这个库的旧草稿，再落新一批：草稿永远等于最新一次生成
+      const batchId = `gen-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      ontologyStagingStore().clearDatabase(database);
+      ontologyStagingStore().stage(batchId, database, result.entries);
+      return {
+        batchId,
+        database,
+        entries: ontologyStagingStore().list({ database }),
+        counts: result.counts,
+        batches: result.batches,
+        model: {
+          id: modelConfig.id,
+          name: modelConfig.name,
+          kind: modelConfig.kind,
+          provider: modelConfig.provider,
+        },
+      };
+    })
+    // 草稿：LLM 生成的本体论先停在这里，经「审核通过」才进正式库。
+    // 网关只认 ontology 表，所以未审核的草稿绝不会流出去。
+    .register('ontology.staging.list', (params) => {
+      const database = typeof params?.database === 'string' ? params.database : '';
+      return { database, entries: ontologyStagingStore().list({ database }) };
+    })
+    .register('ontology.staging.approve', (params) => {
+      const id = params?.id;
+      if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
+      const row = ontologyStagingStore().get(id);
+      if (!row) throw RpcError.invalidParams(`草稿 ${id} 不存在或已审核通过`);
+      const saved = ontologyStore().save(promoteFromStaging(row));
+      ontologyStagingStore().remove(id);
+      return { saved };
+    })
+    .register('ontology.staging.approveAll', (params) => {
+      const database = typeof params?.database === 'string' ? params.database : '';
+      const rows = ontologyStagingStore().list({ database });
+      const saved = [];
+      for (const row of rows) {
+        saved.push(ontologyStore().save(promoteFromStaging(row)));
+        ontologyStagingStore().remove(row.id);
+      }
+      return { count: saved.length, saved };
+    })
+    .register('ontology.staging.reject', (params) => {
+      const id = params?.id;
+      if (!Number.isInteger(id)) throw RpcError.invalidParams('id 必须是整数');
+      return { removed: ontologyStagingStore().remove(id) };
     })
     // 值域扫描：只取一列的前若干行，去重后建议字典。
     // 用 admin 身份读：平台自己发现 schema 也是 admin；扫描本身只回低基数列的取值，
@@ -1553,6 +1640,15 @@ function createRouter({
         gateway: Boolean(gatewayUrl),
         cliCommands: buildCliCommands({ baseUrl: gatewayUrl ?? baseUrl, binPath: params?.binPath ?? 'graphjin' }),
       };
+    })
+    // LLM 连接设置：本地模型（vllm / ollama）与远端模型（deepseek / qwen / 智普 / mimo / kimi 等）。
+    // API Key 可选，落盘加密；列表只读回 hasApiKey 标记，不回明文
+    .register('llm.list', () => ({ models: listLlmModels() }))
+    .register('llm.save', (params) => ({ models: saveLlmModels(params ?? {}) }))
+    .register('llm.remove', (params) => {
+      const id = params?.id;
+      if (typeof id !== 'string' || id === '') throw RpcError.invalidParams('id 不能为空');
+      return { models: removeLlmModel(id) };
     });
 
   return router;
@@ -1672,6 +1768,10 @@ async function createBackend({ dbPath } = {}) {
   const resolvedDbPath = dbPath || process.env.MCP_BUILDER_DB || dataFile('mcp-builder.db');
   fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
 
+  // 首次启动写入两条默认模型（Ollama / vLLM），设置页开箱就有可用项。
+  // 只在配置文件不存在时写，既有用户的配置不会被覆盖。
+  ensureDefaultLlmModels();
+
   // 令牌密钥落在数据目录，首次运行自动生成；网关和 auth.token 共用同一份
   const jwtSecret = loadSecret(dataFile('jwt.secret'));
 
@@ -1679,6 +1779,7 @@ async function createBackend({ dbPath } = {}) {
   // 几张表在同一个 SQLite 文件里，各自一个连接；写入都是同步短事务，不会互相卡住
   const connections = new ConnectionStore(resolvedDbPath);
   const ontology = new OntologyStore(resolvedDbPath);
+  const ontologyStaging = new OntologyStagingStore(resolvedDbPath);
   const snapshots = new SnapshotStore(resolvedDbPath);
   const databaseAccess = new DatabaseAccessStore(resolvedDbPath);
   const supervisor = new GraphJinSupervisor();
@@ -1691,6 +1792,7 @@ async function createBackend({ dbPath } = {}) {
     snapshots,
     jwtSecret,
     ontology,
+    ontologyStaging,
     databaseAccess,
     selfPort: () => server?.address()?.port ?? 0,
   });

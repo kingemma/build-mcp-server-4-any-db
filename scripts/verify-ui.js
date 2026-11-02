@@ -993,12 +993,14 @@ async function main() {
           '权限矩阵',
           'MCP Client',
           '业务本体论',
+          '本体构建',
           '接入 AI',
           'Schema 浏览器',
           '运行状态',
           '用户与组织',
           '策略预览',
           '设置',
+          'AI Demo',
         ]),
       navOrder.join(' → ')
     );

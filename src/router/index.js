@@ -10,9 +10,11 @@ const SchemaView = () => import('../views/SchemaView.vue');
 const McpView = () => import('../views/McpView.vue');
 const PermissionsView = () => import('../views/PermissionsView.vue');
 const OntologyView = () => import('../views/OntologyView.vue');
+const OntologyBuildView = () => import('../views/OntologyBuildView.vue');
 const UsersView = () => import('../views/UsersView.vue');
 const PolicyView = () => import('../views/PolicyView.vue');
 const SettingsView = () => import('../views/SettingsView.vue');
+const AiDemoView = () => import('../views/AiDemoView.vue');
 
 // meta 只存 i18n key 与图标名：切换语言时导航与顶栏标题要跟着变。
 // icon 对应 components/NavIcon.vue 里的键，侧栏折叠成图标后靠它区分页面。
@@ -27,6 +29,9 @@ export const routes = [
   { path: '/permissions', name: 'permissions', component: PermissionsView, meta: { titleKey: 'nav.permissions.title', hintKey: 'nav.permissions.hint', icon: 'grid' } },
   { path: '/mcp', name: 'mcp', component: McpView, meta: { titleKey: 'nav.mcp.title', hintKey: 'nav.mcp.hint', icon: 'terminal' } },
   { path: '/ontology', name: 'ontology', component: OntologyView, meta: { titleKey: 'nav.ontology.title', hintKey: 'nav.ontology.hint', icon: 'book' } },
+  // 本体构建：和「本体」并列的独立入口。前者维护、后者借助 LLM 从 schema 起草，
+  // 两者操作同一份本体库，但动线不同（一个是手写、一个是生成），拆开更像两个页面。
+  { path: '/ontology-build', name: 'ontologyBuild', component: OntologyBuildView, meta: { titleKey: 'nav.ontologyBuild.title', hintKey: 'nav.ontologyBuild.hint', icon: 'brain' } },
   { path: '/connect', name: 'connect', component: ConnectView, meta: { titleKey: 'nav.connect.title', hintKey: 'nav.connect.hint', icon: 'link' } },
   // 以下不是向导步骤，归到动线之后；Schema 放在这组最前——连接完最常看的就是它
   { path: '/schema', name: 'schema', component: SchemaView, meta: { titleKey: 'nav.schema.title', hintKey: 'nav.schema.hint', icon: 'table' } },
@@ -34,6 +39,9 @@ export const routes = [
   { path: '/users', name: 'users', component: UsersView, meta: { titleKey: 'nav.users.title', hintKey: 'nav.users.hint', icon: 'users' } },
   { path: '/policy', name: 'policy', component: PolicyView, meta: { titleKey: 'nav.policy.title', hintKey: 'nav.policy.hint', icon: 'file-check' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { titleKey: 'nav.settings.title', hintKey: 'nav.settings.hint', icon: 'sliders' } },
+  // AI Demo 从「设置」里独立出来：它跑 MCP 工具自测，和版本/端口设置不是一类事。
+  // 放在动线之后、作为最后一个运维类入口，不干扰向导五步的顺序。
+  { path: '/ai-demo', name: 'aiDemo', component: AiDemoView, meta: { titleKey: 'nav.aiDemo.title', hintKey: 'nav.aiDemo.hint', icon: 'sparkles' } },
 ];
 
 // 桌面端用 file:// 加载打包产物，history 模式在 file:// 下无法工作，故统一走 hash

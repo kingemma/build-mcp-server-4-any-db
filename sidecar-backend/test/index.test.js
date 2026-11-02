@@ -15,7 +15,7 @@ const {
 } = require('../src/index');
 const { ORIGIN_START, STATUS_CONNECTED, ConnectionStore } = require('../src/connections');
 const { UserStore } = require('../src/users');
-const { OntologyStore } = require('../src/ontology');
+const { OntologyStore, OntologyStagingStore } = require('../src/ontology');
 
 async function withServer(run) {
   const store = new UserStore(':memory:');
@@ -523,15 +523,17 @@ test('probeDatabases 把 catalog 读不到记在该库上，不影响其它库',
 async function withOntologyServer(run) {
   const store = new UserStore(':memory:');
   const ontology = new OntologyStore(':memory:');
-  const router = createRouter({ store, ontology });
+  const ontologyStaging = new OntologyStagingStore(':memory:');
+  const router = createRouter({ store, ontology, ontologyStaging });
   const server = await startHttpServer({ router, port: 0 });
   const { port } = server.address();
   try {
-    await run({ port, ontology });
+    await run({ port, ontology, ontologyStaging });
   } finally {
     await new Promise((resolve) => server.close(resolve));
     store.close();
     ontology.close();
+    ontologyStaging.close();
   }
 }
 
@@ -555,6 +557,58 @@ test('ontology.list 支持按库过滤：列表与渲染结果都不串库', asy
     // 渲染也跟着过滤：拿错库的语境比拿不到更危险
     assert.match(scoped.result.rendered, /甲/);
     assert.doesNotMatch(scoped.result.rendered, /乙/);
+  });
+});
+
+test('ontology.staging.* 通过 RPC 可用：列表 → 审核升舱', async () => {
+  await withOntologyServer(async ({ port, ontology, ontologyStaging }) => {
+    ontologyStaging.clearDatabase('app');
+    ontologyStaging.stage('b1', 'app', [
+      {
+        kind: 'term',
+        name: '甲',
+        definition: 'x',
+        aliases: [],
+        tables: [],
+        expression: '',
+        severity: 'info',
+        payload: {},
+        facets: [],
+      },
+    ]);
+
+    const listed = await (
+      await post(port, {
+        jsonrpc: '2.0',
+        id: 30,
+        method: 'ontology.staging.list',
+        params: { database: 'app' },
+      })
+    ).json();
+    assert.strictEqual(listed.result.entries.length, 1);
+    const id = listed.result.entries[0].id;
+
+    const approved = await (
+      await post(port, {
+        jsonrpc: '2.0',
+        id: 31,
+        method: 'ontology.staging.approve',
+        params: { id },
+      })
+    ).json();
+    assert.ok(approved.result.saved.id);
+
+    // 升舱后草稿清空，正式库里出现该条
+    const after = await (
+      await post(port, {
+        jsonrpc: '2.0',
+        id: 32,
+        method: 'ontology.staging.list',
+        params: { database: 'app' },
+      })
+    ).json();
+    assert.strictEqual(after.result.entries.length, 0);
+    assert.ok(ontology.list().some((entry) => entry.name === '甲'));
   });
 });
 

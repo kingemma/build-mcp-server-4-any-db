@@ -490,8 +490,125 @@ class OntologyStore {
   }
 }
 
+/**
+ * 草稿表：LLM 生成的本体论先落这里，经人工「审核通过」才升舱进 ontology。
+ *
+ * 为什么要一张独立表而不是前端拿着：草稿要在刷新后还在，且和正式库彻底隔离——
+ * 没审核的条目绝不能从 ontology 流出去（网关只认 ontology 表）。
+ * 形状与 ontology 完全平行，只是多了 batch_id 标这一批是哪次生成出来的。
+ */
+const STAGING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS ontology_staging (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id TEXT NOT NULL DEFAULT '',
+  database TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  aliases TEXT NOT NULL DEFAULT '[]',
+  definition TEXT NOT NULL DEFAULT '',
+  tables TEXT NOT NULL DEFAULT '[]',
+  expression TEXT NOT NULL DEFAULT '',
+  severity TEXT NOT NULL DEFAULT 'info',
+  payload TEXT NOT NULL DEFAULT '{}',
+  facets TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ontology_staging_db ON ontology_staging(database);
+`;
+
+class OntologyStagingStore {
+  constructor(dbPath) {
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec('PRAGMA busy_timeout = 5000');
+    this.db.exec(STAGING_SCHEMA);
+  }
+
+  /** 关闭连接（测试 / 退出时用，与 OntologyStore 对齐） */
+  close() {
+    this.db.close();
+  }
+
+  /** 清掉某库的待审草稿：重新生成时先清，草稿永远等于最新这一批 */
+  clearDatabase(database) {
+    this.db.prepare('DELETE FROM ontology_staging WHERE database = ?').run(database);
+  }
+
+  /** 把一批生成结果落草稿表；entries 已是按类别校验过的形状 */
+  stage(batchId, database, entries) {
+    const now = new Date().toISOString();
+    const insert = this.db.prepare(
+      `INSERT INTO ontology_staging
+        (batch_id, database, kind, name, aliases, definition, tables, expression, severity, payload, facets, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const e of entries) {
+      insert.run(
+        batchId,
+        database,
+        e.kind,
+        e.name,
+        JSON.stringify(e.aliases ?? []),
+        e.definition ?? '',
+        JSON.stringify(e.tables ?? []),
+        e.expression ?? '',
+        e.severity ?? 'info',
+        JSON.stringify(e.payload ?? {}),
+        JSON.stringify(e.facets ?? []),
+        now,
+        now
+      );
+    }
+  }
+
+  list({ database, kind = null } = {}) {
+    const clauses = ['database = ?'];
+    const values = [database];
+    if (kind) {
+      clauses.push('kind = ?');
+      values.push(kind);
+    }
+    const where = ` WHERE ${clauses.join(' AND ')}`;
+    return this.db
+      .prepare(`SELECT * FROM ontology_staging${where} ORDER BY kind, id`)
+      .all(...values)
+      .map((row) => this.#shape(row));
+  }
+
+  get(id) {
+    if (!Number.isInteger(id)) throw new OntologyError('id 必须是整数');
+    const row = this.db.prepare('SELECT * FROM ontology_staging WHERE id = ?').get(id);
+    return row ? this.#shape(row) : null;
+  }
+
+  remove(id) {
+    if (!Number.isInteger(id)) throw new OntologyError('id 必须是整数');
+    return this.db.prepare('DELETE FROM ontology_staging WHERE id = ?').run(id).changes > 0;
+  }
+
+  #shape(row) {
+    return {
+      id: row.id,
+      batchId: row.batch_id,
+      database: row.database,
+      kind: row.kind,
+      name: row.name,
+      aliases: parseList(row.aliases),
+      definition: row.definition,
+      tables: parseList(row.tables),
+      expression: row.expression,
+      severity: row.severity,
+      payload: safeObject(row.payload),
+      facets: safeJson(row.facets),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+}
+
 module.exports = {
   OntologyStore,
+  OntologyStagingStore,
   OntologyError,
   KINDS,
   SEVERITIES,
