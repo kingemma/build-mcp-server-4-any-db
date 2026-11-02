@@ -954,7 +954,7 @@ async function main() {
     );
     const windowTitle = await cdp.evaluate(`document.title`);
     // 产品名在 App.vue 的 BRAND_NAME 里；改名时这条断言要跟着改，别让它变成假红
-    record('窗口标题显示项目名', windowTitle === 'UI Verify — MCP Server with Ontology Build', windowTitle);
+    record('窗口标题显示项目名', windowTitle === 'UI Verify — 领域本体构建系统', windowTitle);
 
     // 切语言要整棵树重渲染：顶部标题 + 表格表头都跟着变，防漏翻
     await switchLocale(cdp, 'en-US');

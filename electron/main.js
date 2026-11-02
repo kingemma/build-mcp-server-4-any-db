@@ -1,5 +1,5 @@
 /**
- * MCP Server Build 主进程：起后端、注入端口、退出前停 GraphJin。
+ * 领域本体构建系统 主进程：起后端、注入端口、退出前停 GraphJin。
  *
  * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */
@@ -18,7 +18,7 @@ const IS_DEV = !app.isPackaged;
 const TITLEBAR_HEIGHT = 40;
 
 /** 产品名：还没打开项目时窗口标题只用它 */
-const APP_TITLE = 'MCP Server Build';
+const APP_TITLE = '领域本体构建系统';
 
 /** 开发态渲染地址 */
 const DEV_URL = process.env.MCP_BUILDER_DEV_URL || 'http://127.0.0.1:1420/';

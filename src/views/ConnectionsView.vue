@@ -21,7 +21,7 @@ const form = reactive({
   connectionString: '',
   isDefault: true,
   projectDir: 'projects/app',
-  appName: 'MCP Server Build',
+  appName: '领域本体构建系统',
 });
 
 const isTesting = ref(false);

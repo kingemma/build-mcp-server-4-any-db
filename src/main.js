@@ -1,5 +1,5 @@
 /**
- * MCP Server Build 渲染进程入口。
+ * 领域本体构建系统 渲染进程入口。
  *
  * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */

@@ -24,7 +24,7 @@ const locale = computed({
 const elementLocale = computed(() => ELEMENT_LOCALES[locale.value]);
 
 /** 品牌文案：侧栏 brand 与 Windows 自绘标题带共用一份，避免两处各写一遍后漂移 */
-const BRAND_NAME = 'MCP Server with Ontology Build';
+const BRAND_NAME = '领域本体构建系统';
 const BRAND_TAG = 'any database, one console';
 
 /** 产品名：没打开项目时窗口标题只用它 */
