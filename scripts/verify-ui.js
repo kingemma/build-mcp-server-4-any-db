@@ -1772,6 +1772,17 @@ async function main() {
       (await cdp.evaluate(`document.querySelector('.entries')?.textContent ?? ''`)).includes('买家')
     );
 
+    // 抽屉不再随进页面 / 切库自动展开：显式点「新增条目」打开表单，后面的用例都在表单上操作
+    await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.panel__actions button')]
+        .find((item) => item.textContent.trim() === '新增条目');
+      button?.click();
+      return button ? 'ok' : 'missing';
+    })()`);
+    await waitFor('新增抽屉展开', async () =>
+      (await cdp.evaluate(`document.querySelectorAll('.form .field').length`)) > 0
+    );
+
     const tablesField = await cdp.evaluate(`(() => {
       const field = [...document.querySelectorAll('.form .field')]
         .find((item) => item.textContent.includes('关联表'));

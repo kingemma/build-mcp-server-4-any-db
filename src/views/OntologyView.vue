@@ -49,8 +49,8 @@ const isScanning = ref(false);
 const isEvaluating = ref(false);
 const isCompiling = ref(false);
 const isApplyingRules = ref(false);
-/** 起草后把表单滚进视野：候选在表单上方，不滚一下用户会以为没反应 */
-const formSection = ref(null);
+/** 新增 / 编辑在右侧抽屉里进行；表单与「送给 AI 的语境」预览同处一栏 */
+const drawerVisible = ref(false);
 
 /**
  * 表单状态是扁平的：payload 在界面上摊成一个个输入框，保存时再按 kind 组装。
@@ -208,9 +208,19 @@ const relationshipOptions = computed(() => {
 
 const severityLabel = (severity) => t(`ontology.severities.${severity}`);
 
-function startCreate() {
+/**
+ * 静默复位表单：初始加载、换库时用。
+ * 不展开抽屉——进入页面就把侧边栏弹出来会挡住列表，只有用户点「新增」「编辑」才开。
+ */
+function resetForm() {
   form.value = { ...emptyForm(), database: activeDatabase.value, kind: activeKind.value };
   editing.value = null;
+}
+
+/** 点「新增」时才展开抽屉 */
+function startCreate() {
+  resetForm();
+  drawerVisible.value = true;
 }
 
 /**
@@ -268,6 +278,7 @@ function startEdit(entry) {
     facets: (entry.facets ?? []).map((facet) => `${facet.key}=${facet.value}`).join('\n'),
   };
   editing.value = entry.id;
+  drawerVisible.value = true;
 }
 
 /** `取值=人话` 每行一条；没有等号就把整行当取值 */
@@ -431,7 +442,10 @@ async function drop(entry) {
   try {
     await store.removeOntology(entry.id);
     ElMessage.success(t('ontology.messages.removed', { name: entry.name }));
-    if (editing.value === entry.id) startCreate();
+    if (editing.value === entry.id) {
+      editing.value = null;
+      drawerVisible.value = false;
+    }
   } catch (error) {
     ElMessage.error(error.message);
   }
@@ -518,8 +532,6 @@ function draftFrom(item) {
     form.value.column = item.column ?? '';
     form.value.aliases = (item.aliases ?? []).join('、');
   }
-
-  formSection.value?.scrollIntoView();
 }
 
 /**
@@ -606,7 +618,7 @@ onMounted(async () => {
   await Promise.all([store.loadOntology(), store.loadSchema(), store.loadConnections()]);
   // 默认落在实例的当前库上，而不是字母序第一个：用户此刻在看的库就是他要在维护的库
   activeDatabase.value = store.activeDatabase || databaseOptions.value[0] || '';
-  startCreate();
+  resetForm();
 });
 </script>
 
@@ -620,7 +632,7 @@ onMounted(async () => {
             v-model="activeDatabase"
             size="small"
             style="width: 240px"
-            @change="startCreate"
+            @change="resetForm"
           >
             <el-option
               v-for="name in databaseOptions"
@@ -666,9 +678,14 @@ onMounted(async () => {
     <section class="panel">
       <div class="panel__head">
         <span class="panel__title">{{ t('ontology.entries') }}</span>
-        <span class="mono-dim">
-          {{ t('ontology.count', { count: store.ontology.length }) }}
-        </span>
+        <div class="panel__actions">
+          <span class="mono-dim">
+            {{ t('ontology.count', { count: store.ontology.length }) }}
+          </span>
+          <el-button size="small" type="primary" @click="startCreate">
+            {{ t('ontology.create') }}
+          </el-button>
+        </div>
       </div>
       <div class="panel__body">
         <div class="kinds" role="tablist">
@@ -749,25 +766,30 @@ onMounted(async () => {
       @apply="applyRules"
     />
 
-    <OntologyForm
-      ref="formSection"
-      :form="form"
-      :editing="editing"
-      :database-options="databaseOptions"
-      :table-options="tableOptions"
-      :column-options="columnOptions"
-      :relationship-options="relationshipOptions"
-      :saving="isSaving"
-      :scanning="isScanning"
-      @save="save"
-      @reset="startCreate"
-      @scan="scanValues"
-    />
-
-    <RenderedPanel :text="store.ontologyRendered" @copy="copyRendered" />
     </template>
 
     <OntologyGraph v-else :entries="databaseEntries" :database="activeDatabase" />
+
+    <el-drawer
+      v-model="drawerVisible"
+      :title="editing ? t('ontology.editing', { name: form.name || '' }) : t('ontology.create')"
+      size="560px"
+    >
+      <OntologyForm
+        :form="form"
+        :editing="editing"
+        :database-options="databaseOptions"
+        :table-options="tableOptions"
+        :column-options="columnOptions"
+        :relationship-options="relationshipOptions"
+        :saving="isSaving"
+        :scanning="isScanning"
+        @save="save"
+        @reset="startCreate"
+        @scan="scanValues"
+      />
+      <RenderedPanel :text="store.ontologyRendered" @copy="copyRendered" />
+    </el-drawer>
   </div>
 </template>
 
@@ -896,5 +918,11 @@ onMounted(async () => {
 
 .entries__actions {
   white-space: nowrap;
+}
+
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>
