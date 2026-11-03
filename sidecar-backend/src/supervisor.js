@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { GraphJinProcess, pickFreePort } = require('./graphjin-process');
+const { GraphJinProcess, canBindPort, pickFreePort } = require('./graphjin-process');
 const { createProject, ensureGatewayConfig, mergeProjectSources } = require('./project');
 const { isLegacyConfig, migrateLegacyProject } = require('./migrate');
 const { keystoreEnv } = require('./keystore');
@@ -79,6 +79,8 @@ class GraphJinSupervisor {
     this.lastError = null;
     /** 最近一次 legacy → source 迁移的结果（成功或失败摘要） */
     this.migration = null;
+    /** 最近一次启动前换端口的记录 { from, to }，没换过为 null */
+    this.portRebind = null;
   }
 
   #makeProcess() {
@@ -117,6 +119,8 @@ class GraphJinSupervisor {
     fs.mkdirSync(dir, { recursive: true });
     const devYaml = path.join(dir, 'dev.yml');
     this.projectDir = dir;
+    // 每次启动重置：只在本次启动前校正过端口才留记录
+    this.portRebind = null;
 
     if (!fs.existsSync(devYaml)) {
       if (!databases || Object.keys(databases).length === 0) {
@@ -129,10 +133,16 @@ class GraphJinSupervisor {
         sources: toSources(databases),
         webUi,
       });
-    } else if (isLegacyConfig(fs.readFileSync(devYaml, 'utf8'))) {
-      await this.#migrateLegacy(devYaml);
-    } else if (databases && Object.keys(databases).length > 0) {
-      mergeProjectSources(devYaml, databases);
+    } else {
+      // 端口是很久以前挑的：之后系统可能把它划进保留区间，或被别的程序占走，
+      // 两种情况 GraphJin 都会 bind 失败直接退出 —— 迁移临时实例同样受影响，
+      // 所以先探一次、必要时换端口落盘，再走后续分支。
+      await this.#ensureUsablePort(devYaml);
+      if (isLegacyConfig(fs.readFileSync(devYaml, 'utf8'))) {
+        await this.#migrateLegacy(devYaml);
+      } else if (databases && Object.keys(databases).length > 0) {
+        mergeProjectSources(devYaml, databases);
+      }
     }
     // 老项目也要补上身份变量与回环绑定，否则网关和行过滤都不生效
     ensureGatewayConfig(devYaml);
@@ -144,6 +154,27 @@ class GraphJinSupervisor {
     await this.process.start();
     this.startedAt = new Date().toISOString();
     return this.status();
+  }
+
+  /**
+   * 校正 dev.yml 里的 host_port：当前端口 bind 不通就换一个空闲端口写回去。
+   *
+   * 换端口必须落盘 —— GraphJin 只读 dev.yml，端口不在命令行参数里。
+   *
+   * @param {string} devYaml
+   * @returns {Promise<void>}
+   */
+  async #ensureUsablePort(devYaml) {
+    const text = fs.readFileSync(devYaml, 'utf8');
+    const matched = /^host_port\s*:\s*\S*:(\d+)\s*$/m.exec(text);
+    if (!matched) return;
+
+    const current = Number(matched[1]);
+    if (await canBindPort(current)) return;
+
+    const port = await pickFreePort();
+    fs.writeFileSync(devYaml, text.replace(/^host_port\s*:.*$/m, `host_port: 127.0.0.1:${port}`), 'utf8');
+    this.portRebind = { from: current, to: port };
   }
 
   /**
@@ -218,6 +249,7 @@ class GraphJinSupervisor {
       restarts: this.restartCount,
       lastError: this.lastError,
       migration: this.migration,
+      portRebind: this.portRebind,
     };
   }
 

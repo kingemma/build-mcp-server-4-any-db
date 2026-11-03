@@ -3,10 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
 const { GraphJinSupervisor, SupervisorError, resolveGraphJinBinary } = require('../src/supervisor');
+const { pickFreePort } = require('../src/graphjin-process');
 
 /** 注入用的假进程工厂，可手动触发崩溃 */
 function fakeFactory(state) {
@@ -267,4 +269,68 @@ test('迁移失败时回滚 dev.yml 并抛出明确错误', async () => {
   assert.strictEqual(supervisor.status().migration.ok, false);
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/** 占住一个端口，模拟「端口被别的程序占用」 */
+function occupyPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+test('dev.yml 端口已被占用时，启动前换端口并落盘', async () => {
+  const dir = tempDir();
+  const devYaml = path.join(dir, 'dev.yml');
+  const server = await occupyPort();
+  const { port } = server.address();
+
+  try {
+    fs.writeFileSync(
+      devYaml,
+      `app_name: Demo\nhost_port: 127.0.0.1:${port}\nsources:\n  - name: app\n    type: sqlite\n    path: app.db\n`,
+      'utf8'
+    );
+
+    const { supervisor, state } = makeSupervisor();
+    const status = await supervisor.start({ projectDir: dir });
+
+    assert.strictEqual(state.started, 1);
+    assert.strictEqual(status.portRebind.from, port);
+    assert.notStrictEqual(status.portRebind.to, port);
+    // GraphJin 只认 dev.yml，换端口必须落盘才算生效
+    assert.match(
+      fs.readFileSync(devYaml, 'utf8'),
+      new RegExp(`^host_port: 127\\.0\\.0\\.1:${status.portRebind.to}$`, 'm')
+    );
+
+    await supervisor.stop();
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dev.yml 端口可用时保持原端口', async () => {
+  const dir = tempDir();
+  const devYaml = path.join(dir, 'dev.yml');
+  const port = await pickFreePort();
+  fs.writeFileSync(
+    devYaml,
+    `app_name: Demo\nhost_port: 127.0.0.1:${port}\nsources:\n  - name: app\n    type: sqlite\n    path: app.db\n`,
+    'utf8'
+  );
+
+  try {
+    const { supervisor } = makeSupervisor();
+    const status = await supervisor.start({ projectDir: dir });
+
+    assert.strictEqual(status.portRebind, null);
+    assert.match(fs.readFileSync(devYaml, 'utf8'), new RegExp(`^host_port: 127\\.0\\.0\\.1:${port}$`, 'm'));
+
+    await supervisor.stop();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

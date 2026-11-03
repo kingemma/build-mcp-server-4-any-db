@@ -145,16 +145,67 @@ class GraphJinProcess {
   }
 }
 
-/** 取一个空闲端口，供 dev.yml 的 host_port 使用 */
-function pickFreePort() {
-  return new Promise((resolve, reject) => {
+/**
+ * 候选端口段。刻意避开 Windows 的动态端口段（49152+）：Hyper-V / WSL / Docker
+ * 会整段占走并登记进 `netsh int ipv4 show excludedportrange`，被登记的端口 bind
+ * 报 EACCES（"forbidden by its access permissions"），GraphJin 启动即退出。
+ */
+const PORT_RANGE = { min: 20_000, max: 29_999 };
+/** 最多试探多少个候选端口，避免极端环境下死循环 */
+const PORT_PROBE_LIMIT = 200;
+
+/**
+ * 试着在指定端口上 bind 一次。
+ *
+ * 比 listen(0) 更可靠：bind 成功同时说明「没被占用」和「没被系统保留」。
+ *
+ * @param {number} port
+ * @returns {Promise<boolean>}
+ */
+function probeBind(port) {
+  return new Promise((resolve) => {
     const server = net.createServer();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => resolve(true));
     });
   });
 }
 
-module.exports = { GraphJinProcess, GraphJinProcessError, pickFreePort, stripAnsi };
+/**
+ * 端口当前能否被本机绑定，供启动前校正 dev.yml 里的旧端口。
+ *
+ * @param {number} port
+ * @returns {Promise<boolean>}
+ */
+async function canBindPort(port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return false;
+  return probeBind(port);
+}
+
+/**
+ * 取一个空闲端口，供 dev.yml 的 host_port 使用。
+ *
+ * @returns {Promise<number>}
+ */
+async function pickFreePort() {
+  const span = PORT_RANGE.max - PORT_RANGE.min + 1;
+  const offset = Math.floor(Math.random() * span);
+  const attempts = Math.min(PORT_PROBE_LIMIT, span);
+
+  for (let i = 0; i < attempts; i += 1) {
+    const port = PORT_RANGE.min + ((offset + i) % span);
+    if (await probeBind(port)) return port;
+  }
+  throw new GraphJinProcessError(
+    `在 ${PORT_RANGE.min}-${PORT_RANGE.max} 内找不到可用端口，请检查系统端口保留策略`
+  );
+}
+
+module.exports = {
+  GraphJinProcess,
+  GraphJinProcessError,
+  canBindPort,
+  pickFreePort,
+  stripAnsi,
+};
