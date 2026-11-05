@@ -105,7 +105,7 @@ const winSigning = resolveWinSigning();
 
 module.exports = {
   appId: 'com.mcpbuilder.desktop',
-  productName: '领域本体构建系统',
+  productName: 'MCP Server with Ontology Build Platform',
   directories: {
     output: 'release',
   },
@@ -136,7 +136,7 @@ module.exports = {
   nsis: {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
-    shortcutName: '领域本体构建系统',
+    shortcutName: 'MCP Server with Ontology Build Platform',
   },
   mac: {
     target: ['dmg', 'zip'],

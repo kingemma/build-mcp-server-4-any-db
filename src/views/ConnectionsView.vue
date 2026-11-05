@@ -21,7 +21,8 @@ const form = reactive({
   connectionString: '',
   isDefault: true,
   projectDir: 'projects/app',
-  appName: '领域本体构建系统',
+  // 新建项目的默认应用名取当前语言的产品名：品牌名两语不同，写死会把另一种语言带进 dev.yml
+  appName: t('app.brand'),
 });
 
 const isTesting = ref(false);

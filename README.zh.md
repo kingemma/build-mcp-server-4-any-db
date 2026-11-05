@@ -1,10 +1,10 @@
-# MCP Server Build
+# 领域本体构建系统
 
 **可视化配置 GraphJin，把任意数据库变成 MCP Server。**
 
 中文 | [English](./README.md) · [使用向导](./docs/GUIDE.md) · [功能进度](./docs/FEATURES.md)
 
-MCP Server Build 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
+领域本体构建系统 是一个桌面端工具：填好数据库连接，它会启动 GraphJin、发现表结构，并把
 权限写成 GraphJin 的 `sources` 配置（数据源级读 / 写 / 删档位 + 角色读规则）。最终产出的
 是一个可直接接入 Claude、Cursor 等 MCP 客户端的 HTTP 端点（`/api/v1/mcp`），不需要手写
 YAML，也不需要理解 GraphJin 的配置细节。
@@ -492,7 +492,7 @@ macOS 关闭窗口只隐藏窗口，退出请用 `Cmd+Q`。开发态数据落在
 `userData/data`（Windows 通常是 `%APPDATA%\mcp-builder\data`）。
 
 窗口标题会显示当前项目名（启动参数里的应用名，落在项目 `dev.yml` 的 `app_name`），
-形如 `Demo Finance & Inventory — MCP Server Build`；Windows 用的是自绘标题栏，项目名居中画在那条
+形如 `Demo Finance & Inventory — 领域本体构建系统`；Windows 用的是自绘标题栏，项目名居中画在那条
 40px 标题带上，没打开项目时回落到产品名。
 
 ### 5. 纯浏览器调试（可选）
@@ -630,7 +630,7 @@ npm run dist:win
 说明签名本身有效，只是根证书不受信任：
 
 ```powershell
-Get-AuthenticodeSignature "release/win-unpacked/MCP Server Build.exe" |
+Get-AuthenticodeSignature "release/win-unpacked/MCP Server with Ontology Build Platform.exe" |
   Format-List Status, SignerCertificate
 ```
 

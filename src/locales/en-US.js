@@ -6,7 +6,7 @@
  */
 export default {
   app: {
-    brand: '领域本体构建系统',
+    brand: 'MCP Server with Ontology Build Platform',
     tagline: 'any database or business, one console',
     backend: 'Backend {port}',
     backendMissing: 'not connected',
@@ -416,7 +416,7 @@ export default {
   },
 
   welcome: {
-    eyebrow: '领域本体构建系统',
+    eyebrow: 'MCP Server with Ontology Build Platform',
     title: 'A permissioned MCP server for any database with a business ontology',
     tagline:
       'The gap between "my AI can reach the database" and "it only sees what it should" is a permission gate. Connect → set permissions → plug into your client, with verification and rollback at every step.',

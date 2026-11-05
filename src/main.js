@@ -1,5 +1,5 @@
 /**
- * 领域本体构建系统 渲染进程入口。
+ * MCP Server with Ontology Build Platform 渲染进程入口。
  *
  * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */

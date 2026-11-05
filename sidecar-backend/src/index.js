@@ -1,5 +1,5 @@
 /**
- * MCP Server Build 后端入口：JSON-RPC 方法表 + HTTP / stdio 双传输。
+ * MCP Server with Ontology Build Platform 后端入口：JSON-RPC 方法表 + HTTP / stdio 双传输。
  *
  * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */

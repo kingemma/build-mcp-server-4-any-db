@@ -23,26 +23,32 @@ const locale = computed({
 });
 const elementLocale = computed(() => ELEMENT_LOCALES[locale.value]);
 
-/** 品牌文案：侧栏 brand 与 Windows 自绘标题带共用一份，避免两处各写一遍后漂移 */
-const BRAND_NAME = '领域本体构建系统';
+/**
+ * 品牌文案：侧栏 brand、自绘标题带与窗口标题共用一份。
+ * 走 i18n 而不是常量 —— 中英文名字长度差得远（13 字 vs 36 字符），
+ * 写死一种语言会让另一种界面显示错名字。
+ */
+const BRAND_NAME = computed(() => t('app.brand'));
 const BRAND_TAG = 'any database, one console';
 
 /** 产品名：没打开项目时窗口标题只用它 */
 const APP_TITLE = BRAND_NAME;
 
 /** 窗口标题里的项目名，来源是运行实例 dev.yml 的 app_name */
-const projectName = computed(() => store.status?.appName || APP_TITLE);
+const projectName = computed(() => store.status?.appName || APP_TITLE.value);
 
 /**
  * 标题三处同步：浏览器标签、Electron 原生标题（macOS / Linux 可见）、
  * 自绘标题带（Windows 隐藏原生标题栏，只能画在页面上）。
+ *
+ * 完整标题直接交给主进程拼：品牌名随语言变，主进程若自己拼会拼出另一种语言的名字。
  */
 watch(
-  projectName,
-  (name) => {
-    const full = name === APP_TITLE ? APP_TITLE : `${name} — ${APP_TITLE}`;
+  [projectName, APP_TITLE],
+  ([name, title]) => {
+    const full = name === title ? title : `${name} — ${title}`;
     document.title = full;
-    window.mcpBuilder?.setProjectName?.(name === APP_TITLE ? '' : name);
+    window.mcpBuilder?.setWindowTitle?.(full);
   },
   { immediate: true }
 );

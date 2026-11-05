@@ -1,5 +1,5 @@
 /**
- * 领域本体构建系统 主进程：起后端、注入端口、退出前停 GraphJin。
+ * MCP Server with Ontology Build Platform 主进程：起后端、注入端口、退出前停 GraphJin。
  *
  * @author Zhen (Evan) Wang <18901599114@163.com> — Tel / WeChat: +86 18901599114
  */
@@ -17,8 +17,8 @@ const IS_DEV = !app.isPackaged;
 /** 自绘标题栏高度：与 App.vue 里留出的顶部拖拽区保持一致 */
 const TITLEBAR_HEIGHT = 40;
 
-/** 产品名：还没打开项目时窗口标题只用它 */
-const APP_TITLE = '领域本体构建系统';
+/** 产品名：还没打开项目、渲染进程也没送来标题时的兜底 */
+const APP_TITLE = 'MCP Server with Ontology Build Platform';
 
 /** 开发态渲染地址 */
 const DEV_URL = process.env.MCP_BUILDER_DEV_URL || 'http://127.0.0.1:1420/';
@@ -266,15 +266,15 @@ function createWindow(port) {
 }
 
 /**
- * 渲染进程把当前项目名同步过来。
+ * 渲染进程把完整窗口标题同步过来。
  *
  * Windows 用自绘标题栏，标题文字只能画在那条 40px 带上；macOS / Linux 走原生
- * 标题栏，setTitle 直接可见。没打开项目时回落到产品名。
+ * 标题栏，setTitle 直接可见。标题里的品牌名随界面语言变，这里不自行拼接。
  */
-ipcMain.on('app:project-name', (_event, name) => {
-  const project = typeof name === 'string' ? name.trim() : '';
+ipcMain.on('app:window-title', (_event, title) => {
+  const text = typeof title === 'string' ? title.trim() : '';
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setTitle(project ? `${project} — ${APP_TITLE}` : APP_TITLE);
+    mainWindow.setTitle(text || APP_TITLE);
   }
 });
 

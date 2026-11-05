@@ -1,10 +1,10 @@
-# MCP Server Build
+# MCP Server with Ontology Build Platform
 
 **Configure GraphJin visually and turn any database into an MCP server.**
 
 English | [中文](./README.zh.md) · [Usage wizard (zh)](./docs/GUIDE.md) · [Feature status](./docs/FEATURES.md)
 
-MCP Server Build is a desktop tool: enter a database connection, and it starts GraphJin,
+MCP Server with Ontology Build Platform is a desktop tool: enter a database connection, and it starts GraphJin,
 discovers the schema, and writes your permissions into GraphJin's `sources` config
 (database-level read / write / delete modes plus per-role read grants). The result is an
 HTTP endpoint (`/api/v1/mcp`) that Claude, Cursor and other MCP clients can connect to
@@ -541,7 +541,7 @@ GraphJin and the backend before exiting; on macOS closing it only hides the wind
 is usually `%APPDATA%\mcp-builder\data`).
 
 The window title carries the current project name (the app name passed at start, stored as
-`app_name` in the project's `dev.yml`), e.g. `Demo Finance & Inventory — MCP Server Build`. On Windows
+`app_name` in the project's `dev.yml`), e.g. `Demo Finance & Inventory — MCP Server with Ontology Build Platform`. On Windows
 the native title bar is hidden, so the name is centred on the custom 40px title strip; with
 no project open it falls back to the product name.
 
@@ -692,7 +692,7 @@ an `UntrustedRoot` chain status — the signature is present and valid, only the
 trusted:
 
 ```powershell
-Get-AuthenticodeSignature "release/win-unpacked/MCP Server Build.exe" |
+Get-AuthenticodeSignature "release/win-unpacked/MCP Server with Ontology Build Platform.exe" |
   Format-List Status, SignerCertificate
 ```
 

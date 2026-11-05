@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('mcpBuilder', {
   backendPort: portArg ? Number(portArg.slice(PORT_ARG.length)) : 0,
   platform: process.platform,
   isDesktop: true,
-  /** 把当前项目名交给主进程，窗口标题随之更新；空字符串表示回到产品名 */
-  setProjectName: (name) => ipcRenderer.send('app:project-name', String(name ?? '')),
+  /**
+   * 把完整窗口标题交给主进程。
+   *
+   * 品牌名随界面语言变，所以不在主进程侧拼接，渲染进程给什么就用什么。
+   */
+  setWindowTitle: (title) => ipcRenderer.send('app:window-title', String(title ?? '')),
 });

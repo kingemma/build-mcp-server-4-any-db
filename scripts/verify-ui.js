@@ -952,9 +952,7 @@ async function main() {
     await waitFor('标题带上项目名', async () =>
       (await cdp.evaluate(`document.title`)).includes('UI Verify')
     );
-    const windowTitle = await cdp.evaluate(`document.title`);
-    // 产品名在 App.vue 的 BRAND_NAME 里；改名时这条断言要跟着改，别让它变成假红
-    record('窗口标题显示项目名', windowTitle === 'UI Verify — 领域本体构建系统', windowTitle);
+    // 产品名随界面语言变（app.brand），精确断言放到下面两段切语言里分别做
 
     // 切语言要整棵树重渲染：顶部标题 + 表格表头都跟着变，防漏翻
     await switchLocale(cdp, 'en-US');
@@ -971,6 +969,16 @@ async function main() {
       enTitle
     );
 
+    await waitFor('英文产品名进窗口标题', async () =>
+      (await cdp.evaluate(`document.title`)).includes('MCP Server with Ontology Build Platform')
+    );
+    const enWindowTitle = await cdp.evaluate(`document.title`);
+    record(
+      '窗口标题随语言切成英文产品名',
+      enWindowTitle === 'UI Verify — MCP Server with Ontology Build Platform',
+      enWindowTitle
+    );
+
     await switchLocale(cdp, 'zh-CN');
     await waitFor('中文界面下连接列表仍在', async () =>
       (await cdp.evaluate(`document.querySelectorAll('.conns tbody tr').length`)) >= 2
@@ -979,6 +987,16 @@ async function main() {
       `document.querySelector('.topbar__title').textContent.trim()`
     );
     record('切回中文复原', zhTitle === '数据库连接', zhTitle);
+
+    await waitFor('中文产品名进窗口标题', async () =>
+      (await cdp.evaluate(`document.title`)).includes('领域本体构建系统')
+    );
+    const zhWindowTitle = await cdp.evaluate(`document.title`);
+    record(
+      '窗口标题随语言切回中文产品名',
+      zhWindowTitle === 'UI Verify — 领域本体构建系统',
+      zhWindowTitle
+    );
 
     // 菜单顺序必须与使用向导的五步一致：动线在导航上看得见，用户才不用猜下一步
     const navOrder = await cdp.evaluate(

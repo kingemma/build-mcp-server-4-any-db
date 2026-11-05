@@ -23,7 +23,7 @@ const OUT_DIR = path.join(ROOT, 'build', 'signing');
 const PFX_FILE = path.join(OUT_DIR, 'mcp-builder-selfsigned.pfx');
 const CER_FILE = path.join(OUT_DIR, 'mcp-builder-selfsigned.cer');
 
-const SUBJECT = process.env.MCPB_WIN_CERT_SUBJECT || 'CN=MCP Server Build (Self-Signed), O=MCP Builder, C=CN';
+const SUBJECT = process.env.MCPB_WIN_CERT_SUBJECT || 'CN=MCP Server with Ontology Build Platform (Self-Signed), O=MCP Builder, C=CN';
 const PASSWORD = process.env.MCPB_WIN_CERT_PASSWORD || 'mcpb-selfsigned-dev';
 const VALID_YEARS = 3;
 
