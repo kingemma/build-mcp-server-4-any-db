@@ -239,46 +239,43 @@ onMounted(() => {
       </section>
     </div>
 
-    <section class="panel llm">
+    <section class="panel">
       <div class="panel__head">
         <span class="panel__title">{{ t('settings.llmTitle') }}</span>
-        <el-button type="primary" size="small" @click="openAdd">{{ t('settings.llmAdd') }}</el-button>
+        <el-button size="small" @click="openAdd">{{ t('settings.llmAdd') }}</el-button>
       </div>
-      <p class="note">{{ t('settings.llmSummary') }}</p>
+      <div class="panel__body">
+        <p class="mono-dim note">{{ t('settings.llmSummary') }}</p>
 
-      <p v-if="models.length === 0" class="mono-dim empty">{{ t('settings.llmEmpty') }}</p>
+        <p v-if="models.length === 0" class="mono-dim empty">{{ t('settings.llmEmpty') }}</p>
 
-      <ul v-else class="models">
-        <li v-for="m in models" :key="m.id" class="model">
-          <div class="model__main">
-            <span class="model__name">{{ m.name }}</span>
-            <span class="badge" :class="m.kind === 'local' ? 'badge--local' : 'badge--remote'">
-              {{ m.kind === 'local' ? t('settings.llmLocal') : t('settings.llmRemote') }}
-            </span>
-            <span v-if="m.isDefault" class="badge badge--default">{{ t('settings.llmDefault') }}</span>
-          </div>
-          <div class="model__meta mono-dim">
-            <span>{{ providerLabel(m.provider) }}</span>
-            <span class="model__url">{{ m.baseUrl }}</span>
-            <span>{{ m.model }}</span>
-            <span
-              v-if="m.hasApiKey"
-              class="model__key"
-              :title="t('settings.llmKeySet')"
-            >🔑</span>
-            <span v-else class="model__key model__key--none" :title="t('settings.llmKeyNone')">—</span>
-          </div>
-          <div class="model__actions">
-            <el-button v-if="!m.isDefault" size="small" text @click="setDefault(m)">
-              {{ t('settings.llmSetDefault') }}
-            </el-button>
-            <el-button size="small" text @click="openEdit(m)">{{ t('common.edit') }}</el-button>
-            <el-button size="small" text type="danger" @click="removeModel(m)">
-              {{ t('common.delete') }}
-            </el-button>
-          </div>
-        </li>
-      </ul>
+        <ul v-else class="models">
+          <li v-for="m in models" :key="m.id" class="model">
+            <div class="model__main">
+              <span class="model__name">{{ m.name }}</span>
+              <span class="pill" :class="m.kind === 'local' ? 'pill--on' : 'pill--idle'">
+                {{ m.kind === 'local' ? t('settings.llmLocal') : t('settings.llmRemote') }}
+              </span>
+              <span v-if="m.isDefault" class="pill pill--warn">{{ t('settings.llmDefault') }}</span>
+              <span v-if="!m.hasApiKey" class="pill pill--idle">{{ t('settings.llmKeyNone') }}</span>
+            </div>
+            <div class="model__meta mono-dim">
+              <span>{{ providerLabel(m.provider) }}</span>
+              <span class="model__url">{{ m.baseUrl }}</span>
+              <span>{{ m.model }}</span>
+            </div>
+            <div class="model__actions">
+              <el-button v-if="!m.isDefault" size="small" text @click="setDefault(m)">
+                {{ t('settings.llmSetDefault') }}
+              </el-button>
+              <el-button size="small" text @click="openEdit(m)">{{ t('common.edit') }}</el-button>
+              <el-button size="small" text type="danger" @click="removeModel(m)">
+                {{ t('common.delete') }}
+              </el-button>
+            </div>
+          </li>
+        </ul>
+      </div>
     </section>
 
     <el-dialog
@@ -391,7 +388,7 @@ code {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .model {
@@ -412,6 +409,7 @@ code {
   grid-area: main;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -432,42 +430,10 @@ code {
   font-family: var(--mono);
 }
 
-.model__key {
-  font-size: 13px;
-}
-
-.model__key--none {
-  opacity: 0.5;
-}
-
 .model__actions {
   grid-area: actions;
   display: flex;
   gap: 4px;
 }
 
-.badge {
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--line-soft);
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.badge--local {
-  border-color: #2f6f4f;
-  color: #6ee7a8;
-}
-
-.badge--remote {
-  border-color: #3b5b8c;
-  color: #8fb6ff;
-}
-
-.badge--default {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 </style>
