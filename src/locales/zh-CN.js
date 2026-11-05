@@ -31,7 +31,7 @@ export default {
     users: { title: '用户与组织', hint: '成员 · 角色映射' },
     policy: { title: '策略预览', hint: '生效策略 · 变更 diff' },
     settings: { title: '设置', hint: '版本与端口' },
-    aiDemo: { title: 'AI Demo', hint: 'MCP 工具自测' },
+    aiDemo: { title: 'MCP Call', hint: 'MCP 工具自测' },
   },
 
   common: {
@@ -865,7 +865,7 @@ export default {
   },
 
   aiDemo: {
-    title: 'AI Demo',
+    title: 'MCP Call',
     note: '以外部客户端的身份走一遍平台网关：逐个调用当前 MCP Server 的工具，验证角色、令牌与本体论注入是否都通。失败时读报错自动改参数重试（改不动的保持原样，不伪装成通过）。execute_saved_query 与 ask_graphjin_agent 分别需要项目里配好保存查询与模型凭据，没配时失败是预期结果。',
     summary: '通过 {passed} / {total}',
     reload: '重新加载',

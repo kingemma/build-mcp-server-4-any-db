@@ -39,7 +39,7 @@ export const routes = [
   { path: '/users', name: 'users', component: UsersView, meta: { titleKey: 'nav.users.title', hintKey: 'nav.users.hint', icon: 'users' } },
   { path: '/policy', name: 'policy', component: PolicyView, meta: { titleKey: 'nav.policy.title', hintKey: 'nav.policy.hint', icon: 'file-check' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { titleKey: 'nav.settings.title', hintKey: 'nav.settings.hint', icon: 'sliders' } },
-  // AI Demo 从「设置」里独立出来：它跑 MCP 工具自测，和版本/端口设置不是一类事。
+  // MCP Call 从「设置」里独立出来：它跑 MCP 工具自测，和版本/端口设置不是一类事。
   // 放在动线之后、作为最后一个运维类入口，不干扰向导五步的顺序。
   { path: '/ai-demo', name: 'aiDemo', component: AiDemoView, meta: { titleKey: 'nav.aiDemo.title', hintKey: 'nav.aiDemo.hint', icon: 'sparkles' } },
 ];

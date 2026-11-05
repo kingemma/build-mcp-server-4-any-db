@@ -31,7 +31,7 @@ export default {
     users: { title: 'Users & Orgs', hint: 'members · role mapping' },
     policy: { title: 'Policy Preview', hint: 'effective policy · diff' },
     settings: { title: 'Settings', hint: 'version & port' },
-    aiDemo: { title: 'AI Demo', hint: 'MCP tool self-test' },
+    aiDemo: { title: 'MCP Call', hint: 'MCP tool self-test' },
   },
 
   common: {
@@ -880,7 +880,7 @@ export default {
   },
 
   aiDemo: {
-    title: 'AI Demo',
+    title: 'MCP Call',
     note: 'Walks the platform gateway the way an external client does: call every tool of the running MCP Server one by one to prove roles, tokens and ontology injection all work. When a call fails it reads the error, adjusts the arguments and retries — errors it cannot read stay as failures instead of being dressed up as passes. execute_saved_query and ask_graphjin_agent need saved queries and model credentials in the project; without them, failing is the expected result.',
     summary: '{passed} / {total} passed',
     reload: 'Reload',

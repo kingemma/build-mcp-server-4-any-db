@@ -1018,7 +1018,7 @@ async function main() {
           '用户与组织',
           '策略预览',
           '设置',
-          'AI Demo',
+          'MCP Call',
         ]),
       navOrder.join(' → ')
     );
